@@ -1,0 +1,65 @@
+﻿# Build results
+[Bb]in/
+[Oo]bj/
+out/
+artifacts/
+
+# Visual Studio / IDE
+.vs/
+.idea/
+.vscode/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+*.sln.iml
+
+# .NET tooling / tests
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+coverage.cobertura.xml
+coverage.opencover.xml
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+
+# ASP.NET local configuration and secrets
+appsettings.Development.json
+appsettings.Local.json
+appsettings.*.Local.json
+secrets.json
+.keys/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+~$*
+
+# Future frontend
+node_modules/
+.next/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+!.env.example
