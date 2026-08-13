@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="IcyPlay.Api/IcyPlay.Api.csproj" />
+  <Project Path="IcyPlay.Application/IcyPlay.Application.csproj" />
+  <Project Path="IcyPlay.Domain/IcyPlay.Domain.csproj" />
+  <Project Path="IcyPlay.Infrastructure/IcyPlay.Infrastructure.csproj" />
+  <Project Path="IcyPlay.IntegrationTests/IcyPlay.IntegrationTests.csproj" />
+  <Project Path="IcyPlay.UnitTests/IcyPlay.UnitTests.csproj" />
+</Solution>
