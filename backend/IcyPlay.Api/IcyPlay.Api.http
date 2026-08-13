@@ -1,0 +1,6 @@
+@IcyPlay.Api_HostAddress = http://localhost:5182
+
+GET {{IcyPlay.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
