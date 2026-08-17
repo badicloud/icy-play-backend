@@ -32,7 +32,7 @@ Set up the technical foundation before building business features.
 
 Scope:
 
-* ASP.NET Core 9 backend solution
+* ASP.NET Core 10 backend solution targeting .NET 10 (`net10.0`)
 * Project structure
 * Domain, Application, Infrastructure, and API layers
 * SQL Server Express connection
@@ -77,6 +77,8 @@ Exit criteria:
 ---
 
 ## Phase 1: Identity and Role Foundation
+
+Status: In progress. The identity schema, Customer and Facility Owner registration, JWT access tokens, rotating hashed refresh tokens, logout, current-user endpoint, account lockout, and initial EF Core migration are implemented. Platform Administrator provisioning and broader authorization-policy coverage remain.
 
 Goal:
 

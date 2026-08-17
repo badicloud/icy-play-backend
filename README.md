@@ -203,7 +203,7 @@ Supported billing cycles:
 
 ## Backend
 
-* ASP.NET Core 9
+* ASP.NET Core 10 (.NET 10 / `net10.0`)
 * Entity Framework Core
 * Dapper
 * SignalR
@@ -253,6 +253,7 @@ docs/
   database-design.md
   api-design.md
   deployment.md
+  testing-standards.md
   roadmap.md
 ```
 
@@ -272,16 +273,15 @@ docs/
 
 # Current Development Phase
 
-**Phase 1 - Business Analysis & System Design**
+**Phase 1 - Identity and Role Foundation**
 
 Current activities:
 
-* Business requirements
-* Business process design
-* System architecture
-* Database design
-* API design
-* UI/UX planning
+* Customer and Facility Owner registration
+* JWT access tokens and rotating refresh tokens
+* Login retry and account lockout
+* Role-based authorization foundation
+* Identity database schema and migrations
 
 Upcoming milestones:
 

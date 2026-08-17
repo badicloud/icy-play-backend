@@ -456,6 +456,8 @@ Health checks and internal admin operations may remain available depending on th
 
 ## Auth Endpoints
 
+Implementation status (.NET 10): Customer and Facility Owner registration, login, rotating refresh tokens, logout, and current-user lookup are implemented. Refresh tokens are stored only as SHA-256 hashes. Login locks an account for 15 minutes after five failed attempts. Platform Administrator provisioning remains an internal/admin workflow and is not exposed as public registration.
+
 ### Register Customer
 
 ```http

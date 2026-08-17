@@ -111,7 +111,7 @@ NEXT_PUBLIC_API_BASE_URL=https://api.icypay-booking.com/api/v1
 
 Application:
 
-* ASP.NET Core 9 Web API
+* ASP.NET Core 10 Web API targeting .NET 10 (`net10.0`)
 * SignalR
 * Hangfire
 * FluentValidation

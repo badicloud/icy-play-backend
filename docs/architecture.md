@@ -72,7 +72,7 @@ The frontend provides separate experiences for Customers, Facility Owners, and P
 
 ### Backend
 
-* ASP.NET Core 9
+* ASP.NET Core 10 targeting .NET 10 (`net10.0`)
 * Entity Framework Core
 * Dapper
 * SignalR

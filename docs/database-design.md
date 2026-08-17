@@ -138,6 +138,8 @@ Suggested columns:
 
 Stores role assignments for each user.
 
+Implementation note: the initial .NET 10 migration also stores failed-login counters and lockout expiry on `Users`, plus hashed, expiring, revocable refresh-token records in `RefreshTokens`. Raw refresh tokens are never persisted.
+
 Important because the same authentication system supports Customer, Facility Owner, and Platform Administrator access.
 
 Suggested columns:
