@@ -1,7 +1,11 @@
+using IcyPlay.Application.Identity;
+using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.Identity;
 using IcyPlay.Infrastructure.Persistence;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.EntityFrameworkCore;
 
 namespace IcyPlay.Infrastructure;
 
@@ -21,6 +25,10 @@ public static class DependencyInjection
             services.AddScoped<IDbConnectionFactory>(_ =>
                 new SqlConnectionFactory(connectionString));
         }
+
+        services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
+        services.AddScoped<IAuthService, AuthService>();
+        services.AddHttpClient<IRecaptchaVerifier, RecaptchaVerifier>();
 
         return services;
     }

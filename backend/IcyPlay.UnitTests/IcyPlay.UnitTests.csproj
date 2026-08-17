@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\IcyPlay.Domain\IcyPlay.Domain.csproj" />
     <ProjectReference Include="..\IcyPlay.Application\IcyPlay.Application.csproj" />
+    <ProjectReference Include="..\IcyPlay.Infrastructure\IcyPlay.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
