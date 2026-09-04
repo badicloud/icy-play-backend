@@ -91,6 +91,38 @@ public sealed class AuthController(
         return result.Succeeded ? NoContent() : Failure(result);
     }
 
+    [AllowAnonymous, HttpPost("resend-verification"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> ResendVerificationEmail(
+        ResendVerificationEmailRequest request,
+        CancellationToken ct)
+    {
+        var invalid = await ValidateAsync(request, ct);
+        if (invalid is not null)
+        {
+            return invalid;
+        }
+
+        var result = await authService.ResendVerificationEmailAsync(request.Email, ct);
+        return result.Succeeded
+            ? Accepted(new ApiEnvelope<ResendVerificationEmailResponse>(result.Value))
+            : Failure(result);
+    }
+
+    [AllowAnonymous, HttpPost("verify-email"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> VerifyEmail(VerifyEmailRequest request, CancellationToken ct)
+    {
+        var invalid = await ValidateAsync(request, ct);
+        if (invalid is not null)
+        {
+            return invalid;
+        }
+
+        var result = await authService.VerifyEmailAsync(request.Token, ct);
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<VerifyEmailResponse>(result.Value))
+            : Failure(result);
+    }
+
     [Authorize, HttpGet("me")]
     public async Task<IActionResult> Me(CancellationToken ct)
     {
@@ -127,6 +159,9 @@ public sealed class AuthController(
             AuthFailure.AccountLocked => (423, ErrorCodes.AccountLocked, "Too many failed login attempts. Please try again later."),
             AuthFailure.InvalidRefreshToken => (401, ErrorCodes.InvalidRefreshToken, "The refresh token is invalid or expired."),
             AuthFailure.InactiveAccount => (403, ErrorCodes.AccountInactive, "The account is inactive."),
+            AuthFailure.VerificationCooldown => (429, ErrorCodes.VerificationEmailCooldown, "Please wait before requesting another verification email."),
+            AuthFailure.InvalidVerificationToken => (400, ErrorCodes.InvalidVerificationToken, "The verification link is invalid or has already been used."),
+            AuthFailure.ExpiredVerificationToken => (400, ErrorCodes.ExpiredVerificationToken, "The verification link has expired. Please request a new one."),
             _ => (401, ErrorCodes.InvalidCredentials, "Invalid email or password.")
         };
         if (result.RetryAfterSeconds is int seconds)

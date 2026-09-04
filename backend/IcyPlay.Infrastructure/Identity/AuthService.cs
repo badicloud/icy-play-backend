@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using IcyPlay.Application.Email;
 using IcyPlay.Application.Identity;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
@@ -17,6 +18,8 @@ namespace IcyPlay.Infrastructure.Identity;
 public sealed class AuthService(
     AppDbContext db,
     IPasswordHasher<User> passwordHasher,
+    IEmailVerificationService emailVerificationService,
+    TimeProvider timeProvider,
     IConfiguration configuration,
     ILogger<AuthService> logger) : IAuthService
 {
@@ -35,6 +38,11 @@ public sealed class AuthService(
         var profile = new Customer(user.Id);
         db.Customers.Add(profile);
         await db.SaveChangesAsync(ct);
+        await emailVerificationService.SendAsync(
+            user.Id,
+            user.Email,
+            user.FullName,
+            ct);
         await transaction.CommitAsync(ct);
         logger.LogInformation("Customer account registered. UserId: {UserId}", user.Id);
         return AuthResult<RegistrationResponse>.Success(new(user.Id, profile.Id));
@@ -52,6 +60,11 @@ public sealed class AuthService(
         var profile = new FacilityOwner(user.Id, request.BusinessName, request.BillingEmail, request.BillingPhone);
         db.FacilityOwners.Add(profile);
         await db.SaveChangesAsync(ct);
+        await emailVerificationService.SendAsync(
+            user.Id,
+            user.Email,
+            user.FullName,
+            ct);
         await transaction.CommitAsync(ct);
         logger.LogInformation("Facility owner account registered. UserId: {UserId}", user.Id);
         return AuthResult<RegistrationResponse>.Success(new(user.Id, profile.Id));
@@ -83,7 +96,7 @@ public sealed class AuthService(
 
     public async Task<AuthResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken ct)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = timeProvider.GetUtcNow();
         var email = request.Email.Trim().ToLowerInvariant();
         var user = await db.Users.Include(x => x.Roles).SingleOrDefaultAsync(x => x.Email == email, ct);
         if (user is null)
@@ -146,14 +159,111 @@ public sealed class AuthService(
     public async Task<AuthResult<bool>> LogoutAsync(string rawToken, CancellationToken ct)
     {
         var stored = await db.RefreshTokens.SingleOrDefaultAsync(x => x.TokenHash == Hash(rawToken), ct);
-        if (stored is null || !stored.IsActive(DateTimeOffset.UtcNow))
+        var now = timeProvider.GetUtcNow();
+        if (stored is null || !stored.IsActive(now))
         {
             return AuthResult<bool>.Fail(AuthFailure.InvalidRefreshToken);
         }
 
-        stored.Revoke(DateTimeOffset.UtcNow);
+        stored.Revoke(now);
         await db.SaveChangesAsync(ct);
         return AuthResult<bool>.Success(true);
+    }
+
+    public async Task<AuthResult<ResendVerificationEmailResponse>> ResendVerificationEmailAsync(
+        string email,
+        CancellationToken ct)
+    {
+        const string acceptedMessage =
+            "If an account exists for this email, a verification message will be sent.";
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var user = await db.Users.SingleOrDefaultAsync(
+            candidate => candidate.Email == normalizedEmail && candidate.IsActive,
+            ct);
+        if (user is null || user.IsEmailVerified)
+        {
+            logger.LogInformation(
+                "Verification email resend accepted without disclosing account state.");
+            return AuthResult<ResendVerificationEmailResponse>.Success(new(acceptedMessage));
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var cooldownSeconds = configuration.GetValue(
+            "EmailVerification:ResendCooldownSeconds",
+            60);
+        var latestToken = await db.EmailVerificationTokens
+            .Where(token => token.UserId == user.Id)
+            .OrderByDescending(token => token.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        var retryAfter = latestToken is null
+            ? TimeSpan.Zero
+            : latestToken.CreatedAt.AddSeconds(cooldownSeconds) - now;
+        if (retryAfter > TimeSpan.Zero)
+        {
+            return AuthResult<ResendVerificationEmailResponse>.Fail(
+                AuthFailure.VerificationCooldown,
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)));
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var existingTokens = await db.EmailVerificationTokens
+            .Where(token => token.UserId == user.Id)
+            .ToListAsync(ct);
+        db.EmailVerificationTokens.RemoveRange(existingTokens);
+        await emailVerificationService.SendAsync(
+            user.Id,
+            user.Email,
+            user.FullName,
+            ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Account verification email was re-sent. UserId: {UserId}",
+            user.Id);
+        return AuthResult<ResendVerificationEmailResponse>.Success(new(acceptedMessage));
+    }
+
+    public async Task<AuthResult<VerifyEmailResponse>> VerifyEmailAsync(string token, CancellationToken ct)
+    {
+        var tokenHash = Hash(token.Trim());
+        var stored = await db.EmailVerificationTokens
+            .Include(entry => entry.User)
+            .SingleOrDefaultAsync(entry => entry.TokenHash == tokenHash, ct);
+        if (stored is null)
+        {
+            logger.LogWarning("Email verification failed because the token was not recognized.");
+            return AuthResult<VerifyEmailResponse>.Fail(AuthFailure.InvalidVerificationToken);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var user = stored.User;
+        if (stored.UsedAt is not null)
+        {
+            // Opening the same link twice is not an error once the account is verified.
+            return user.EmailVerifiedAt is DateTimeOffset verifiedAt
+                ? AuthResult<VerifyEmailResponse>.Success(new(user.Email, verifiedAt, true))
+                : AuthResult<VerifyEmailResponse>.Fail(AuthFailure.InvalidVerificationToken);
+        }
+
+        if (stored.ExpiresAt <= now)
+        {
+            logger.LogInformation(
+                "Email verification failed because the token had expired. UserId: {UserId}",
+                user.Id);
+            return AuthResult<VerifyEmailResponse>.Fail(AuthFailure.ExpiredVerificationToken);
+        }
+
+        if (!user.IsActive)
+        {
+            return AuthResult<VerifyEmailResponse>.Fail(AuthFailure.InactiveAccount);
+        }
+
+        stored.MarkUsed(now);
+        user.MarkEmailVerified(now);
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation("Email address was verified. UserId: {UserId}", user.Id);
+        return AuthResult<VerifyEmailResponse>.Success(new(user.Email, now, false));
     }
 
     public async Task<CurrentUserResponse?> GetCurrentUserAsync(Guid userId, CancellationToken ct)

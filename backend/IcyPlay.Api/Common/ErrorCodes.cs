@@ -15,5 +15,8 @@ public static class ErrorCodes
     public const string Conflict = "CONFLICT";
     public const string RateLimitExceeded = "RATE_LIMIT_EXCEEDED";
     public const string CaptchaInvalid = "CAPTCHA_INVALID";
+    public const string VerificationEmailCooldown = "AUTH_VERIFICATION_EMAIL_COOLDOWN";
+    public const string InvalidVerificationToken = "AUTH_INVALID_VERIFICATION_TOKEN";
+    public const string ExpiredVerificationToken = "AUTH_EXPIRED_VERIFICATION_TOKEN";
     public const string UnexpectedError = "UNEXPECTED_ERROR";
 }

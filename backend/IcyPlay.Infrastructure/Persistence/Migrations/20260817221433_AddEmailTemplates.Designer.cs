@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260817221433_AddEmailTemplates")]
+    partial class AddEmailTemplates
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -97,42 +100,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("Customers", "dbo");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Identity.EmailVerificationToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("nvarchar(64)");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset?>("UsedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.HasIndex("UserId", "ExpiresAt");
-
-                    b.ToTable("EmailVerificationTokens", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Identity.FacilityOwner", b =>
@@ -252,9 +219,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
-                    b.Property<DateTimeOffset?>("EmailVerifiedAt")
-                        .HasColumnType("datetimeoffset");
-
                     b.Property<int>("FailedLoginAttempts")
                         .HasColumnType("int");
 
@@ -327,17 +291,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("IcyPlay.Domain.Identity.EmailVerificationToken", b =>
-                {
-                    b.HasOne("IcyPlay.Domain.Identity.User", "User")
-                        .WithMany("EmailVerificationTokens")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("IcyPlay.Domain.Identity.FacilityOwner", b =>
                 {
                     b.HasOne("IcyPlay.Domain.Identity.User", "User")
@@ -384,8 +337,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("IcyPlay.Domain.Identity.User", b =>
                 {
-                    b.Navigation("EmailVerificationTokens");
-
                     b.Navigation("RefreshTokens");
 
                     b.Navigation("Roles");

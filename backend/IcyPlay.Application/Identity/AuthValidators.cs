@@ -51,6 +51,20 @@ public sealed class LogoutRequestValidator : AbstractValidator<LogoutRequest>
 {
     public LogoutRequestValidator() => RuleFor(x => x.RefreshToken).NotEmpty();
 }
+public sealed class ResendVerificationEmailRequestValidator : AbstractValidator<ResendVerificationEmailRequest>
+{
+    public ResendVerificationEmailRequestValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+    }
+}
+public sealed class VerifyEmailRequestValidator : AbstractValidator<VerifyEmailRequest>
+{
+    public VerifyEmailRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+    }
+}
 
 internal static class RegistrationValidation
 {

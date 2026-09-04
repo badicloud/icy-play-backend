@@ -59,4 +59,58 @@ public sealed class UserTests
         }
     }
 
+    [Fact]
+    public void Should_Not_Be_Email_Verified_When_User_Is_Created()
+    {
+        // Arrange
+        var userBuilder = new UserBuilder();
+
+        // Act
+        var user = userBuilder.Build();
+
+        // Assert
+        using (new AssertionScope())
+        {
+            user.IsEmailVerified.Should().BeFalse();
+            user.EmailVerifiedAt.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public void Should_Record_Verification_Time_When_Email_Is_Marked_Verified()
+    {
+        // Arrange
+        var user = new UserBuilder().Build();
+        var now = TestTimes.UtcNow;
+
+        // Act
+        user.MarkEmailVerified(now);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            user.IsEmailVerified.Should().BeTrue();
+            user.EmailVerifiedAt.Should().Be(now);
+            user.UpdatedAt.Should().Be(now);
+        }
+    }
+
+    [Fact]
+    public void Should_Keep_First_Verification_Time_When_Email_Is_Marked_Verified_Again()
+    {
+        // Arrange
+        var user = new UserBuilder().Build();
+        var firstVerification = TestTimes.UtcNow;
+        user.MarkEmailVerified(firstVerification);
+
+        // Act
+        user.MarkEmailVerified(firstVerification.AddDays(1));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            user.EmailVerifiedAt.Should().Be(firstVerification);
+            user.UpdatedAt.Should().Be(firstVerification);
+        }
+    }
 }

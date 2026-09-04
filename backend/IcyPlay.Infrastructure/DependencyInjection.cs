@@ -1,5 +1,7 @@
+using IcyPlay.Application.Email;
 using IcyPlay.Application.Identity;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Identity;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
@@ -29,6 +31,17 @@ public static class DependencyInjection
         services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddHttpClient<IRecaptchaVerifier, RecaptchaVerifier>();
+        services.Configure<MailjetOptions>(
+            configuration.GetSection(MailjetOptions.SectionName));
+        services.Configure<EmailVerificationOptions>(
+            configuration.GetSection(EmailVerificationOptions.SectionName));
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<IEmailTemplateStore, EmailTemplateStore>();
+        services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
+        {
+            client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");
+        });
 
         return services;
     }

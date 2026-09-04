@@ -21,6 +21,11 @@ public sealed class User : Entity
         get; private set;
     }
     public bool IsActive { get; private set; } = true;
+    public DateTimeOffset? EmailVerifiedAt
+    {
+        get; private set;
+    }
+    public bool IsEmailVerified => EmailVerifiedAt is not null;
     public int FailedLoginAttempts
     {
         get; private set;
@@ -31,7 +36,18 @@ public sealed class User : Entity
     }
     public ICollection<UserRole> Roles { get; private set; } = [];
     public ICollection<RefreshToken> RefreshTokens { get; private set; } = [];
+    public ICollection<EmailVerificationToken> EmailVerificationTokens { get; private set; } = [];
     public void SetPasswordHash(string value) => PasswordHash = value;
+    public void MarkEmailVerified(DateTimeOffset now)
+    {
+        if (EmailVerifiedAt is not null)
+        {
+            return;
+        }
+
+        EmailVerifiedAt = now;
+        UpdatedAt = now;
+    }
     public void RecordFailedLogin(int maximumAttempts, TimeSpan duration, DateTimeOffset now)
     {
         FailedLoginAttempts++;

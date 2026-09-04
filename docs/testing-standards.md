@@ -167,6 +167,8 @@ Prefer integration tests through the ASP.NET Core test host for routing, seriali
 
 Use integration tests with SQL Server-compatible behavior. Do not use mocked `DbSet<T>` to claim a query works. Complex Dapper SQL must be tested against a real test schema.
 
+Database integration tests use the dedicated `IcyPlayIntegrationTests` database and must never target a development or production database. By default, tests connect to `localhost\\SQLEXPRESS`. To use another SQL Server instance, set `ICYPLAY_TEST_DB_CONNECTION`; its database name must still be exactly `IcyPlayIntegrationTests`. Fixtures must apply migrations before tests and delete only this dedicated database during cleanup.
+
 ## Assertions
 
 - Prefer FluentAssertions for domain/application outcomes.

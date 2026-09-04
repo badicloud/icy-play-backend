@@ -22,8 +22,15 @@ public interface IAuthService
         string refreshToken,
         CancellationToken cancellationToken);
 
+    Task<AuthResult<ResendVerificationEmailResponse>> ResendVerificationEmailAsync(
+        string email,
+        CancellationToken cancellationToken);
+
+    Task<AuthResult<VerifyEmailResponse>> VerifyEmailAsync(
+        string token,
+        CancellationToken cancellationToken);
+
     Task<CurrentUserResponse?> GetCurrentUserAsync(
         Guid userId,
         CancellationToken cancellationToken);
 }
-

@@ -1,0 +1,16 @@
+Verify your IcyPlay email address
+
+Hi {{var:recipient_name:"there"}},
+
+Thanks for creating your IcyPlay account. Confirm that this email address belongs to you so you can securely access your account and start using the platform.
+
+Verify your email address:
+{{var:verification_url}}
+
+For your security, this link expires in {{var:expiration_hours:"24"}} hours and can only be used once.
+
+If you did not create an IcyPlay account, you can safely ignore this email. No account access will be granted until the email address is verified.
+
+Need help? Contact {{var:support_email}}.
+
+© {{var:current_year}} IcyPlay. Play more. Manage better.
