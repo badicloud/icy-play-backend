@@ -3,6 +3,7 @@ using System.Threading.RateLimiting;
 using Hangfire;
 using Hangfire.SqlServer;
 using IcyPlay.Api.Common;
+using IcyPlay.Application.Identity;
 using IcyPlay.Api.Hubs;
 using IcyPlay.Api.Middleware;
 using IcyPlay.Application;
@@ -10,7 +11,6 @@ using IcyPlay.Infrastructure;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 
@@ -205,6 +205,13 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors(ApiConstants.CorsPolicyName);
+await using (var seedScope = app.Services.CreateAsyncScope())
+{
+    await seedScope.ServiceProvider
+        .GetRequiredService<IPlatformAdminSeeder>()
+        .SeedAsync(CancellationToken.None);
+}
+
 app.UseRateLimiter();
 
 app.UseAuthentication();

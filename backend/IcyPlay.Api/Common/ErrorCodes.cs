@@ -22,5 +22,8 @@ public static class ErrorCodes
     public const string InvalidPasswordResetToken = "AUTH_INVALID_PASSWORD_RESET_TOKEN";
     public const string ExpiredPasswordResetToken = "AUTH_EXPIRED_PASSWORD_RESET_TOKEN";
     public const string PasswordReused = "AUTH_PASSWORD_REUSED";
+    public const string UntrustedAssetUrl = "ASSET_URL_UNTRUSTED";
+    public const string VerificationDocumentsRequired = "VERIFICATION_DOCUMENTS_REQUIRED";
+    public const string InvalidSortField = "INVALID_SORT_FIELD";
     public const string UnexpectedError = "UNEXPECTED_ERROR";
 }

@@ -2,7 +2,9 @@ using IcyPlay.Application.Email;
 using IcyPlay.Application.Identity;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Email;
+using IcyPlay.Application.Storage;
 using IcyPlay.Infrastructure.Identity;
+using IcyPlay.Infrastructure.Storage;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -41,6 +43,13 @@ public static class DependencyInjection
         services.AddScoped<IEmailTemplateStore, EmailTemplateStore>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IPasswordResetEmailService, PasswordResetEmailService>();
+        services.Configure<CloudinaryOptions>(
+            configuration.GetSection(CloudinaryOptions.SectionName));
+        services.AddScoped<ICloudinaryAssetService, CloudinaryAssetService>();
+        services.Configure<PlatformAdminSeedOptions>(
+            configuration.GetSection(PlatformAdminSeedOptions.SectionName));
+        services.AddScoped<IPlatformAdminSeeder, PlatformAdminSeeder>();
+        services.AddScoped<IAdminUserService, AdminUserService>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");
