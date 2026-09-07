@@ -250,9 +250,74 @@ Suggested columns:
 | BusinessName | nvarchar(200) | Facility Owner business name |
 | BillingEmail | nvarchar(256) | Where billing emails are sent |
 | BillingPhone | nvarchar(50) | Optional |
-| IsActive | bit | Account status |
+| BusinessRegistrationNumber | nvarchar(100) | DTI, SEC or Mayor's permit number |
+| IsActive | bit | The suspend switch. False overrides any contract |
 | CreatedAt | datetimeoffset | Created timestamp |
 | UpdatedAt | datetimeoffset | Updated timestamp |
+
+There is deliberately **no status column**. Whether an owner is live is derived
+from their contracts, so the two can never disagree:
+
+| Derived status | When |
+| --- | --- |
+| Pending | Encoded, but no contract covers today and none ever has |
+| Commenced | A contract covers today. The facility is bookable |
+| Expired | Contracts exist, none covers today |
+| Suspended | `IsActive` is false, whatever the contracts say |
+
+A stored status eventually claims an owner is live three months after their term
+lapsed, and nobody finds out until a customer books them.
+
+### FacilityOwnerContracts
+
+One commencement period per row. This is what makes an owner bookable, and what
+platform fee pricing will attach to.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| FacilityOwnerId | uniqueidentifier | FK to FacilityOwners |
+| StartDate | date | First day of the term |
+| EndDate | date | Last day of the term, inclusive |
+| CommencedByUserId | uniqueidentifier | The admin who commenced it |
+| Notes | nvarchar(1000) | Optional, for the agreement reference |
+| CancelledAt | datetimeoffset | Set when a term is ended early |
+| CreatedAt | datetimeoffset | Created timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+Its own table rather than two columns on the owner because contracts renew:
+last year's term and this year's have to coexist, and pricing needs a specific
+term to hang off rather than whatever dates happen to be current.
+
+Indexed on `(FacilityOwnerId, StartDate, EndDate)`, which answers "is this
+owner bookable today" in one seek.
+
+### FacilityOwnerDocuments
+
+Permit and identity document metadata. The files live in Cloudinary; only the
+reference is stored, per **Cloudinary Upload Flow** in `api-design.md`.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| FacilityOwnerId | uniqueidentifier | FK to FacilityOwners |
+| DocumentType | nvarchar(50) | BusinessPermit, GovernmentId, DtiSecRegistration |
+| PublicId | nvarchar(300) | The Cloudinary public id. Source of truth for the asset |
+| SecureUrl | nvarchar(1000) | Cloudinary's `secure_url`, never its `url` |
+| FileName | nvarchar(255) | As uploaded |
+| ContentType | nvarchar(100) | Image or PDF |
+| SizeInBytes | bigint | Capped at 10 MB on the way in |
+| CreatedAt | datetimeoffset | Uploaded timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+The public id is what the application builds URLs from, so each surface can ask
+for the size it needs. `SecureUrl` is stored alongside it and is validated on
+the way in: an http URL, or one on another cloud, is rejected. The metadata is
+posted by the browser, so it cannot be taken on trust.
 
 ### PlatformAdmins
 

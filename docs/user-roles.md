@@ -90,6 +90,20 @@ The Facility Owner owns or operates one or more sports facilities and courts. Th
 
 The Facility Owner is responsible for paying accumulated platform fees to the Platform based on the configured billing cycle.
 
+### How a Facility Owner gets an account
+
+Facility Owners do not sign themselves up. A Platform Administrator encodes the
+account: business details, permit and identity documents, then the facility
+itself. The platform is sales-led, and customers pay owners **directly**, so an
+account that could become bookable without anyone from the Platform having
+looked at it turns a scam into IcyPlay's reputation problem.
+
+Encoding an owner does not make them bookable. That takes a **contract**: a
+commencement period with a start and an end date. Until a contract covers today
+the owner sits at Pending, visible only to the Platform. When the term ends they
+return to Expired and stop being bookable until it is renewed. The same period
+is what platform fee pricing will later be based on.
+
 ### Responsibilities
 
 * Register and manage facilities
@@ -146,6 +160,8 @@ Platform Administrators can manage global platform operations, support Facility 
 
 ### Responsibilities
 
+* Onboard Facility Owner accounts, including their permits and documents
+* Commence, renew and end Facility Owner contracts
 * Manage Facility Owner accounts
 * Manage facilities at platform level
 * Support Customer account issues

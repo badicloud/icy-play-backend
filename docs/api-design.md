@@ -245,6 +245,8 @@ Recommended initial error codes:
 | `AUTH_INVALID_PASSWORD_RESET_TOKEN` | Reset link is unknown or already used |
 | `AUTH_EXPIRED_PASSWORD_RESET_TOKEN` | Reset link has expired |
 | `AUTH_PASSWORD_REUSED` | New password matches the current one |
+| `ASSET_URL_UNTRUSTED` | Uploaded asset URL is not https on the configured Cloudinary cloud |
+| `VERIFICATION_DOCUMENTS_REQUIRED` | An action needs a verification document attached |
 
 ---
 
@@ -501,28 +503,13 @@ Response:
 }
 ```
 
-### Register Facility Owner
+### Facility owner accounts
 
-```http
-POST /api/v1/auth/register/facility-owner
-```
+There is no self-registration endpoint for facility owners. A Platform
+Administrator encodes the account from the admin console, and the owner becomes
+bookable only once a contract commences. See **How a Facility Owner gets an
+account** in `user-roles.md`.
 
-Role:
-
-* Public or PlatformAdmin, depending on onboarding policy
-
-Request:
-
-```json
-{
-  "fullName": "Court Owner",
-  "email": "owner@example.com",
-  "password": "StrongPassword123",
-  "businessName": "ABC Sports Center",
-  "billingEmail": "billing@example.com",
-  "billingPhone": "+639171234567"
-}
-```
 
 ### Login
 
@@ -874,6 +861,58 @@ existing access token stays valid until it expires, up to
 against the database on every authenticated request, turning a stateless JWT
 into a database round trip per call. Shorten `Jwt:AccessTokenMinutes` if the
 window needs to be tighter.
+
+---
+
+## Admin Endpoints
+
+Reserved for the `PlatformAdmin` role. This is the console the platform team
+operates the SaaS from.
+
+### List Users
+
+```http
+GET /api/v1/admin/users
+```
+
+Role:
+
+* PlatformAdmin
+
+Query parameters: `search`, `role`, `page`, `pageSize`, `sortBy`,
+`sortDirection`.
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "id": "guid",
+      "email": "juan@example.com",
+      "fullName": "Juan Dela Cruz",
+      "phoneNumber": "+639171234567",
+      "roles": ["Customer"],
+      "isActive": true,
+      "isEmailVerified": true,
+      "emailVerifiedAt": "2026-07-01T12:00:00+08:00",
+      "lockoutEnd": null,
+      "createdAt": "2026-07-01T10:00:00+08:00"
+    }
+  ],
+  "pagination": { "page": 1, "pageSize": 20, "totalItems": 42, "totalPages": 3 }
+}
+```
+
+Business rules:
+
+* **Read only.** Nothing on this endpoint changes an account. Suspending one or
+  editing roles belongs on its own endpoint with its own audit trail, not as a
+  side effect of a list.
+* `sortBy` accepts `email`, `fullName` or `createdAt` only. Anything else
+  returns `INVALID_SORT_FIELD` rather than silently sorting by something the
+  caller did not ask for, and stops an arbitrary field reaching the query.
+* `pageSize` is capped at 100, so one request cannot pull the whole user table.
 
 ---
 
@@ -1670,6 +1709,15 @@ API stores metadata in SQL Server
 For tighter security, the backend may provide signed Cloudinary upload parameters.
 
 ### Create Signed Upload Parameters
+
+Only Cloudinary's `secure_url` is ever stored. The upload response also carries
+`url`, which is http and would be blocked as mixed content on an https page.
+
+Because the browser posts the upload metadata back, the API validates it before
+storing: anything whose scheme is not https, or whose host is not the configured
+Cloudinary cloud, is rejected with `ASSET_URL_UNTRUSTED`. Without that check a
+client could point a permit or a facility photo at any host it liked, and the
+platform would render it to other users.
 
 ```http
 POST /api/v1/uploads/cloudinary/signature

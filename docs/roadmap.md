@@ -120,10 +120,18 @@ Roles:
 Exit criteria:
 
 * Customer can register and log in.
-* Facility Owner can register or be onboarded.
+* Facility Owner accounts are created by a Platform Administrator, not by
+  self-registration.
 * Platform Admin can access admin-only APIs.
 * Protected endpoints reject unauthorized users.
 * Facility Owner scoping pattern is established.
+
+Platform Administrators are seeded from configuration
+(`PlatformAdmin:SeedEmails`), because the role that grants every other role has
+no way of coming into existence otherwise. The seeder only ever promotes an
+account that has already registered; it will not create one, so a mistyped
+address is logged rather than quietly becoming a live administrator.
+
 
 ---
 
@@ -131,22 +139,37 @@ Exit criteria:
 
 Goal:
 
-Allow Facility Owners to manage their courts.
+Give the platform team a console for onboarding owners and running the facility
+inventory, and give owners the screens to manage their own courts afterwards.
 
 Scope:
 
-* Facility CRUD
+* Admin console: onboarding wizard, facility owner list, facility inventory
+* Facility owner contracts: commence, renew, end
+* Facility CRUD, including contact details, map coordinates, slug and photos
+* Facility amenities: a seeded lookup plus free-text safety measures and rules
+* Facility operating hours, with a per-court override
 * Court CRUD
-* Court operating hours
 * Court maintenance blocks
 * Court active/inactive status
 * Facility Owner ownership rules
 
+Four decisions shape this phase:
+
+| Decision | Why |
+| --- | --- |
+| Hours live on the facility, courts may override | An owner with eight courts should not type the same schedule eight times, and the outdoor court that closes early stays expressible |
+| The platform team encodes owners | Customers pay owners directly; an unvetted account that becomes bookable is a reputation problem |
+| Amenities are a seeded lookup plus free text | "Find courts with parking" only works against structured data; free text carries what no checklist can |
+| A cover photo per facility | It is what the booking portal and booking list show |
+
 Exit criteria:
 
-* Facility Owner can create a facility.
+* A Platform Admin can onboard a facility owner end to end and commence them.
+* An owner with no live contract is invisible to customers.
 * Facility Owner can create courts under their facility.
-* Facility Owner can define operating hours.
+* Facility hours resolve correctly, including a per-court override and a
+  facility outside `Asia/Manila`.
 * Facility Owner can block unavailable court schedules.
 * Facility Owner cannot access another Facility Owner's records.
 
