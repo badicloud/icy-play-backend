@@ -78,7 +78,21 @@ Exit criteria:
 
 ## Phase 1: Identity and Role Foundation
 
-Status: In progress. The identity schema, Customer and Facility Owner registration, JWT access tokens, rotating hashed refresh tokens, logout, current-user endpoint, account lockout, and initial EF Core migration are implemented. Platform Administrator provisioning and broader authorization-policy coverage remain.
+Status: In progress. Implemented so far:
+
+* Customer and Facility Owner registration
+* JWT access tokens and rotating hashed refresh tokens
+* Login, logout, refresh, and current-user endpoint
+* Account lockout and per-IP rate limiting on every authentication endpoint
+* reCAPTCHA v3 on registration, login, forgot password, and resend verification
+* Account email verification, with resend and a 24-hour single-use link
+* Password reset, with a 60-minute single-use link that also ends every session
+* "Remember me", sizing the refresh token to 30 days or 12 hours
+* Active session management: list, revoke one, revoke others, revoke all
+
+Platform Administrator provisioning and broader authorization-policy coverage
+remain. Nothing yet requires a verified email before booking; that business rule
+is still open.
 
 Goal:
 

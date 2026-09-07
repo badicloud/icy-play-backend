@@ -279,7 +279,12 @@ Current activities:
 
 * Customer and Facility Owner registration
 * JWT access tokens and rotating refresh tokens
-* Login retry and account lockout
+* Login retry, account lockout, and per-IP rate limiting
+* reCAPTCHA v3 on registration, login, and the mail-sending endpoints
+* Account email verification and resend
+* Password reset
+* "Remember me" session lifetimes
+* Active session management across devices
 * Role-based authorization foundation
 * Identity database schema and migrations
 

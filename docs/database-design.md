@@ -131,7 +131,76 @@ Suggested columns:
 | FullName | nvarchar(200) | Display name |
 | PhoneNumber | nvarchar(50) | Optional |
 | IsActive | bit | Account status |
+| EmailVerifiedAt | datetimeoffset | Null until the emailed link is opened |
+| FailedLoginAttempts | int | Reset on a successful login or a password reset |
+| LockoutEnd | datetimeoffset | Null when the account is not locked |
 | CreatedAt | datetimeoffset | Created timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+### RefreshTokens
+
+One row per signed-in device. A user holds as many rows as they have live
+sessions, which is what the account page reads to list and end them.
+
+Raw refresh tokens are never persisted, only their SHA-256 hash. A copy of the
+database therefore cannot be used to impersonate anyone.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key, also the session id in the access token's `sid` claim |
+| UserId | uniqueidentifier | Owner |
+| TokenHash | nvarchar(64) | Unique. SHA-256 of the raw token |
+| ExpiresAt | datetimeoffset | 30 days when remembered, 12 hours when not |
+| RevokedAt | datetimeoffset | Set on logout, rotation, session revoke, or password reset |
+| ReplacedByTokenHash | nvarchar(64) | Set when rotated, for tracing a token chain |
+| IsPersistent | bit | The "remember me" choice, recorded per token |
+| UserAgent | nvarchar(512) | Raw, unparsed. The client formats it for display |
+| IpAddress | nvarchar(45) | Sized for IPv6 |
+| LastUsedAt | datetimeoffset | Stamped on every rotation |
+| CreatedAt | datetimeoffset | Sign-in time |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+`IsPersistent` is stored rather than derived from `ExpiresAt - CreatedAt`,
+because a rotation has to size the replacement token and timestamp arithmetic
+would quietly promote a short session to a remembered one.
+
+### EmailVerificationTokens
+
+Single-use tokens behind the account verification link.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| UserId | uniqueidentifier | Owner |
+| TokenHash | nvarchar(64) | Unique. SHA-256 of the raw token |
+| ExpiresAt | datetimeoffset | 24 hours by default |
+| UsedAt | datetimeoffset | Null until the link is opened |
+| CreatedAt | datetimeoffset | Also drives the resend cooldown |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+Issuing a new token deletes the user's earlier rows, so only one link is live at
+a time.
+
+### PasswordResetTokens
+
+Same shape and same rules as `EmailVerificationTokens`, with a shorter life:
+60 minutes rather than 24 hours. A reset link grants more than a verification
+link does, so it is worth less time.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| UserId | uniqueidentifier | Owner |
+| TokenHash | nvarchar(64) | Unique. SHA-256 of the raw token |
+| ExpiresAt | datetimeoffset | 60 minutes by default |
+| UsedAt | datetimeoffset | Null until the reset succeeds |
+| CreatedAt | datetimeoffset | Also drives the request cooldown |
 | UpdatedAt | datetimeoffset | Updated timestamp |
 
 ### UserRoles
@@ -568,6 +637,28 @@ Suggested columns:
 ---
 
 ## Notifications
+
+### EmailTemplates
+
+Maps a template key to the provider template that renders it. Lets an email be
+re-pointed at a new provider template without a redeploy.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| Key | nvarchar(100) | For example `account-verification`, `password-reset` |
+| Provider | nvarchar(50) | For example `Mailjet` |
+| ExternalTemplateId | bigint | The provider's own template id |
+| Subject | nvarchar(255) | Subject line sent with the template |
+| IsActive | bit | Only the active row is used |
+| CreatedAt | datetimeoffset | Created timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+Unique on `(Provider, Key)`, so two active templates can never compete for the
+same email. Credentials never live in this table; API keys stay in
+configuration and the platform secret manager.
 
 ### Notifications
 

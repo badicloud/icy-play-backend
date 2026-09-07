@@ -234,6 +234,17 @@ Recommended initial error codes:
 | `PLATFORM_FEE_NOT_CONFIGURED` | Facility Owner has no active platform fee agreement |
 | `BILLING_ALREADY_GENERATED` | Booking or period was already included in billing |
 | `CONFLICT` | Request conflicts with existing data or business rules |
+| `AUTH_EMAIL_ALREADY_EXISTS` | Registration email is already in use |
+| `AUTH_ACCOUNT_INACTIVE` | Account has been deactivated |
+| `AUTH_INVALID_REFRESH_TOKEN` | Refresh token is unknown, revoked, or expired |
+| `CAPTCHA_INVALID` | reCAPTCHA verification failed |
+| `AUTH_VERIFICATION_EMAIL_COOLDOWN` | Verification email was requested again too soon |
+| `AUTH_INVALID_VERIFICATION_TOKEN` | Verification link is unknown or already used |
+| `AUTH_EXPIRED_VERIFICATION_TOKEN` | Verification link has expired |
+| `AUTH_PASSWORD_RESET_COOLDOWN` | Password reset was requested again too soon |
+| `AUTH_INVALID_PASSWORD_RESET_TOKEN` | Reset link is unknown or already used |
+| `AUTH_EXPIRED_PASSWORD_RESET_TOKEN` | Reset link has expired |
+| `AUTH_PASSWORD_REUSED` | New password matches the current one |
 
 ---
 
@@ -524,7 +535,9 @@ Request:
 ```json
 {
   "email": "juan@example.com",
-  "password": "StrongPassword123"
+  "password": "StrongPassword123",
+  "captchaToken": "recaptcha-v3-token",
+  "rememberMe": true
 }
 ```
 
@@ -547,8 +560,16 @@ Business rules:
 * Wrong email and wrong password should return the same generic error.
 * Account is temporarily locked after the configured failed attempt limit.
 * Successful login resets the failed login counter.
-* Login should be rate limited by IP address and email combination.
+* Login is rate limited per IP address.
 * Locked responses may include `retryAfterSeconds`.
+* A reCAPTCHA v3 token with the action `login` is required. Account lockout only
+  protects one account at a time, so it does not stop credential stuffing, where
+  one password is tried against many accounts. The captcha does.
+* `rememberMe` sizes the refresh token. True issues `Jwt:RefreshTokenDays`
+  (30 days); false issues `Jwt:SessionRefreshTokenHours` (12 hours), so a token
+  taken from a shared computer stops working within the day.
+* The access token carries a `sid` claim holding the session's refresh-token id,
+  which lets the session endpoints identify the calling device.
 
 ### Refresh Access Token
 
@@ -603,6 +624,256 @@ GET /api/v1/auth/me
 Role:
 
 * Authenticated
+
+---
+
+### Verify Email
+
+```http
+POST /api/v1/auth/verify-email
+```
+
+Request:
+
+```json
+{
+  "token": "raw-token-from-the-emailed-link"
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "email": "juan@example.com",
+    "verifiedAt": "2026-07-01T12:00:00+08:00",
+    "alreadyVerified": false
+  }
+}
+```
+
+Business rules:
+
+* Only the SHA-256 hash of the token is stored. The raw value exists only inside
+  the emailed link.
+* The token expires after `EmailVerification:ExpirationHours` and is single use.
+* Opening an already-used link for an already-verified account succeeds with
+  `alreadyVerified` true. A second click is not an error.
+* An unknown or spent token returns `AUTH_INVALID_VERIFICATION_TOKEN`; an
+  expired one returns `AUTH_EXPIRED_VERIFICATION_TOKEN`, so the client can offer
+  to resend rather than showing a dead end.
+
+### Resend Verification Email
+
+```http
+POST /api/v1/auth/resend-verification
+```
+
+Request:
+
+```json
+{
+  "email": "juan@example.com",
+  "captchaToken": "recaptcha-v3-token"
+}
+```
+
+Responds `202 Accepted` with a generic message.
+
+Business rules:
+
+* The response never reveals whether the account exists, and is identical for an
+  unknown address, an existing address, and an already-verified account.
+* A cooldown of `EmailVerification:ResendCooldownSeconds` applies per account.
+  Breaching it returns `429` with `retryAfterSeconds`.
+* Issuing a new token deletes the account's earlier ones, so only one link is
+  ever live.
+* Requires a reCAPTCHA v3 token with the action `resend_verification`.
+
+### Forgot Password
+
+```http
+POST /api/v1/auth/forgot-password
+```
+
+Request:
+
+```json
+{
+  "email": "juan@example.com",
+  "captchaToken": "recaptcha-v3-token"
+}
+```
+
+Responds `202 Accepted` with a generic message.
+
+Business rules:
+
+* Same non-disclosure rule as resend: the response cannot be used to discover
+  which addresses are registered.
+* Cooldown of `PasswordReset:RequestCooldownSeconds` per account, returning
+  `429` with `retryAfterSeconds`.
+* Requires a reCAPTCHA v3 token with the action `forgot_password`. This endpoint
+  sends mail, so it is both an inbox-flooding and a billing-quota vector.
+
+### Check Password Reset Token
+
+```http
+POST /api/v1/auth/reset-password/check
+```
+
+Request:
+
+```json
+{
+  "token": "raw-token-from-the-emailed-link"
+}
+```
+
+Response:
+
+```json
+{
+  "data": { "expiresAt": "2026-07-01T13:00:00+08:00" }
+}
+```
+
+Business rules:
+
+* Reports whether a reset link is still usable **without spending it**, so the
+  reset page can show a dead link as dead on arrival instead of after the visitor
+  has typed a new password.
+* Shares one lookup with the reset itself, so the check and the reset can never
+  disagree about what "usable" means.
+
+### Reset Password
+
+```http
+POST /api/v1/auth/reset-password
+```
+
+Request:
+
+```json
+{
+  "token": "raw-token-from-the-emailed-link",
+  "newPassword": "BrandNewPassword456!"
+}
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "email": "juan@example.com",
+    "revokedSessions": 3
+  }
+}
+```
+
+Business rules:
+
+* The token expires after `PasswordReset:ExpirationMinutes` (60) and is single
+  use. Reset links are deliberately shorter-lived than verification links.
+* A successful reset revokes **every** refresh token for the account, so a stolen
+  session dies with the old password, and clears any lockout.
+* The new password must differ from the current one, or the request fails with
+  `AUTH_PASSWORD_REUSED`. Only an exact match can be detected: the stored value
+  is a one-way hash, so similarity to the old password cannot be checked.
+* A rejected password does **not** mark the token used, so the same link still
+  works on the next attempt.
+
+---
+
+## Session Endpoints
+
+Let a signed-in user see where their account is signed in and end any of those
+sessions. Every sign-in creates its own refresh token, so one account can hold
+many concurrent sessions across devices.
+
+Each endpoint identifies the calling session from the `sid` claim on the access
+token, so the client never sends its refresh token back to read or manage
+sessions.
+
+### List Active Sessions
+
+```http
+GET /api/v1/auth/sessions
+```
+
+Response:
+
+```json
+{
+  "data": [
+    {
+      "id": "guid",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/128.0",
+      "ipAddress": "112.201.5.11",
+      "signedInAt": "2026-07-01T10:21:00+08:00",
+      "lastUsedAt": "2026-07-01T12:04:00+08:00",
+      "expiresAt": "2026-07-31T10:21:00+08:00",
+      "isPersistent": true,
+      "isCurrent": true
+    }
+  ]
+}
+```
+
+Business rules:
+
+* Revoked and expired sessions are excluded.
+* The raw user agent is returned unparsed; the client formats it for display.
+* `lastUsedAt` is stamped on every token rotation.
+
+### Revoke One Session
+
+```http
+DELETE /api/v1/auth/sessions/{sessionId}
+```
+
+Responds `204 No Content`, or `404` when the session does not exist.
+
+Business rules:
+
+* The lookup filters on the caller's user id as well as the session id.
+  Without that, any signed-in user could end another account's session by
+  guessing a GUID.
+* A session belonging to someone else returns the same `404` as a missing one,
+  so the endpoint does not confirm that another user's session exists.
+
+### Revoke Other Sessions
+
+```http
+POST /api/v1/auth/sessions/revoke-others
+```
+
+Ends every session except the caller's. Responds with `revokedSessions`.
+
+### Revoke All Sessions
+
+```http
+POST /api/v1/auth/sessions/revoke-all
+```
+
+Ends every session including the caller's. Responds with `revokedSessions`.
+
+Kept as its own operation rather than passing a null session id to
+revoke-others: comparing a non-nullable column to `NULL` is `UNKNOWN` in SQL,
+which would silently revoke nothing while reporting success.
+
+---
+
+### Access token window
+
+Revoking a session invalidates its refresh token immediately, but the device's
+existing access token stays valid until it expires, up to
+`Jwt:AccessTokenMinutes` (15). Closing that window would mean checking `sid`
+against the database on every authenticated request, turning a stateless JWT
+into a database round trip per call. Shorten `Jwt:AccessTokenMinutes` if the
+window needs to be tighter.
 
 ---
 
