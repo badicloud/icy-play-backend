@@ -37,7 +37,10 @@ public sealed class CloudinaryAssetServiceTests
             signature.CloudName.Should().Be(CloudName);
             signature.ApiKey.Should().Be(ApiKey);
             // The secret signs the request but must never travel to the browser.
-            signature.Should().NotBeEquivalentTo(new { ApiSecret });
+            signature.Should().NotBeEquivalentTo(new
+            {
+                ApiSecret
+            });
         }
     }
 

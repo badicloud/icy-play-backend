@@ -1,11 +1,11 @@
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Identity;
+using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Email;
-using IcyPlay.Application.Storage;
 using IcyPlay.Infrastructure.Identity;
-using IcyPlay.Infrastructure.Storage;
 using IcyPlay.Infrastructure.Persistence;
+using IcyPlay.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
