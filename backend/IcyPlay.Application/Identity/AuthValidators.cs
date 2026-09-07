@@ -41,6 +41,7 @@ public sealed class LoginRequestValidator : AbstractValidator<LoginRequest>
     {
         RuleFor(x => x.Email).NotEmpty().EmailAddress();
         RuleFor(x => x.Password).NotEmpty();
+        RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
     }
 }
 public sealed class RefreshRequestValidator : AbstractValidator<RefreshRequest>
@@ -56,6 +57,7 @@ public sealed class ResendVerificationEmailRequestValidator : AbstractValidator<
     public ResendVerificationEmailRequestValidator()
     {
         RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+        RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
     }
 }
 public sealed class VerifyEmailRequestValidator : AbstractValidator<VerifyEmailRequest>
@@ -63,6 +65,29 @@ public sealed class VerifyEmailRequestValidator : AbstractValidator<VerifyEmailR
     public VerifyEmailRequestValidator()
     {
         RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+    }
+}
+public sealed class ForgotPasswordRequestValidator : AbstractValidator<ForgotPasswordRequest>
+{
+    public ForgotPasswordRequestValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+        RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
+    }
+}
+public sealed class CheckPasswordResetTokenRequestValidator : AbstractValidator<CheckPasswordResetTokenRequest>
+{
+    public CheckPasswordResetTokenRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+    }
+}
+public sealed class ResetPasswordRequestValidator : AbstractValidator<ResetPasswordRequest>
+{
+    public ResetPasswordRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+        RuleFor(x => x.NewPassword).ApplyPasswordRules();
     }
 }
 

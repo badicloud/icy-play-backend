@@ -37,6 +37,7 @@ public sealed class User : Entity
     public ICollection<UserRole> Roles { get; private set; } = [];
     public ICollection<RefreshToken> RefreshTokens { get; private set; } = [];
     public ICollection<EmailVerificationToken> EmailVerificationTokens { get; private set; } = [];
+    public ICollection<PasswordResetToken> PasswordResetTokens { get; private set; } = [];
     public void SetPasswordHash(string value) => PasswordHash = value;
     public void MarkEmailVerified(DateTimeOffset now)
     {
@@ -56,6 +57,12 @@ public sealed class User : Entity
             LockoutEnd = now.Add(duration);
         }
 
+        UpdatedAt = now;
+    }
+    public void ClearLockout(DateTimeOffset now)
+    {
+        FailedLoginAttempts = 0;
+        LockoutEnd = null;
         UpdatedAt = now;
     }
     public void RecordSuccessfulLogin(DateTimeOffset now)

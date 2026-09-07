@@ -32,6 +32,32 @@ The backend does not need to send a `logo_url` variable or attach a separate ima
 
 The `AddEmailTemplates` migration seeds this template as the active `account-verification` template. API keys and secrets must remain in secure configuration and must never be stored in the email-template database table.
 
+## Password reset
+
+- Mailjet template name: `IcyPlay - Forgot Password`
+- Subject: `Reset your IcyPlay password`
+- Published Mailjet template ID: `8325458`
+- HTML part: `password-reset.html`
+- Text part: `password-reset.txt`
+- Mailjet Send API version: `v3.1`
+- The send request must set `TemplateLanguage` to `true`.
+
+### Required variables
+
+| Variable | Description | Example |
+| --- | --- | --- |
+| `recipient_name` | Registered user's display name | `Juan Dela Cruz` |
+| `reset_url` | Absolute, single-use frontend reset URL | `https://app.example.com/reset-password?token=...` |
+| `expiration_minutes` | Token lifetime displayed to the user | `60` |
+| `support_email` | Public support email address | `support@example.com` |
+| `current_year` | Four-digit year | `2026` |
+
+This template reuses the same IcyPlay email header hosted on Cloudinary as the verification email, so no extra image needs to be uploaded.
+
+The `AddPasswordResetTokens` migration seeds this template as the active `password-reset` template.
+
+---
+
 ## Local Mailjet configuration
 
 `backend/IcyPlay.Api/appsettings.Development.json` is ignored by Git and contains the local-only `Mailjet` configuration section:

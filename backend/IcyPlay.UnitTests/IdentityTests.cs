@@ -60,6 +60,29 @@ public sealed class UserTests
     }
 
     [Fact]
+    public void Should_Reset_Lockout_State_When_Lockout_Is_Cleared()
+    {
+        // Arrange
+        var user = new UserBuilder().Build();
+        var now = TestTimes.UtcNow;
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            user.RecordFailedLogin(5, TimeSpan.FromMinutes(15), now);
+        }
+
+        // Act
+        user.ClearLockout(now.AddMinutes(5));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            user.FailedLoginAttempts.Should().Be(0);
+            user.LockoutEnd.Should().BeNull();
+            user.UpdatedAt.Should().Be(now.AddMinutes(5));
+        }
+    }
+
+    [Fact]
     public void Should_Not_Be_Email_Verified_When_User_Is_Created()
     {
         // Arrange

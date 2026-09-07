@@ -384,6 +384,7 @@ public sealed class CustomerRegistrationEmailVerificationTests(SqlServerDatabase
             context,
             new PasswordHasher<User>(),
             emailVerificationService,
+            new NoOpPasswordResetEmailService(),
             new FixedTimeProvider(now ?? RegistrationTime),
             new ConfigurationBuilder().Build(),
             NullLogger<AuthService>.Instance);
@@ -417,6 +418,15 @@ public sealed class CustomerRegistrationEmailVerificationTests(SqlServerDatabase
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    private sealed class NoOpPasswordResetEmailService : IPasswordResetEmailService
+    {
+        public Task SendAsync(
+            Guid userId,
+            string recipientEmail,
+            string recipientName,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {

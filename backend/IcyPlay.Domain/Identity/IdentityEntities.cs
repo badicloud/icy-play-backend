@@ -74,10 +74,25 @@ public sealed class RefreshToken : Entity
     {
     }
     public RefreshToken(Guid userId, string tokenHash, DateTimeOffset expiresAt)
+        : this(userId, tokenHash, expiresAt, DateTimeOffset.UtcNow, false)
+    {
+    }
+    public RefreshToken(
+        Guid userId,
+        string tokenHash,
+        DateTimeOffset expiresAt,
+        DateTimeOffset issuedAt,
+        bool isPersistent,
+        string? userAgent = null,
+        string? ipAddress = null)
     {
         UserId = userId;
         TokenHash = tokenHash;
         ExpiresAt = expiresAt;
+        CreatedAt = issuedAt;
+        IsPersistent = isPersistent;
+        UserAgent = userAgent;
+        IpAddress = ipAddress;
     }
     public Guid UserId
     {
@@ -93,11 +108,38 @@ public sealed class RefreshToken : Entity
     {
         get; private set;
     }
+    /// <summary>
+    /// True when the visitor asked to be remembered. Recorded per token so a
+    /// rotation can size the replacement without guessing from timestamps.
+    /// </summary>
+    public bool IsPersistent
+    {
+        get; private set;
+    }
     public string? ReplacedByTokenHash
     {
         get; private set;
     }
+    /// <summary>Raw user agent, kept unparsed so the client can format it.</summary>
+    public string? UserAgent
+    {
+        get; private set;
+    }
+    public string? IpAddress
+    {
+        get; private set;
+    }
+    /// <summary>Stamped on every rotation, so the list can show recent activity.</summary>
+    public DateTimeOffset? LastUsedAt
+    {
+        get; private set;
+    }
     public bool IsActive(DateTimeOffset now) => RevokedAt is null && ExpiresAt > now;
+    public void RecordUse(DateTimeOffset now)
+    {
+        LastUsedAt = now;
+        UpdatedAt = now;
+    }
     public void Revoke(DateTimeOffset now, string? replacementHash = null)
     {
         RevokedAt = now;

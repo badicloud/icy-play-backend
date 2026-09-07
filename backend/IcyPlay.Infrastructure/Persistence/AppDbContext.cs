@@ -19,6 +19,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
+    public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -75,6 +76,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.ReplacedByTokenHash).HasMaxLength(64);
             entity.HasIndex(x => x.TokenHash).IsUnique();
             entity.HasIndex(x => new { x.UserId, x.ExpiresAt });
+            entity.Property(x => x.UserAgent).HasMaxLength(512);
+            entity.Property(x => x.IpAddress).HasMaxLength(45);
             entity.HasOne(x => x.User).WithMany(x => x.RefreshTokens).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
         modelBuilder.Entity<EmailTemplate>(entity =>
@@ -86,17 +89,29 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.Subject).HasMaxLength(255).IsRequired();
             entity.HasIndex(x => new { x.Provider, x.Key }).IsUnique();
 
-            entity.HasData(new
-            {
-                Id = Guid.Parse("c9575d6e-7afd-5ed2-9368-fdd45dbf069b"),
-                Key = EmailTemplateKey.AccountVerification,
-                Provider = EmailProviderName.Mailjet,
-                ExternalTemplateId = 8278054L,
-                Subject = "Verify your IcyPlay email address",
-                IsActive = true,
-                CreatedAt = new DateTimeOffset(2026, 8, 18, 0, 0, 0, TimeSpan.Zero),
-                UpdatedAt = (DateTimeOffset?)null
-            });
+            entity.HasData(
+                new
+                {
+                    Id = Guid.Parse("c9575d6e-7afd-5ed2-9368-fdd45dbf069b"),
+                    Key = EmailTemplateKey.AccountVerification,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8278054L,
+                    Subject = "Verify your IcyPlay email address",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 8, 18, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("6b1f2ad4-93c7-4e58-8a0d-1c5e7f9b2d64"),
+                    Key = EmailTemplateKey.PasswordReset,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8325458L,
+                    Subject = "Reset your IcyPlay password",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 4, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>
         {
@@ -107,6 +122,19 @@ public sealed class AppDbContext : DbContext
             entity.HasIndex(x => new { x.UserId, x.ExpiresAt });
             entity.HasOne(x => x.User)
                 .WithMany(x => x.EmailVerificationTokens)
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PasswordResetToken>(entity =>
+        {
+            entity.ToTable("PasswordResetTokens");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => new { x.UserId, x.ExpiresAt });
+            entity.HasOne(x => x.User)
+                .WithMany(x => x.PasswordResetTokens)
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

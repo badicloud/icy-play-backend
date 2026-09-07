@@ -26,6 +26,7 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "PlatformAdmins",
             "RefreshTokens",
             "EmailVerificationTokens",
+            "PasswordResetTokens",
             "EmailTemplates",
             "__EFMigrationsHistory");
     }

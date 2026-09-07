@@ -35,9 +35,12 @@ public static class DependencyInjection
             configuration.GetSection(MailjetOptions.SectionName));
         services.Configure<EmailVerificationOptions>(
             configuration.GetSection(EmailVerificationOptions.SectionName));
+        services.Configure<PasswordResetOptions>(
+            configuration.GetSection(PasswordResetOptions.SectionName));
         services.AddSingleton(TimeProvider.System);
         services.AddScoped<IEmailTemplateStore, EmailTemplateStore>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
+        services.AddScoped<IPasswordResetEmailService, PasswordResetEmailService>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");

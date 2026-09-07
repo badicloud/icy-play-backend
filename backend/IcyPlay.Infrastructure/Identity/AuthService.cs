@@ -19,6 +19,7 @@ public sealed class AuthService(
     AppDbContext db,
     IPasswordHasher<User> passwordHasher,
     IEmailVerificationService emailVerificationService,
+    IPasswordResetEmailService passwordResetEmailService,
     TimeProvider timeProvider,
     IConfiguration configuration,
     ILogger<AuthService> logger) : IAuthService
@@ -94,7 +95,7 @@ public sealed class AuthService(
         }
     }
 
-    public async Task<AuthResult<TokenResponse>> LoginAsync(LoginRequest request, CancellationToken ct)
+    public async Task<AuthResult<TokenResponse>> LoginAsync(LoginRequest request, ClientInfo client, CancellationToken ct)
     {
         var now = timeProvider.GetUtcNow();
         var email = request.Email.Trim().ToLowerInvariant();
@@ -131,15 +132,15 @@ public sealed class AuthService(
                 : AuthResult<TokenResponse>.Fail(AuthFailure.InvalidCredentials);
         }
         user.RecordSuccessfulLogin(now);
-        var response = IssueTokens(user, now);
+        var response = IssueTokens(user, now, request.RememberMe, client);
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Login succeeded. UserId: {UserId}", user.Id);
         return AuthResult<TokenResponse>.Success(response);
     }
 
-    public async Task<AuthResult<TokenResponse>> RefreshAsync(string rawToken, CancellationToken ct)
+    public async Task<AuthResult<TokenResponse>> RefreshAsync(string rawToken, ClientInfo client, CancellationToken ct)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = timeProvider.GetUtcNow();
         var hash = Hash(rawToken);
         var stored = await db.RefreshTokens.Include(x => x.User).ThenInclude(x => x.Roles).SingleOrDefaultAsync(x => x.TokenHash == hash, ct);
         if (stored is null || !stored.IsActive(now) || !stored.User.IsActive)
@@ -150,8 +151,19 @@ public sealed class AuthService(
         var replacementRaw = GenerateRefreshToken();
         var replacementHash = Hash(replacementRaw);
         stored.Revoke(now, replacementHash);
-        db.RefreshTokens.Add(new RefreshToken(stored.UserId, replacementHash, now.AddDays(configuration.GetValue("Jwt:RefreshTokenDays", 30))));
-        var response = CreateTokenResponse(stored.User, replacementRaw, now);
+        // Carry the choice across the rotation, otherwise every refresh would
+        // quietly promote a short session to a remembered one.
+        var replacement = new RefreshToken(
+            stored.UserId,
+            replacementHash,
+            now.Add(RefreshTokenLifetime(stored.IsPersistent)),
+            now,
+            stored.IsPersistent,
+            Truncate(client.UserAgent, 512) ?? stored.UserAgent,
+            Truncate(client.IpAddress, 45) ?? stored.IpAddress);
+        replacement.RecordUse(now);
+        db.RefreshTokens.Add(replacement);
+        var response = CreateTokenResponse(stored.User, replacementRaw, now, replacement.Id);
         await db.SaveChangesAsync(ct);
         return AuthResult<TokenResponse>.Success(response);
     }
@@ -266,27 +278,308 @@ public sealed class AuthService(
         return AuthResult<VerifyEmailResponse>.Success(new(user.Email, now, false));
     }
 
+    public async Task<AuthResult<ForgotPasswordResponse>> ForgotPasswordAsync(
+        string email,
+        CancellationToken ct)
+    {
+        const string acceptedMessage =
+            "If an account exists for this email, a password reset link will be sent.";
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var user = await db.Users.SingleOrDefaultAsync(
+            candidate => candidate.Email == normalizedEmail && candidate.IsActive,
+            ct);
+        if (user is null)
+        {
+            logger.LogInformation(
+                "Password reset request accepted without disclosing account existence.");
+            return AuthResult<ForgotPasswordResponse>.Success(new(acceptedMessage));
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var cooldownSeconds = configuration.GetValue(
+            "PasswordReset:RequestCooldownSeconds",
+            60);
+        var latestToken = await db.PasswordResetTokens
+            .Where(token => token.UserId == user.Id)
+            .OrderByDescending(token => token.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        var retryAfter = latestToken is null
+            ? TimeSpan.Zero
+            : latestToken.CreatedAt.AddSeconds(cooldownSeconds) - now;
+        if (retryAfter > TimeSpan.Zero)
+        {
+            return AuthResult<ForgotPasswordResponse>.Fail(
+                AuthFailure.PasswordResetCooldown,
+                Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)));
+        }
+
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        var existingTokens = await db.PasswordResetTokens
+            .Where(token => token.UserId == user.Id)
+            .ToListAsync(ct);
+        db.PasswordResetTokens.RemoveRange(existingTokens);
+        await passwordResetEmailService.SendAsync(
+            user.Id,
+            user.Email,
+            user.FullName,
+            ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Password reset email was sent. UserId: {UserId}",
+            user.Id);
+        return AuthResult<ForgotPasswordResponse>.Success(new(acceptedMessage));
+    }
+
+    public async Task<AuthResult<PasswordResetTokenStatusResponse>> CheckPasswordResetTokenAsync(
+        string token,
+        CancellationToken ct)
+    {
+        var (stored, failure) = await FindUsablePasswordResetTokenAsync(token, ct);
+        return failure is AuthFailure.None
+            ? AuthResult<PasswordResetTokenStatusResponse>.Success(new(stored!.ExpiresAt))
+            : AuthResult<PasswordResetTokenStatusResponse>.Fail(failure);
+    }
+
+    public async Task<AuthResult<ResetPasswordResponse>> ResetPasswordAsync(
+        string token,
+        string newPassword,
+        CancellationToken ct)
+    {
+        var (stored, failure) = await FindUsablePasswordResetTokenAsync(token, ct);
+        if (failure is not AuthFailure.None)
+        {
+            return AuthResult<ResetPasswordResponse>.Fail(failure);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var user = stored!.User;
+
+        // Only an exact match can be detected: the stored value is a one-way hash,
+        // so the old password cannot be read back and compared for similarity.
+        if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, newPassword)
+            != PasswordVerificationResult.Failed)
+        {
+            logger.LogInformation(
+                "Password reset was rejected because the new password matched the current one. UserId: {UserId}",
+                user.Id);
+
+            // The token stays unused so the same link still works on the next try.
+            return AuthResult<ResetPasswordResponse>.Fail(AuthFailure.PasswordReused);
+        }
+
+        user.SetPasswordHash(passwordHasher.HashPassword(user, newPassword));
+        user.ClearLockout(now);
+        stored.MarkUsed(now);
+
+        // A reset ends every existing session, so a stolen refresh token dies with
+        // the old password.
+        var activeRefreshTokens = await db.RefreshTokens
+            .Where(refreshToken => refreshToken.UserId == user.Id && refreshToken.RevokedAt == null)
+            .ToListAsync(ct);
+        foreach (var refreshToken in activeRefreshTokens)
+        {
+            refreshToken.Revoke(now);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Password was reset and {RevokedSessionCount} session(s) were revoked. UserId: {UserId}",
+            activeRefreshTokens.Count,
+            user.Id);
+        return AuthResult<ResetPasswordResponse>.Success(
+            new(user.Email, activeRefreshTokens.Count));
+    }
+
+    public async Task<IReadOnlyCollection<ActiveSessionResponse>> GetActiveSessionsAsync(
+        Guid userId,
+        Guid? currentSessionId,
+        CancellationToken ct)
+    {
+        var now = timeProvider.GetUtcNow();
+        var sessions = await db.RefreshTokens
+            .AsNoTracking()
+            .Where(token => token.UserId == userId && token.RevokedAt == null && token.ExpiresAt > now)
+            .OrderByDescending(token => token.LastUsedAt ?? token.CreatedAt)
+            .ToListAsync(ct);
+
+        return sessions
+            .Select(token => new ActiveSessionResponse(
+                token.Id,
+                token.UserAgent,
+                token.IpAddress,
+                token.CreatedAt,
+                token.LastUsedAt,
+                token.ExpiresAt,
+                token.IsPersistent,
+                token.Id == currentSessionId))
+            .ToArray();
+    }
+
+    public async Task<bool> RevokeSessionAsync(Guid userId, Guid sessionId, CancellationToken ct)
+    {
+        // Filtering on UserId as well as the id is what stops one account from
+        // revoking another account's session by guessing a GUID.
+        var stored = await db.RefreshTokens.SingleOrDefaultAsync(
+            token => token.Id == sessionId && token.UserId == userId && token.RevokedAt == null,
+            ct);
+        if (stored is null)
+        {
+            return false;
+        }
+
+        stored.Revoke(timeProvider.GetUtcNow());
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "A session was revoked. UserId: {UserId}, SessionId: {SessionId}",
+            userId,
+            sessionId);
+        return true;
+    }
+
+    public async Task<int> RevokeOtherSessionsAsync(
+        Guid userId,
+        Guid? currentSessionId,
+        CancellationToken ct)
+    {
+        var now = timeProvider.GetUtcNow();
+        var others = await db.RefreshTokens
+            .Where(token =>
+                token.UserId == userId &&
+                token.RevokedAt == null &&
+                token.Id != currentSessionId)
+            .ToListAsync(ct);
+        foreach (var token in others)
+        {
+            token.Revoke(now);
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "{RevokedSessionCount} other session(s) were revoked. UserId: {UserId}",
+            others.Count,
+            userId);
+        return others.Count;
+    }
+
+    /// <summary>
+    /// Ends every session including the caller's. Kept separate from
+    /// RevokeOtherSessionsAsync rather than passing a null id: comparing a
+    /// non-nullable column to NULL is UNKNOWN in SQL, which would silently
+    /// revoke nothing.
+    /// </summary>
+    public async Task<int> RevokeAllSessionsAsync(Guid userId, CancellationToken ct)
+    {
+        var now = timeProvider.GetUtcNow();
+        var sessions = await db.RefreshTokens
+            .Where(token => token.UserId == userId && token.RevokedAt == null)
+            .ToListAsync(ct);
+        foreach (var token in sessions)
+        {
+            token.Revoke(now);
+        }
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "All {RevokedSessionCount} session(s) were revoked. UserId: {UserId}",
+            sessions.Count,
+            userId);
+        return sessions.Count;
+    }
+
     public async Task<CurrentUserResponse?> GetCurrentUserAsync(Guid userId, CancellationToken ct)
     {
         var user = await db.Users.AsNoTracking().Include(x => x.Roles).SingleOrDefaultAsync(x => x.Id == userId && x.IsActive, ct);
         return user is null ? null : new(user.Id, user.Email, user.FullName, user.Roles.Select(x => x.Role).ToArray());
     }
 
-    private TokenResponse IssueTokens(User user, DateTimeOffset now)
+    private TokenResponse IssueTokens(User user, DateTimeOffset now, bool rememberMe, ClientInfo client)
     {
         var raw = GenerateRefreshToken();
-        db.RefreshTokens.Add(new RefreshToken(user.Id, Hash(raw), now.AddDays(configuration.GetValue("Jwt:RefreshTokenDays", 30))));
-        return CreateTokenResponse(user, raw, now);
+        var refreshToken = new RefreshToken(
+            user.Id,
+            Hash(raw),
+            now.Add(RefreshTokenLifetime(rememberMe)),
+            now,
+            rememberMe,
+            Truncate(client.UserAgent, 512),
+            Truncate(client.IpAddress, 45));
+        db.RefreshTokens.Add(refreshToken);
+        return CreateTokenResponse(user, raw, now, refreshToken.Id);
     }
-    private TokenResponse CreateTokenResponse(User user, string refreshToken, DateTimeOffset now)
+
+    private static string? Truncate(string? value, int maximumLength) =>
+        string.IsNullOrWhiteSpace(value)
+            ? null
+            : value.Length <= maximumLength ? value : value[..maximumLength];
+
+    /// <summary>
+    /// Without "remember me" the session is deliberately short, so a token
+    /// taken from a shared computer stops working within the day rather than
+    /// in a month.
+    /// </summary>
+    private TimeSpan RefreshTokenLifetime(bool rememberMe) => rememberMe
+        ? TimeSpan.FromDays(configuration.GetValue("Jwt:RefreshTokenDays", 30))
+        : TimeSpan.FromHours(configuration.GetValue("Jwt:SessionRefreshTokenHours", 12));
+    private TokenResponse CreateTokenResponse(User user, string refreshToken, DateTimeOffset now, Guid sessionId)
     {
         var expires = now.AddMinutes(configuration.GetValue("Jwt:AccessTokenMinutes", 15));
-        var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, user.Id.ToString()), new(JwtRegisteredClaimNames.Email, user.Email), new(ClaimTypes.NameIdentifier, user.Id.ToString()), new(ClaimTypes.Name, user.FullName) };
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new(JwtRegisteredClaimNames.Email, user.Email),
+            new(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new(ClaimTypes.Name, user.FullName),
+            // Lets an authenticated request say which session it belongs to
+            // without ever sending the refresh token back.
+            new(JwtRegisteredClaimNames.Sid, sessionId.ToString())
+        };
         claims.AddRange(user.Roles.Select(x => new Claim(ClaimTypes.Role, x.Role)));
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["Jwt:SigningKey"] ?? throw new InvalidOperationException("JWT signing key is required.")));
         var jwt = new JwtSecurityToken(configuration["Jwt:Issuer"], configuration["Jwt:Audience"], claims, now.UtcDateTime, expires.UtcDateTime, new SigningCredentials(key, SecurityAlgorithms.HmacSha256));
         return new(new JwtSecurityTokenHandler().WriteToken(jwt), refreshToken, expires, user.Roles.Select(x => x.Role).ToArray());
     }
+    /// <summary>
+    /// Resolves a password reset token that is present, unused, unexpired and
+    /// owned by an active account. Used by both the pre-flight check and the
+    /// reset itself so the two can never disagree.
+    /// </summary>
+    private async Task<(PasswordResetToken? Token, AuthFailure Failure)> FindUsablePasswordResetTokenAsync(
+        string token,
+        CancellationToken ct)
+    {
+        var tokenHash = Hash(token.Trim());
+        var stored = await db.PasswordResetTokens
+            .Include(entry => entry.User)
+            .SingleOrDefaultAsync(entry => entry.TokenHash == tokenHash, ct);
+        if (stored is null)
+        {
+            logger.LogWarning("A password reset token was not recognized.");
+            return (null, AuthFailure.InvalidPasswordResetToken);
+        }
+
+        if (stored.UsedAt is not null)
+        {
+            logger.LogInformation(
+                "A password reset token was already used. UserId: {UserId}",
+                stored.UserId);
+            return (null, AuthFailure.InvalidPasswordResetToken);
+        }
+
+        if (stored.ExpiresAt <= timeProvider.GetUtcNow())
+        {
+            logger.LogInformation(
+                "A password reset token had expired. UserId: {UserId}",
+                stored.UserId);
+            return (null, AuthFailure.ExpiredPasswordResetToken);
+        }
+
+        return stored.User.IsActive
+            ? (stored, AuthFailure.None)
+            : (null, AuthFailure.InactiveAccount);
+    }
+
     private static string GenerateRefreshToken() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 

@@ -18,5 +18,9 @@ public static class ErrorCodes
     public const string VerificationEmailCooldown = "AUTH_VERIFICATION_EMAIL_COOLDOWN";
     public const string InvalidVerificationToken = "AUTH_INVALID_VERIFICATION_TOKEN";
     public const string ExpiredVerificationToken = "AUTH_EXPIRED_VERIFICATION_TOKEN";
+    public const string PasswordResetCooldown = "AUTH_PASSWORD_RESET_COOLDOWN";
+    public const string InvalidPasswordResetToken = "AUTH_INVALID_PASSWORD_RESET_TOKEN";
+    public const string ExpiredPasswordResetToken = "AUTH_EXPIRED_PASSWORD_RESET_TOKEN";
+    public const string PasswordReused = "AUTH_PASSWORD_REUSED";
     public const string UnexpectedError = "UNEXPECTED_ERROR";
 }
