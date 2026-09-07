@@ -1,4 +1,5 @@
 using IcyPlay.Domain.Email;
+using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -20,6 +21,8 @@ public sealed class AppDbContext : DbContext
     public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<FacilityOwnerDocument> FacilityOwnerDocuments => Set<FacilityOwnerDocument>();
+    public DbSet<FacilityOwnerContract> FacilityOwnerContracts => Set<FacilityOwnerContract>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -53,6 +56,7 @@ public sealed class AppDbContext : DbContext
         });
         modelBuilder.Entity<FacilityOwner>(entity =>
         {
+            entity.Property(x => x.BusinessRegistrationNumber).HasMaxLength(100);
             entity.ToTable("FacilityOwners");
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => x.UserId).IsUnique();
@@ -136,6 +140,35 @@ public sealed class AppDbContext : DbContext
             entity.HasOne(x => x.User)
                 .WithMany(x => x.PasswordResetTokens)
                 .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FacilityOwnerDocument>(entity =>
+        {
+            entity.ToTable("FacilityOwnerDocuments");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.DocumentType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.PublicId).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.SecureUrl).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.FileName).HasMaxLength(255).IsRequired();
+            entity.Property(x => x.ContentType).HasMaxLength(100).IsRequired();
+            entity.HasIndex(x => new { x.FacilityOwnerId, x.DocumentType });
+            entity.HasOne(x => x.FacilityOwner)
+                .WithMany(x => x.Documents)
+                .HasForeignKey(x => x.FacilityOwnerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FacilityOwnerContract>(entity =>
+        {
+            entity.ToTable("FacilityOwnerContracts");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Notes).HasMaxLength(1000);
+            // Answers "is this owner bookable today" in one index seek.
+            entity.HasIndex(x => new { x.FacilityOwnerId, x.StartDate, x.EndDate });
+            entity.HasOne(x => x.FacilityOwner)
+                .WithMany(x => x.Contracts)
+                .HasForeignKey(x => x.FacilityOwnerId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

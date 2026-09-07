@@ -1,4 +1,5 @@
 using IcyPlay.Domain.Common;
+using IcyPlay.Domain.Facilities;
 
 namespace IcyPlay.Domain.Identity;
 
@@ -55,7 +56,66 @@ public sealed class FacilityOwner : Entity
         get; private set;
     }
     public bool IsActive { get; private set; } = true;
+    public string? BusinessRegistrationNumber
+    {
+        get; private set;
+    }
+    public ICollection<FacilityOwnerDocument> Documents { get; private set; } = [];
+    public ICollection<FacilityOwnerContract> Contracts { get; private set; } = [];
+
+    /// <summary>
+    /// Derived rather than stored, so it cannot drift from the contract dates.
+    /// An admin encoding an owner does not make them bookable: a contract has to
+    /// commence first.
+    /// </summary>
+    public FacilityOwnerStatus StatusOn(DateOnly date)
+    {
+        if (!IsActive)
+        {
+            return FacilityOwnerStatus.Suspended;
+        }
+
+        if (Contracts.Any(contract => contract.Covers(date)))
+        {
+            return FacilityOwnerStatus.Commenced;
+        }
+
+        return Contracts.Any(contract => contract.CancelledAt is null)
+            ? FacilityOwnerStatus.Expired
+            : FacilityOwnerStatus.Pending;
+    }
+
+    public bool IsBookableOn(DateOnly date) => StatusOn(date) == FacilityOwnerStatus.Commenced;
+
+    public void UpdateBusinessDetails(
+        string businessName,
+        string billingEmail,
+        string? billingPhone,
+        string? businessRegistrationNumber,
+        DateTimeOffset now)
+    {
+        BusinessName = businessName.Trim();
+        BillingEmail = billingEmail.Trim().ToLowerInvariant();
+        BillingPhone = string.IsNullOrWhiteSpace(billingPhone) ? null : billingPhone.Trim();
+        BusinessRegistrationNumber = string.IsNullOrWhiteSpace(businessRegistrationNumber)
+            ? null
+            : businessRegistrationNumber.Trim();
+        UpdatedAt = now;
+    }
+
+    public void Suspend(DateTimeOffset now)
+    {
+        IsActive = false;
+        UpdatedAt = now;
+    }
+
+    public void Reinstate(DateTimeOffset now)
+    {
+        IsActive = true;
+        UpdatedAt = now;
+    }
 }
+
 public sealed class PlatformAdmin : Entity
 {
     private PlatformAdmin()
