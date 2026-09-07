@@ -49,28 +49,6 @@ public sealed class AuthService(
         return AuthResult<RegistrationResponse>.Success(new(user.Id, profile.Id));
     }
 
-    public async Task<AuthResult<RegistrationResponse>> RegisterFacilityOwnerAsync(RegisterFacilityOwnerRequest request, CancellationToken ct)
-    {
-        await using var transaction = await db.Database.BeginTransactionAsync(ct);
-        var user = await CreateUserAsync(request.Email, request.FullName, request.BillingPhone, request.Password, UserRoleName.FacilityOwner, ct);
-        if (user is null)
-        {
-            return AuthResult<RegistrationResponse>.Fail(AuthFailure.DuplicateEmail);
-        }
-
-        var profile = new FacilityOwner(user.Id, request.BusinessName, request.BillingEmail, request.BillingPhone);
-        db.FacilityOwners.Add(profile);
-        await db.SaveChangesAsync(ct);
-        await emailVerificationService.SendAsync(
-            user.Id,
-            user.Email,
-            user.FullName,
-            ct);
-        await transaction.CommitAsync(ct);
-        logger.LogInformation("Facility owner account registered. UserId: {UserId}", user.Id);
-        return AuthResult<RegistrationResponse>.Success(new(user.Id, profile.Id));
-    }
-
     private async Task<User?> CreateUserAsync(string email, string fullName, string? phone, string password, string role, CancellationToken ct)
     {
         var normalized = email.Trim().ToLowerInvariant();

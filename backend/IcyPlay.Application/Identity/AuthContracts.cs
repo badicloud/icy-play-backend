@@ -1,7 +1,6 @@
 namespace IcyPlay.Application.Identity;
 
 public sealed record RegisterCustomerRequest(string FullName, string Email, string Password, string? PhoneNumber, bool AcceptedTerms, string CaptchaToken);
-public sealed record RegisterFacilityOwnerRequest(string FullName, string Email, string Password, string BusinessName, string BillingEmail, string? BillingPhone, bool AcceptedTerms, string CaptchaToken);
 public sealed record LoginRequest(string Email, string Password, string CaptchaToken, bool RememberMe);
 public sealed record RefreshRequest(string RefreshToken);
 public sealed record LogoutRequest(string RefreshToken);

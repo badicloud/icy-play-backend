@@ -20,21 +20,6 @@ public sealed class RegisterCustomerRequestValidator : AbstractValidator<Registe
         RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
     }
 }
-public sealed class RegisterFacilityOwnerRequestValidator : AbstractValidator<RegisterFacilityOwnerRequest>
-{
-    public RegisterFacilityOwnerRequestValidator()
-    {
-        RuleFor(x => x.FullName).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
-        RuleFor(x => x.Password).ApplyPasswordRules();
-        RuleFor(x => x.BusinessName).NotEmpty().MaximumLength(200);
-        RuleFor(x => x.BillingEmail).NotEmpty().EmailAddress().MaximumLength(256);
-        RuleFor(x => x.BillingPhone).NotEmpty().Must(RegistrationValidation.IsValidPhoneNumber)
-            .WithMessage("Enter a valid phone number.");
-        RuleFor(x => x.AcceptedTerms).Equal(true).WithMessage("You must accept the Terms of Service and Privacy Policy.");
-        RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
-    }
-}
 public sealed class LoginRequestValidator : AbstractValidator<LoginRequest>
 {
     public LoginRequestValidator()

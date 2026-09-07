@@ -6,10 +6,6 @@ public interface IAuthService
         RegisterCustomerRequest request,
         CancellationToken cancellationToken);
 
-    Task<AuthResult<RegistrationResponse>> RegisterFacilityOwnerAsync(
-        RegisterFacilityOwnerRequest request,
-        CancellationToken cancellationToken);
-
     Task<AuthResult<TokenResponse>> LoginAsync(
         LoginRequest request,
         ClientInfo client,

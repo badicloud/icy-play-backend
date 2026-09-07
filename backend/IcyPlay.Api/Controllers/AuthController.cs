@@ -34,24 +34,6 @@ public sealed class AuthController(
         return result.Succeeded ? StatusCode(StatusCodes.Status201Created, new ApiEnvelope<RegistrationResponse>(result.Value)) : Failure(result);
     }
 
-    [AllowAnonymous, HttpPost("register/facility-owner"), EnableRateLimiting("auth")]
-    public async Task<IActionResult> RegisterFacilityOwner(RegisterFacilityOwnerRequest request, CancellationToken ct)
-    {
-        var invalid = await ValidateAsync(request, ct);
-        if (invalid is not null)
-        {
-            return invalid;
-        }
-
-        if (!await VerifyCaptchaAsync(request.CaptchaToken, CaptchaAction.Register, ct))
-        {
-            return InvalidCaptcha();
-        }
-
-        var result = await authService.RegisterFacilityOwnerAsync(request, ct);
-        return result.Succeeded ? StatusCode(StatusCodes.Status201Created, new ApiEnvelope<RegistrationResponse>(result.Value)) : Failure(result);
-    }
-
     [AllowAnonymous, HttpPost("login"), EnableRateLimiting("auth")]
     public async Task<IActionResult> Login(LoginRequest request, CancellationToken ct)
     {
