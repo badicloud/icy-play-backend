@@ -68,19 +68,39 @@ public sealed class FacilityOwner : Entity
     /// An admin encoding an owner does not make them bookable: a contract has to
     /// commence first.
     /// </summary>
-    public FacilityOwnerStatus StatusOn(DateOnly date)
+    public FacilityOwnerStatus StatusOn(DateOnly date) => DeriveStatus(
+        IsActive,
+        Contracts
+            .Where(contract => contract.CancelledAt is null)
+            .Select(contract => new ContractTerm(contract.StartDate, contract.EndDate)),
+        date);
+
+    /// <summary>
+    /// The one definition of what a facility owner's status means. Static and
+    /// shared because the admin list projects contract dates straight out of the
+    /// database rather than loading the graph, and two copies of this rule would
+    /// eventually disagree about who is bookable.
+    /// </summary>
+    public static FacilityOwnerStatus DeriveStatus(
+        bool isActive,
+        IEnumerable<ContractTerm> liveTerms,
+        DateOnly date)
     {
-        if (!IsActive)
+        if (!isActive)
         {
             return FacilityOwnerStatus.Suspended;
         }
 
-        if (Contracts.Any(contract => contract.Covers(date)))
+        var terms = liveTerms as IReadOnlyCollection<ContractTerm> ?? [.. liveTerms];
+
+        if (terms.Any(term => term.StartDate <= date && date <= term.EndDate))
         {
             return FacilityOwnerStatus.Commenced;
         }
 
-        return Contracts.Any(contract => contract.CancelledAt is null)
+        // Expired means a term ran out, not that one has yet to start: an owner
+        // encoded today against next month's contract is still Pending.
+        return terms.Any(term => term.EndDate < date)
             ? FacilityOwnerStatus.Expired
             : FacilityOwnerStatus.Pending;
     }

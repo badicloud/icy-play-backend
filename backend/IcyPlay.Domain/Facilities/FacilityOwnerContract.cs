@@ -72,3 +72,9 @@ public sealed class FacilityOwnerContract : Entity
         UpdatedAt = now;
     }
 }
+
+/// <summary>
+/// The dates of one live contract, so status can be derived from a projection
+/// without loading whole entities.
+/// </summary>
+public readonly record struct ContractTerm(DateOnly StartDate, DateOnly EndDate);
