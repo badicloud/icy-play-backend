@@ -344,23 +344,107 @@ Stores sports facility records owned by Facility Owners.
 
 Important because a Facility Owner can manage multiple facilities.
 
-Suggested columns:
+Columns:
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | Id | uniqueidentifier | Primary key |
 | FacilityOwnerId | uniqueidentifier | FK to FacilityOwners |
 | Name | nvarchar(200) | Facility name |
+| Slug | nvarchar(220) | Unique. The public URL segment |
 | Description | nvarchar(max) | Optional |
 | AddressLine1 | nvarchar(300) | Address |
 | AddressLine2 | nvarchar(300) | Optional |
 | City | nvarchar(100) | City |
 | Province | nvarchar(100) | Province |
+| PostalCode | nvarchar(20) | Optional |
 | Country | nvarchar(100) | Country |
-| TimeZone | nvarchar(100) | Example: Asia/Manila |
+| Latitude | decimal(9,6) | Null until the pin is dropped |
+| Longitude | decimal(9,6) | Null until the pin is dropped |
+| TimeZone | nvarchar(100) | IANA zone. Example: Asia/Manila |
+| ContactPhone | nvarchar(50) | Public contact, not the billing one |
+| ContactEmail | nvarchar(256) | Public contact, not the billing one |
+| SafetyMeasures | nvarchar(max) | Free text beside the amenity checklist |
+| HouseRules | nvarchar(max) | Free text beside the amenity checklist |
 | IsActive | bit | Visibility and operational status |
 | CreatedAt | datetimeoffset | Created timestamp |
 | UpdatedAt | datetimeoffset | Updated timestamp |
+
+The slug is stored rather than derived from the name, so renaming a facility
+cannot silently break every link already shared. Onboarding suffixes a
+collision (`abc-sports-center-2`) instead of rejecting it, because two venues
+legitimately share a name across two cities.
+
+The coordinates are nullable and are written as a pair: a latitude without a
+longitude points nowhere, so setting one without the other clears both. A
+facility with no pin is encoded but not yet mappable, which is the state every
+facility starts in until someone opens the map.
+
+The public contact is deliberately separate from the billing contact on
+`FacilityOwners`. The number a customer rings to ask about a court is rarely
+the one the platform sends invoices to.
+
+### FacilityOperatingHours
+
+Normal opening hours for a facility. Seven rows, one per day.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| FacilityId | uniqueidentifier | FK to Facilities |
+| DayOfWeek | int | 0-6, framework enum |
+| OpensAt | time | Null when closed |
+| ClosesAt | time | Null when closed |
+| CreatedAt | datetimeoffset | Created timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+Hours live on the facility rather than on each court so an owner with eight
+courts types the schedule once; `CourtOperatingHours` becomes the exception for
+the outdoor court that closes early.
+
+Closed is expressed by leaving both times empty, not by a separate flag. A flag
+can disagree with the hours beside it; an absent pair cannot. Half a pair is
+rejected, because an opening time with no closing time is an unfinished answer
+rather than a closed day.
+
+Unique on `(FacilityId, DayOfWeek)`, so a facility cannot hold two answers for
+Monday.
+
+Times are wall-clock values read in the facility's own `TimeZone`, never in UTC
+and never in the server's zone.
+
+### Amenities
+
+A seeded lookup of what a facility offers, grouped into Safety, Comfort, Access
+and Equipment.
+
+Suggested columns:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Id | uniqueidentifier | Primary key |
+| Key | nvarchar(100) | Unique, stable identifier such as `first-aid-kit` |
+| Name | nvarchar(150) | Display name |
+| Category | nvarchar(50) | Safety, Comfort, Access, Equipment |
+| DisplayOrder | int | Order within the category |
+| IsActive | bit | Retire an amenity without deleting history |
+| CreatedAt | datetimeoffset | Created timestamp |
+| UpdatedAt | datetimeoffset | Updated timestamp |
+
+A lookup table rather than an enum, so an amenity can be added without a deploy
+and the customer-facing filter has something to read. Seeded through
+`HasData` the way `EmailTemplates` already is, with ids derived from the key so
+re-running the generator cannot produce a second row for the same amenity.
+
+### FacilityAmenities
+
+Joins a facility to one amenity. Unique on `(FacilityId, AmenityId)`.
+
+The FK to `Amenities` is `Restrict`, not `Cascade`: an amenity in use must not
+vanish from under the facilities that reference it. Retire it with `IsActive`
+instead.
 
 ### Courts
 

@@ -145,8 +145,10 @@ inventory, and give owners the screens to manage their own courts afterwards.
 Scope:
 
 * Admin console: onboarding wizard, facility owner list, facility inventory
+  *(API done: onboarding, owner list, amenities, signed uploads)*
 * Facility owner contracts: commence, renew, end
 * Facility CRUD, including contact details, map coordinates, slug and photos
+  *(schema and creation-through-onboarding done; editing still to come)*
 * Facility amenities: a seeded lookup plus free-text safety measures and rules
 * Facility operating hours, with a per-court override
 * Court CRUD

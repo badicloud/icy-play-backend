@@ -869,6 +869,115 @@ window needs to be tighter.
 Reserved for the `PlatformAdmin` role. This is the console the platform team
 operates the SaaS from.
 
+### Onboard Facility Owner
+
+```http
+POST /api/v1/admin/facility-owners
+```
+
+Role:
+
+* PlatformAdmin
+
+Request:
+
+```json
+{
+  "owner": { "fullName": "Juan Dela Cruz", "email": "juan@example.com", "phoneNumber": "+639171234567" },
+  "business": {
+    "businessName": "Abc Sports Ventures",
+    "billingEmail": "billing@example.com",
+    "billingPhone": "+639171234567",
+    "businessRegistrationNumber": "DTI-123456"
+  },
+  "documents": [
+    {
+      "documentType": "BusinessPermit",
+      "publicId": "icyplay/facility-owners/documents/permit",
+      "secureUrl": "https://res.cloudinary.com/<cloud>/image/upload/v1/permit.pdf",
+      "fileName": "permit.pdf",
+      "contentType": "application/pdf",
+      "sizeInBytes": 204800
+    }
+  ],
+  "facility": {
+    "name": "Abc Sports Center",
+    "description": "Six covered courts.",
+    "addressLine1": "123 Quimpo Boulevard",
+    "city": "Davao City",
+    "province": "Davao del Sur",
+    "postalCode": "8000",
+    "country": "Philippines",
+    "latitude": null,
+    "longitude": null,
+    "timeZone": "Asia/Manila",
+    "contactPhone": "+639171234567",
+    "contactEmail": "hello@example.com",
+    "safetyMeasures": "First aid kit on site.",
+    "houseRules": "No street shoes on the court.",
+    "amenityIds": ["guid"]
+  },
+  "operatingHours": [
+    { "dayOfWeek": 1, "opensAt": "06:00:00", "closesAt": "22:00:00" }
+  ],
+  "contract": { "startDate": "2026-09-08", "endDate": "2027-09-08", "notes": "Signed at the Davao office." }
+}
+```
+
+Response: `201 Created` with the new user id, facility owner id, facility id,
+facility slug, the derived status, and whether the invitation email went out.
+
+Business rules:
+
+* **One transaction.** The owner account, the business profile, the documents,
+  the first facility with its hours and amenities, and the contract are written
+  together or not at all. An abandoned wizard leaves nothing half-built behind
+  it; the browser holds the draft until the admin submits.
+* **The admin never types a password.** The account is created with a random one
+  nobody knows and the owner sets their own through an emailed link, so no
+  human ever handles someone else's credentials.
+* **The invitation is best effort.** A mail outage returns
+  `invitationEmailSent: false` rather than undoing an onboarding the admin has
+  already finished. The owner can request a fresh link themselves.
+* **Encoding is not commencing.** The status comes back from the contract dates:
+  a term starting next month leaves the owner `Pending`, and no customer sees
+  the facility until a term covers today.
+* Document URLs are rejected with `ASSET_URL_UNTRUSTED` unless they are https
+  on the configured Cloudinary cloud. The browser posts that metadata, so it
+  cannot be taken on trust.
+* At least one verification document is required. An owner encoded without
+  proof of who they are is the exact thing admin-led onboarding exists to
+  prevent.
+
+### List Facility Owners
+
+```http
+GET /api/v1/admin/facility-owners
+```
+
+Role:
+
+* PlatformAdmin
+
+Query parameters: `search`, `status`, `page`, `pageSize`, `sortBy`,
+`sortDirection`. `sortBy` accepts `businessName` or `createdAt`.
+
+Each row carries the derived status, the facility count, and the dates of the
+term the status was derived from.
+
+### List Amenities
+
+```http
+GET /api/v1/admin/amenities
+```
+
+Role:
+
+* PlatformAdmin
+
+The seeded lookup the onboarding wizard renders as a checklist, ordered by
+category then display order.
+
 ### List Users
 
 ```http
@@ -1709,6 +1818,20 @@ API stores metadata in SQL Server
 For tighter security, the backend may provide signed Cloudinary upload parameters.
 
 ### Create Signed Upload Parameters
+
+```http
+POST /api/v1/admin/assets/upload-signature
+```
+
+Role:
+
+* PlatformAdmin
+
+Request: `{ "purpose": "facility-owner-document" }`, or `"facility-photo"`.
+
+A purpose rather than a free-text folder. The signature commits to the folder it
+signs, so a caller that can name its own destination can scatter uploads
+anywhere in the Cloudinary account.
 
 Only Cloudinary's `secure_url` is ever stored. The upload response also carries
 `url`, which is http and would be blocked as mixed content on an https page.
