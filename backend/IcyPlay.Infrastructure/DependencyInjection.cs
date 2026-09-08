@@ -1,8 +1,10 @@
 using IcyPlay.Application.Email;
+using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Identity;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Email;
+using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Identity;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
@@ -50,6 +52,7 @@ public static class DependencyInjection
             configuration.GetSection(PlatformAdminSeedOptions.SectionName));
         services.AddScoped<IPlatformAdminSeeder, PlatformAdminSeeder>();
         services.AddScoped<IAdminUserService, AdminUserService>();
+        services.AddScoped<IFacilityOwnerOnboardingService, FacilityOwnerOnboardingService>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");
