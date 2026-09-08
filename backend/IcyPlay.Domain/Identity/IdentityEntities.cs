@@ -62,6 +62,7 @@ public sealed class FacilityOwner : Entity
     }
     public ICollection<FacilityOwnerDocument> Documents { get; private set; } = [];
     public ICollection<FacilityOwnerContract> Contracts { get; private set; } = [];
+    public ICollection<Facility> Facilities { get; private set; } = [];
 
     /// <summary>
     /// Derived rather than stored, so it cannot drift from the contract dates.
