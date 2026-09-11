@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using FluentValidation;
 using IcyPlay.Api.Common;
+using IcyPlay.Application.Email;
 using IcyPlay.Application.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -12,6 +13,7 @@ namespace IcyPlay.Api.Controllers;
 [Route("api/v1/auth")]
 public sealed class AuthController(
     IAuthService authService,
+    IAccountInvitationService invitations,
     IRecaptchaVerifier recaptchaVerifier,
     IServiceProvider services,
     ILogger<AuthController> logger) : ControllerBase
@@ -98,6 +100,67 @@ public sealed class AuthController(
         return result.Succeeded
             ? Accepted(new ApiEnvelope<ResendVerificationEmailResponse>(result.Value))
             : Failure(result);
+    }
+
+    /// <summary>
+    /// What the activation page shows before asking for a password. Anonymous
+    /// by necessity: the invited owner has no way to sign in yet. The token is
+    /// the credential, and it only ever existed in their email.
+    /// </summary>
+    [AllowAnonymous, HttpPost("invitation/check"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> CheckInvitation(CheckInvitationRequest request, CancellationToken ct)
+    {
+        var invalid = await ValidateAsync(request, ct);
+        if (invalid is not null)
+        {
+            return invalid;
+        }
+
+        var details = await invitations.CheckAsync(request.Token, ct);
+        if (details is null)
+        {
+            return BadRequest(new ApiErrorEnvelope(new ApiError(
+                ErrorCodes.InvalidInvitationToken,
+                "This invitation link is invalid, has expired, or has already been used.")));
+        }
+
+        return Ok(new ApiEnvelope<InvitationDetailsResponse>(new InvitationDetailsResponse(
+            details.FullName,
+            details.Email,
+            details.PhoneNumber,
+            details.BusinessName,
+            details.ExpiresAt)));
+    }
+
+    [AllowAnonymous, HttpPost("invitation/accept"), EnableRateLimiting("auth")]
+    public async Task<IActionResult> AcceptInvitation(AcceptInvitationRequest request, CancellationToken ct)
+    {
+        var invalid = await ValidateAsync(request, ct);
+        if (invalid is not null)
+        {
+            return invalid;
+        }
+
+        var result = await invitations.AcceptAsync(request.Token, request.Password, ct);
+        if (result == InvitationAcceptance.Accepted)
+        {
+            return NoContent();
+        }
+
+        var (code, message) = result switch
+        {
+            InvitationAcceptance.AlreadyAccepted => (
+                ErrorCodes.InvitationAlreadyAccepted,
+                "This account is already active. Sign in, or use Forgot password."),
+            InvitationAcceptance.ExpiredToken => (
+                ErrorCodes.ExpiredInvitationToken,
+                "This invitation has expired. Ask the IcyPlay team to send a new one."),
+            _ => (
+                ErrorCodes.InvalidInvitationToken,
+                "This invitation link is invalid.")
+        };
+
+        return BadRequest(new ApiErrorEnvelope(new ApiError(code, message)));
     }
 
     [AllowAnonymous, HttpPost("verify-email"), EnableRateLimiting("auth")]

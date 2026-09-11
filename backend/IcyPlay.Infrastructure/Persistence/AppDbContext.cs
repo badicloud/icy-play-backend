@@ -23,6 +23,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
+    public DbSet<AccountInvitationToken> AccountInvitationTokens => Set<AccountInvitationToken>();
     public DbSet<FacilityOwnerDocument> FacilityOwnerDocuments => Set<FacilityOwnerDocument>();
     public DbSet<FacilityOwnerContract> FacilityOwnerContracts => Set<FacilityOwnerContract>();
     public DbSet<Facility> Facilities => Set<Facility>();
@@ -121,6 +122,17 @@ public sealed class AppDbContext : DbContext
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 4, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("4a7d2f18-6c3b-4a91-b5e0-92d7c1f83b46"),
+                    Key = EmailTemplateKey.FacilityOwnerInvitation,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8338524L,
+                    Subject = "Activate your IcyPlay facility owner account",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 10, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
                 });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>
@@ -145,6 +157,19 @@ public sealed class AppDbContext : DbContext
             entity.HasIndex(x => new { x.UserId, x.ExpiresAt });
             entity.HasOne(x => x.User)
                 .WithMany(x => x.PasswordResetTokens)
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountInvitationToken>(entity =>
+        {
+            entity.ToTable("AccountInvitationTokens");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => new { x.UserId, x.ExpiresAt });
+            entity.HasOne(x => x.User)
+                .WithMany(x => x.AccountInvitationTokens)
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });

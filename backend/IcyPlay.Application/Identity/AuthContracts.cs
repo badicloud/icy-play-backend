@@ -32,6 +32,9 @@ public sealed record ActiveSessionResponse(
 public sealed record RevokeOtherSessionsResponse(int RevokedSessions);
 public sealed record TokenResponse(string AccessToken, string RefreshToken, DateTimeOffset ExpiresAt, IReadOnlyCollection<string> Roles);
 public sealed record CurrentUserResponse(Guid UserId, string Email, string FullName, IReadOnlyCollection<string> Roles);
+public sealed record CheckInvitationRequest(string Token);
+public sealed record AcceptInvitationRequest(string Token, string Password);
+public sealed record InvitationDetailsResponse(string FullName, string Email, string? PhoneNumber, string? BusinessName, DateTimeOffset ExpiresAt);
 public enum AuthFailure
 {
     None, DuplicateEmail, InvalidCredentials, AccountLocked, InvalidRefreshToken, InactiveAccount, VerificationCooldown, InvalidVerificationToken, ExpiredVerificationToken, PasswordResetCooldown, InvalidPasswordResetToken, ExpiredPasswordResetToken, PasswordReused

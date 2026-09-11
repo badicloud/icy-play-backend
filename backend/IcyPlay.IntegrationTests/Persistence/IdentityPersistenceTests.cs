@@ -27,6 +27,7 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "RefreshTokens",
             "EmailVerificationTokens",
             "PasswordResetTokens",
+            "AccountInvitationTokens",
             "FacilityOwnerDocuments",
             "FacilityOwnerContracts",
             "Facilities",

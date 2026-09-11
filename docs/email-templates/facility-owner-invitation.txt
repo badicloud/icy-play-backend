@@ -1,0 +1,16 @@
+Activate your IcyPlay facility owner account
+
+Hi {{var:recipient_name:"there"}},
+
+The IcyPlay team has set up a facility owner account for {{var:business_name:"your business"}}. Your details are already in place - all that is left is to choose a password, and the account is yours.
+
+Set your password:
+{{var:activation_url}}
+
+This invitation expires in {{var:expiration_days:"7"}} days and can only be used once. Nobody at IcyPlay knows your password, and nobody can see it after you set it.
+
+Were you not expecting this? Nothing happens until someone opens this link and sets a password. Tell us at {{var:support_email}} and we will remove the account.
+
+Need help? Contact {{var:support_email}}.
+
+(c) {{var:current_year}} IcyPlay. Play more. Manage better.

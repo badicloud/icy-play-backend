@@ -45,6 +45,9 @@ public static class DependencyInjection
         services.AddScoped<IEmailTemplateStore, EmailTemplateStore>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IPasswordResetEmailService, PasswordResetEmailService>();
+        services.Configure<AccountInvitationOptions>(
+            configuration.GetSection(AccountInvitationOptions.SectionName));
+        services.AddScoped<IAccountInvitationService, AccountInvitationService>();
         services.Configure<CloudinaryOptions>(
             configuration.GetSection(CloudinaryOptions.SectionName));
         services.AddScoped<ICloudinaryAssetService, CloudinaryAssetService>();

@@ -38,6 +38,8 @@ public sealed class User : Entity
     public ICollection<RefreshToken> RefreshTokens { get; private set; } = [];
     public ICollection<EmailVerificationToken> EmailVerificationTokens { get; private set; } = [];
     public ICollection<PasswordResetToken> PasswordResetTokens { get; private set; } = [];
+    public ICollection<AccountInvitationToken> AccountInvitationTokens { get; private set; } = [];
+
     public void SetPasswordHash(string value) => PasswordHash = value;
     public void MarkEmailVerified(DateTimeOffset now)
     {
