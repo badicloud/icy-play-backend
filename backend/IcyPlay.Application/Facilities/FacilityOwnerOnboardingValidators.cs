@@ -1,4 +1,5 @@
 using FluentValidation;
+using IcyPlay.Application.Identity;
 using IcyPlay.Domain.Facilities;
 
 namespace IcyPlay.Application.Facilities;
@@ -33,7 +34,13 @@ public sealed class OwnerAccountInputValidator : AbstractValidator<OwnerAccountI
     {
         RuleFor(x => x.FullName).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
-        RuleFor(x => x.PhoneNumber).MaximumLength(50);
+        // A mobile, not a landline: the owner is reached on this number, and
+        // it is the one an SMS would go to.
+        RuleFor(x => x.PhoneNumber)
+            .NotEmpty()
+            .MaximumLength(50)
+            .Must(RegistrationValidation.IsPhilippineMobileNumber)
+            .WithMessage("Enter a Philippine mobile number, like 0995 3979930.");
     }
 }
 

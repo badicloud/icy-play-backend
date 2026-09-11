@@ -45,6 +45,21 @@ public sealed class ResendVerificationEmailRequestValidator : AbstractValidator<
         RuleFor(x => x.CaptchaToken).NotEmpty().WithMessage("Please complete the reCAPTCHA challenge.");
     }
 }
+public sealed class CheckInvitationRequestValidator : AbstractValidator<CheckInvitationRequest>
+{
+    public CheckInvitationRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+    }
+}
+public sealed class AcceptInvitationRequestValidator : AbstractValidator<AcceptInvitationRequest>
+{
+    public AcceptInvitationRequestValidator()
+    {
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+        RuleFor(x => x.Password).ApplyPasswordRules();
+    }
+}
 public sealed class VerifyEmailRequestValidator : AbstractValidator<VerifyEmailRequest>
 {
     public VerifyEmailRequestValidator()
@@ -86,6 +101,34 @@ internal static class RegistrationValidation
         .Matches("[a-z]").WithMessage("Password must contain a lowercase letter.")
         .Matches("[0-9]").WithMessage("Password must contain a number.")
         .Matches("[^A-Za-z0-9]").WithMessage("Password must contain a special character.");
+
+
+    /// <summary>
+    /// A Philippine mobile number specifically, not a phone number in general.
+    /// Every mobile prefix here begins 09, so the two accepted shapes are 09
+    /// followed by nine digits and the same number written internationally as
+    /// +639. Separators are stripped first, because people type a number the
+    /// way it is printed.
+    /// </summary>
+    public static bool IsPhilippineMobileNumber(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var normalized = new string(
+            value.Where(character => char.IsDigit(character) || character == '+').ToArray());
+
+        return normalized.Length switch
+        {
+            11 => normalized.StartsWith("09", StringComparison.Ordinal) &&
+                normalized.All(char.IsDigit),
+            13 => normalized.StartsWith("+639", StringComparison.Ordinal) &&
+                normalized.Skip(1).All(char.IsDigit),
+            _ => false
+        };
+    }
 
     public static bool IsValidPhoneNumber(string? value)
     {
