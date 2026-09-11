@@ -14,11 +14,23 @@ public interface IFacilityOwnerOnboardingService
         Guid onboardedByUserId,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// One facility owner and everything hanging off them. Null when no such
+    /// owner exists, so the API answers 404 rather than an empty shell.
+    /// </summary>
+    Task<FacilityOwnerDetail?> GetAsync(Guid id, CancellationToken cancellationToken);
+
     Task<PagedResult<FacilityOwnerListItem>?> ListAsync(
         FacilityOwnerQuery query,
         CancellationToken cancellationToken);
 
     Task<IReadOnlyCollection<AmenityListItem>> ListAmenitiesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Issues a fresh invitation, retiring any link already outstanding. False
+    /// when no such owner exists.
+    /// </summary>
+    Task<bool> ResendInvitationAsync(Guid id, CancellationToken cancellationToken);
 }
 
 public sealed record FacilityOwnerQuery(

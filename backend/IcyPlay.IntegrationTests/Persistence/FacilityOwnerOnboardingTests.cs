@@ -226,7 +226,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
     {
         // Arrange
         await using var context = database.CreateContext();
-        var (sut, _) = CreateService(context, new FailingInvitationEmail());
+        var (sut, _) = CreateService(context, new FailingInvitation());
 
         // Act
         var result = await sut.OnboardAsync(
@@ -299,11 +299,11 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         }
     }
 
-    private static (FacilityOwnerOnboardingService Service, RecordingInvitationEmail Invitations) CreateService(
+    private static (FacilityOwnerOnboardingService Service, RecordingInvitation Invitations) CreateService(
         AppDbContext context,
-        IPasswordResetEmailService? invitationEmail = null)
+        IAccountInvitationService? invitationService = null)
     {
-        var recorder = invitationEmail as RecordingInvitationEmail ?? new RecordingInvitationEmail();
+        var recorder = invitationService as RecordingInvitation ?? new RecordingInvitation();
         var service = new FacilityOwnerOnboardingService(
             context,
             new PasswordHasher<User>(),
@@ -315,7 +315,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
                     ApiSecret = "test-api-secret"
                 }),
                 new FixedTimeProvider(Now)),
-            invitationEmail ?? recorder,
+            invitationService ?? recorder,
             new FixedTimeProvider(Now),
             NullLogger<FacilityOwnerOnboardingService>.Instance);
 
@@ -359,21 +359,43 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         "application/pdf",
         2048);
 
-    private sealed class RecordingInvitationEmail : IPasswordResetEmailService
+    private sealed class RecordingInvitation : IAccountInvitationService
     {
         public List<string> Recipients { get; } = [];
 
-        public Task SendAsync(Guid userId, string recipientEmail, string recipientName, CancellationToken ct)
+        public Task SendAsync(
+            Guid userId,
+            string recipientEmail,
+            string recipientName,
+            string businessName,
+            CancellationToken ct)
         {
             Recipients.Add(recipientEmail);
             return Task.CompletedTask;
         }
+
+        public Task<InvitationDetails?> CheckAsync(string rawToken, CancellationToken ct) =>
+            Task.FromResult<InvitationDetails?>(null);
+
+        public Task<InvitationAcceptance> AcceptAsync(string rawToken, string password, CancellationToken ct) =>
+            Task.FromResult(InvitationAcceptance.InvalidToken);
     }
 
-    private sealed class FailingInvitationEmail : IPasswordResetEmailService
+    private sealed class FailingInvitation : IAccountInvitationService
     {
-        public Task SendAsync(Guid userId, string recipientEmail, string recipientName, CancellationToken ct) =>
+        public Task SendAsync(
+            Guid userId,
+            string recipientEmail,
+            string recipientName,
+            string businessName,
+            CancellationToken ct) =>
             throw new InvalidOperationException("Mailjet is unavailable.");
+
+        public Task<InvitationDetails?> CheckAsync(string rawToken, CancellationToken ct) =>
+            Task.FromResult<InvitationDetails?>(null);
+
+        public Task<InvitationAcceptance> AcceptAsync(string rawToken, string password, CancellationToken ct) =>
+            Task.FromResult(InvitationAcceptance.InvalidToken);
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

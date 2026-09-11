@@ -90,6 +90,34 @@ public sealed class AdminFacilityOwnersController(
         return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
     }
 
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> Get(Guid id, CancellationToken ct)
+    {
+        var detail = await onboarding.GetAsync(id, ct);
+
+        return detail is null
+            ? NotFound(new ApiErrorEnvelope(new ApiError(
+                ErrorCodes.NotFound,
+                "No facility owner with that id.")))
+            : Ok(new ApiEnvelope<FacilityOwnerDetail>(detail));
+    }
+
+    /// <summary>
+    /// Sends the owner a new activation link. Any link already outstanding stops
+    /// working, so a resend cannot leave two live invitations behind it.
+    /// </summary>
+    [HttpPost("{id:guid}/resend-invitation")]
+    public async Task<IActionResult> ResendInvitation(Guid id, CancellationToken ct)
+    {
+        var sent = await onboarding.ResendInvitationAsync(id, ct);
+
+        return sent
+            ? NoContent()
+            : NotFound(new ApiErrorEnvelope(new ApiError(
+                ErrorCodes.NotFound,
+                "No facility owner with that id.")));
+    }
+
     [HttpGet]
     public async Task<IActionResult> List(
         [FromQuery] string? search,

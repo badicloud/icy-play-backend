@@ -23,7 +23,7 @@ public sealed class FacilityOwnerOnboardingService(
     AppDbContext db,
     IPasswordHasher<User> passwordHasher,
     ICloudinaryAssetService assets,
-    IPasswordResetEmailService invitationEmail,
+    IAccountInvitationService invitations,
     TimeProvider timeProvider,
     ILogger<FacilityOwnerOnboardingService> logger) : IFacilityOwnerOnboardingService
 {
@@ -169,7 +169,7 @@ public sealed class FacilityOwnerOnboardingService(
             return OnboardingResult<OnboardedFacilityOwnerResponse>.Fail(OnboardingFailure.DuplicateSlug);
         }
 
-        var invitationSent = await SendInvitationAsync(user, ct);
+        var invitationSent = await SendInvitationAsync(user, owner.BusinessName, ct);
         await transaction.CommitAsync(ct);
 
         logger.LogInformation(
@@ -190,6 +190,193 @@ public sealed class FacilityOwnerOnboardingService(
             facility.Slug,
             status.ToString(),
             invitationSent));
+    }
+
+    public async Task<FacilityOwnerDetail?> GetAsync(Guid id, CancellationToken ct)
+    {
+        var owner = await db.FacilityOwners
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == id)
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.UserId,
+                candidate.BusinessName,
+                candidate.BillingEmail,
+                candidate.BillingPhone,
+                candidate.BusinessRegistrationNumber,
+                candidate.IsActive,
+                candidate.CreatedAt,
+                candidate.UpdatedAt,
+                Owner = new
+                {
+                    candidate.User.FullName,
+                    candidate.User.Email,
+                    candidate.User.PhoneNumber,
+                    candidate.User.IsActive,
+                    candidate.User.EmailVerifiedAt,
+                    candidate.User.CreatedAt
+                },
+                Documents = candidate.Documents
+                    .OrderBy(document => document.DocumentType)
+                    .Select(document => new OwnerDocumentDetail(
+                        document.Id,
+                        document.DocumentType,
+                        document.PublicId,
+                        document.SecureUrl,
+                        document.FileName,
+                        document.ContentType,
+                        document.SizeInBytes,
+                        document.CreatedAt))
+                    .ToList(),
+                Facilities = candidate.Facilities
+                    .OrderBy(facility => facility.Name)
+                    .Select(facility => new FacilityDetail(
+                        facility.Id,
+                        facility.Name,
+                        facility.Slug,
+                        facility.Description,
+                        facility.AddressLine1,
+                        facility.AddressLine2,
+                        facility.City,
+                        facility.Province,
+                        facility.PostalCode,
+                        facility.Country,
+                        facility.Latitude,
+                        facility.Longitude,
+                        facility.TimeZone,
+                        facility.ContactPhone,
+                        facility.ContactEmail,
+                        facility.SafetyMeasures,
+                        facility.HouseRules,
+                        facility.IsActive,
+                        facility.Amenities
+                            .OrderBy(link => link.Amenity.Category)
+                            .ThenBy(link => link.Amenity.DisplayOrder)
+                            .Select(link => new FacilityAmenityDetail(
+                                link.Amenity.Id,
+                                link.Amenity.Key,
+                                link.Amenity.Name,
+                                link.Amenity.Category))
+                            .ToList(),
+                        facility.OperatingHours
+                            .OrderBy(hour => hour.DayOfWeek)
+                            .Select(hour => new FacilityOperatingHourDetail(
+                                (int)hour.DayOfWeek,
+                                hour.OpensAt,
+                                hour.ClosesAt))
+                            .ToList(),
+                        facility.CreatedAt,
+                        facility.UpdatedAt))
+                    .ToList(),
+                Contracts = candidate.Contracts
+                    .OrderByDescending(contract => contract.StartDate)
+                    .Select(contract => new
+                    {
+                        contract.Id,
+                        contract.StartDate,
+                        contract.EndDate,
+                        contract.Notes,
+                        contract.CommencedByUserId,
+                        contract.CancelledAt,
+                        contract.CreatedAt
+                    })
+                    .ToList()
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (owner is null)
+        {
+            return null;
+        }
+
+        // Resolved in one extra query rather than a join per contract, because a
+        // renewed owner has several terms and usually one admin behind them all.
+        var adminIds = owner.Contracts.Select(contract => contract.CommencedByUserId).Distinct().ToArray();
+        var adminNames = await db.Users
+            .AsNoTracking()
+            .Where(user => adminIds.Contains(user.Id))
+            .Select(user => new { user.Id, user.FullName })
+            .ToDictionaryAsync(user => user.Id, user => user.FullName, ct);
+
+        var now = timeProvider.GetUtcNow();
+        var today = DateOnly.FromDateTime(now.UtcDateTime);
+
+        var latestInvitation = await db.AccountInvitationTokens
+            .AsNoTracking()
+            .Where(token => token.UserId == owner.UserId)
+            .OrderByDescending(token => token.CreatedAt)
+            .Select(token => new { token.CreatedAt, token.ExpiresAt, token.AcceptedAt })
+            .FirstOrDefaultAsync(ct);
+
+        return new FacilityOwnerDetail(
+            owner.Id,
+            owner.UserId,
+            owner.BusinessName,
+            owner.BillingEmail,
+            owner.BillingPhone,
+            owner.BusinessRegistrationNumber,
+            owner.IsActive,
+            FacilityOwner.DeriveStatus(
+                owner.IsActive,
+                owner.Contracts
+                    .Where(contract => contract.CancelledAt is null)
+                    .Select(contract => new ContractTerm(contract.StartDate, contract.EndDate)),
+                today).ToString(),
+            owner.CreatedAt,
+            owner.UpdatedAt,
+            new OwnerAccountDetail(
+                owner.Owner.FullName,
+                owner.Owner.Email,
+                owner.Owner.PhoneNumber,
+                owner.Owner.IsActive,
+                owner.Owner.EmailVerifiedAt is not null,
+                owner.Owner.EmailVerifiedAt,
+                owner.Owner.CreatedAt),
+            owner.Documents,
+            owner.Facilities,
+            [.. owner.Contracts.Select(contract => new ContractDetail(
+                contract.Id,
+                contract.StartDate,
+                contract.EndDate,
+                contract.Notes,
+                contract.CommencedByUserId,
+                adminNames.GetValueOrDefault(contract.CommencedByUserId),
+                contract.CancelledAt,
+                contract.CancelledAt is null &&
+                    contract.StartDate <= today &&
+                    today <= contract.EndDate,
+                contract.CreatedAt))],
+            new InvitationStatus(
+                latestInvitation?.AcceptedAt is not null,
+                latestInvitation?.CreatedAt,
+                latestInvitation?.ExpiresAt,
+                latestInvitation is not null &&
+                    latestInvitation.AcceptedAt is null &&
+                    latestInvitation.ExpiresAt > now));
+    }
+
+    public async Task<bool> ResendInvitationAsync(Guid id, CancellationToken ct)
+    {
+        var owner = await db.FacilityOwners
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == id)
+            .Select(candidate => new
+            {
+                candidate.UserId,
+                candidate.BusinessName,
+                candidate.User.Email,
+                candidate.User.FullName
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (owner is null)
+        {
+            return false;
+        }
+
+        await invitations.SendAsync(owner.UserId, owner.Email, owner.FullName, owner.BusinessName, ct);
+        return true;
     }
 
     public async Task<PagedResult<FacilityOwnerListItem>?> ListAsync(
@@ -328,11 +515,11 @@ public sealed class FacilityOwnerOnboardingService(
     /// Best effort. A Mailjet outage must not undo an onboarding the admin has
     /// already finished; the owner can ask for a fresh link themselves.
     /// </summary>
-    private async Task<bool> SendInvitationAsync(User user, CancellationToken ct)
+    private async Task<bool> SendInvitationAsync(User user, string businessName, CancellationToken ct)
     {
         try
         {
-            await invitationEmail.SendAsync(user.Id, user.Email, user.FullName, ct);
+            await invitations.SendAsync(user.Id, user.Email, user.FullName, businessName, ct);
             return true;
         }
         catch (Exception exception)
