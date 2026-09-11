@@ -98,4 +98,13 @@ public sealed record ContractDetail(
     DateTimeOffset? CancelledAt,
     /// <summary>Whether this is the term the owner is live on right now.</summary>
     bool IsLiveToday,
+    /// <summary>Null on terms commenced before an agreement was required.</summary>
+    ContractDocumentDetail? Document,
     DateTimeOffset CreatedAt);
+
+public sealed record ContractDocumentDetail(
+    string PublicId,
+    string SecureUrl,
+    string FileName,
+    string ContentType,
+    long SizeInBytes);

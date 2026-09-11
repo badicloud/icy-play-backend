@@ -132,10 +132,43 @@ public sealed class OperatingHourInputValidator : AbstractValidator<OperatingHou
     }
 }
 
+/// <summary>
+/// A signed agreement, which is always a PDF. Scans of a multi-page contract
+/// run large, so the ceiling is well above the one on a permit photo; a
+/// photograph of a contract is refused because a signature has to stay legible
+/// at full page size.
+/// </summary>
+public sealed class UploadedFileInputValidator : AbstractValidator<UploadedFileInput>
+{
+    public const long MaximumSizeInBytes = 50 * 1024 * 1024;
+    private const string PdfContentType = "application/pdf";
+
+    public UploadedFileInputValidator()
+    {
+        RuleFor(x => x.PublicId).NotEmpty().MaximumLength(300);
+        RuleFor(x => x.SecureUrl).NotEmpty().MaximumLength(1000);
+        RuleFor(x => x.FileName).NotEmpty().MaximumLength(255);
+        RuleFor(x => x.ContentType)
+            .NotEmpty()
+            .MaximumLength(100)
+            .Must(contentType => string.Equals(contentType, PdfContentType, StringComparison.OrdinalIgnoreCase))
+            .WithMessage("The signed agreement must be a PDF.");
+        RuleFor(x => x.SizeInBytes)
+            .GreaterThan(0)
+            .LessThanOrEqualTo(MaximumSizeInBytes)
+            .WithMessage("The signed agreement must be 50 MB or smaller.");
+    }
+}
+
 public sealed class ContractInputValidator : AbstractValidator<ContractInput>
 {
     public ContractInputValidator()
     {
+        // A term without the signed agreement is a claim, not a record.
+        RuleFor(x => x.Document)
+            .NotNull()
+            .WithMessage("Attach the signed agreement.")
+            .SetValidator(new UploadedFileInputValidator()!);
         RuleFor(x => x.StartDate).NotEmpty();
         RuleFor(x => x.EndDate)
             .GreaterThanOrEqualTo(x => x.StartDate)

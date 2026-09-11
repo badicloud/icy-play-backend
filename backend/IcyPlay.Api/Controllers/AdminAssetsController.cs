@@ -24,7 +24,8 @@ public sealed class AdminAssetsController(ICloudinaryAssetService assets) : Cont
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["facility-owner-document"] = "icyplay/facility-owners/documents",
-            ["facility-photo"] = "icyplay/facilities/photos"
+            ["facility-photo"] = "icyplay/facilities/photos",
+            ["contract-document"] = "icyplay/facility-owners/contracts"
         };
 
     [HttpPost("upload-signature")]

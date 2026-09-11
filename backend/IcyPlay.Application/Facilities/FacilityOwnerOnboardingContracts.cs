@@ -59,7 +59,20 @@ public sealed record OperatingHourInput(
 public sealed record ContractInput(
     DateOnly StartDate,
     DateOnly EndDate,
-    string? Notes);
+    string? Notes,
+    /// <summary>The signed agreement. Required on every new term.</summary>
+    UploadedFileInput Document);
+
+/// <summary>
+/// A file already in Cloudinary, described by what the browser posted back.
+/// The URL is checked against the configured cloud before it is stored.
+/// </summary>
+public sealed record UploadedFileInput(
+    string PublicId,
+    string SecureUrl,
+    string FileName,
+    string ContentType,
+    long SizeInBytes);
 
 public sealed record OnboardedFacilityOwnerResponse(
     Guid UserId,
@@ -97,6 +110,7 @@ public enum OnboardingFailure
     DuplicateSlug,
     UnknownAmenity,
     UntrustedAssetUrl,
+    UntrustedContractDocument,
     InvalidContractDates,
     InvalidOperatingHours,
     UnknownTimeZone

@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.Security.Cryptography;
+using IcyPlay.Application.Audit;
 using IcyPlay.Application.Common;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Storage;
+using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
@@ -24,6 +27,7 @@ public sealed class FacilityOwnerOnboardingService(
     IPasswordHasher<User> passwordHasher,
     ICloudinaryAssetService assets,
     IAccountInvitationService invitations,
+    IAuditLogger audit,
     TimeProvider timeProvider,
     ILogger<FacilityOwnerOnboardingService> logger) : IFacilityOwnerOnboardingService
 {
@@ -41,7 +45,7 @@ public sealed class FacilityOwnerOnboardingService(
 
     public async Task<OnboardingResult<OnboardedFacilityOwnerResponse>> OnboardAsync(
         OnboardFacilityOwnerRequest request,
-        Guid onboardedByUserId,
+        AuditActor actor,
         CancellationToken ct)
     {
         if (!IsKnownTimeZone(request.Facility.TimeZone))
@@ -55,6 +59,12 @@ public sealed class FacilityOwnerOnboardingService(
         if (request.Documents.Any(document => !assets.IsTrustedSecureUrl(document.SecureUrl)))
         {
             return OnboardingResult<OnboardedFacilityOwnerResponse>.Fail(OnboardingFailure.UntrustedAssetUrl);
+        }
+
+        if (!assets.IsTrustedSecureUrl(request.Contract.Document?.SecureUrl))
+        {
+            return OnboardingResult<OnboardedFacilityOwnerResponse>.Fail(
+                OnboardingFailure.UntrustedContractDocument);
         }
 
         var amenityIds = request.Facility.AmenityIds.Distinct().ToArray();
@@ -151,10 +161,37 @@ public sealed class FacilityOwnerOnboardingService(
             owner.Id,
             request.Contract.StartDate,
             request.Contract.EndDate,
-            onboardedByUserId,
+            actor.UserId ?? Guid.Empty,
             request.Contract.Notes,
             now);
+        contract.AttachDocument(
+            request.Contract.Document.PublicId,
+            request.Contract.Document.SecureUrl,
+            request.Contract.Document.FileName,
+            request.Contract.Document.ContentType,
+            request.Contract.Document.SizeInBytes,
+            now);
         db.FacilityOwnerContracts.Add(contract);
+
+        // The first entry in the owner's history. Without it a facility owner
+        // appears to have come from nowhere, and the trail starts at whatever
+        // happened to be edited first.
+        audit.RecordEvent(
+            actor,
+            AuditAction.FacilityOwnerOnboarded,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            new Dictionary<string, string?>
+            {
+                ["businessName"] = owner.BusinessName,
+                ["email"] = email,
+                ["facilityName"] = facility.Name,
+                ["facilitySlug"] = facility.Slug,
+                ["documents"] = request.Documents.Count.ToString(CultureInfo.InvariantCulture),
+                // The signed agreement is named in the trail from the first
+                // entry, so the history says which paper the term rests on.
+                ["agreement"] = request.Contract.Document.FileName
+            });
 
         try
         {
@@ -175,7 +212,7 @@ public sealed class FacilityOwnerOnboardingService(
         logger.LogInformation(
             "Facility owner {FacilityOwnerId} was onboarded by {AdminUserId}.",
             owner.Id,
-            onboardedByUserId);
+            actor.UserId);
 
         // Ask the domain rather than assuming: a contract that starts next month
         // leaves the owner Pending, not Commenced. Change tracking has already
@@ -279,6 +316,11 @@ public sealed class FacilityOwnerOnboardingService(
                         contract.Notes,
                         contract.CommencedByUserId,
                         contract.CancelledAt,
+                        contract.DocumentPublicId,
+                        contract.DocumentSecureUrl,
+                        contract.DocumentFileName,
+                        contract.DocumentContentType,
+                        contract.DocumentSizeInBytes,
                         contract.CreatedAt
                     })
                     .ToList()
@@ -346,6 +388,14 @@ public sealed class FacilityOwnerOnboardingService(
                 contract.CancelledAt is null &&
                     contract.StartDate <= today &&
                     today <= contract.EndDate,
+                contract.DocumentPublicId is null
+                    ? null
+                    : new ContractDocumentDetail(
+                        contract.DocumentPublicId,
+                        contract.DocumentSecureUrl!,
+                        contract.DocumentFileName!,
+                        contract.DocumentContentType!,
+                        contract.DocumentSizeInBytes ?? 0),
                 contract.CreatedAt))],
             new InvitationStatus(
                 latestInvitation?.AcceptedAt is not null,
@@ -356,7 +406,7 @@ public sealed class FacilityOwnerOnboardingService(
                     latestInvitation.ExpiresAt > now));
     }
 
-    public async Task<bool> ResendInvitationAsync(Guid id, CancellationToken ct)
+    public async Task<bool> ResendInvitationAsync(Guid id, AuditActor actor, CancellationToken ct)
     {
         var owner = await db.FacilityOwners
             .AsNoTracking()
@@ -376,6 +426,15 @@ public sealed class FacilityOwnerOnboardingService(
         }
 
         await invitations.SendAsync(owner.UserId, owner.Email, owner.FullName, owner.BusinessName, ct);
+
+        audit.RecordEvent(
+            actor,
+            AuditAction.FacilityOwnerInvitationSent,
+            AuditEntityType.FacilityOwner,
+            id,
+            new Dictionary<string, string?> { ["email"] = owner.Email });
+        await db.SaveChangesAsync(ct);
+
         return true;
     }
 

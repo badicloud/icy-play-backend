@@ -1,3 +1,4 @@
+using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
@@ -24,6 +25,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<EmailVerificationToken> EmailVerificationTokens => Set<EmailVerificationToken>();
     public DbSet<PasswordResetToken> PasswordResetTokens => Set<PasswordResetToken>();
     public DbSet<AccountInvitationToken> AccountInvitationTokens => Set<AccountInvitationToken>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<FacilityOwnerDocument> FacilityOwnerDocuments => Set<FacilityOwnerDocument>();
     public DbSet<FacilityOwnerContract> FacilityOwnerContracts => Set<FacilityOwnerContract>();
     public DbSet<Facility> Facilities => Set<Facility>();
@@ -161,6 +163,24 @@ public sealed class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.ToTable("AuditLogs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ActorRole).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Action).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.EntityType).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.Property(x => x.IpAddress).HasMaxLength(100);
+            entity.Property(x => x.UserAgent).HasMaxLength(500);
+            // Answers "what happened to this record, newest first" in one seek,
+            // which is the only question the console asks of this table.
+            entity.HasIndex(x => new { x.EntityType, x.EntityId, x.CreatedAt });
+            entity.HasIndex(x => x.ActorUserId);
+            // No foreign key to Users on purpose: the trail must outlive the
+            // account that made the change.
+        });
+
         modelBuilder.Entity<AccountInvitationToken>(entity =>
         {
             entity.ToTable("AccountInvitationTokens");
@@ -195,6 +215,11 @@ public sealed class AppDbContext : DbContext
             entity.ToTable("FacilityOwnerContracts");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Notes).HasMaxLength(1000);
+            entity.Property(x => x.DocumentPublicId).HasMaxLength(300);
+            entity.Property(x => x.DocumentSecureUrl).HasMaxLength(1000);
+            entity.Property(x => x.DocumentFileName).HasMaxLength(255);
+            entity.Property(x => x.DocumentContentType).HasMaxLength(100);
+            entity.Ignore(x => x.HasSignedAgreement);
             // Answers "is this owner bookable today" in one index seek.
             entity.HasIndex(x => new { x.FacilityOwnerId, x.StartDate, x.EndDate });
             entity.HasOne(x => x.FacilityOwner)

@@ -1,3 +1,4 @@
+using IcyPlay.Application.Audit;
 using IcyPlay.Application.Common;
 
 namespace IcyPlay.Application.Facilities;
@@ -11,7 +12,7 @@ public interface IFacilityOwnerOnboardingService
     /// </summary>
     Task<OnboardingResult<OnboardedFacilityOwnerResponse>> OnboardAsync(
         OnboardFacilityOwnerRequest request,
-        Guid onboardedByUserId,
+        AuditActor actor,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -30,7 +31,7 @@ public interface IFacilityOwnerOnboardingService
     /// Issues a fresh invitation, retiring any link already outstanding. False
     /// when no such owner exists.
     /// </summary>
-    Task<bool> ResendInvitationAsync(Guid id, CancellationToken cancellationToken);
+    Task<bool> ResendInvitationAsync(Guid id, AuditActor actor, CancellationToken cancellationToken);
 }
 
 public sealed record FacilityOwnerQuery(

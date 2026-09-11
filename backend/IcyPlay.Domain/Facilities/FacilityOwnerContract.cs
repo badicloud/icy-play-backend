@@ -63,6 +63,56 @@ public sealed class FacilityOwnerContract : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// The signed agreement. Nullable in the database rather than required,
+    /// because terms commenced before this was asked for genuinely have no
+    /// document and inventing one would be worse than showing the gap. Every
+    /// new term must carry one; the rule lives in validation.
+    /// </summary>
+    public string? DocumentPublicId
+    {
+        get; private set;
+    }
+    public string? DocumentSecureUrl
+    {
+        get; private set;
+    }
+    public string? DocumentFileName
+    {
+        get; private set;
+    }
+    public string? DocumentContentType
+    {
+        get; private set;
+    }
+    public long? DocumentSizeInBytes
+    {
+        get; private set;
+    }
+
+    public bool HasSignedAgreement => DocumentPublicId is not null;
+
+    /// <summary>
+    /// Attaches or replaces the signed agreement. Replacing is allowed because
+    /// a wrong or unreadable scan is a real mistake, and a term that can never
+    /// be corrected is worse than one that records the correction.
+    /// </summary>
+    public void AttachDocument(
+        string publicId,
+        string secureUrl,
+        string fileName,
+        string contentType,
+        long sizeInBytes,
+        DateTimeOffset now)
+    {
+        DocumentPublicId = publicId.Trim();
+        DocumentSecureUrl = secureUrl.Trim();
+        DocumentFileName = fileName.Trim();
+        DocumentContentType = contentType.Trim();
+        DocumentSizeInBytes = sizeInBytes;
+        UpdatedAt = now;
+    }
+
     public bool Covers(DateOnly date) =>
         CancelledAt is null && StartDate <= date && date <= EndDate;
 

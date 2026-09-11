@@ -1,8 +1,10 @@
 using FluentAssertions.Execution;
+using IcyPlay.Application.Audit;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
@@ -34,7 +36,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         // Act
         var result = await sut.OnboardAsync(
             CreateRequest(email, "Abc Sports Center"),
-            Guid.NewGuid(),
+            Admin(),
             CancellationToken.None);
 
         // Assert
@@ -77,11 +79,11 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         var (sut, _) = CreateService(context);
         var request = CreateRequest(UniqueEmail(), "Future Courts") with
         {
-            Contract = new ContractInput(Today.AddMonths(1), Today.AddMonths(13), null)
+            Contract = new ContractInput(Today.AddMonths(1), Today.AddMonths(13), null, SignedAgreement())
         };
 
         // Act
-        var result = await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Assert: encoding an owner does not make them bookable.
         result.Value!.Status.Should().Be(FacilityOwnerStatus.Pending.ToString());
@@ -103,7 +105,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         };
 
         // Act
-        var result = await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Assert
         using (new AssertionScope())
@@ -121,12 +123,12 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         await using var context = database.CreateContext();
         var (sut, _) = CreateService(context);
         var email = UniqueEmail();
-        await sut.OnboardAsync(CreateRequest(email, "First Courts"), Guid.NewGuid(), CancellationToken.None);
+        await sut.OnboardAsync(CreateRequest(email, "First Courts"), Admin(), CancellationToken.None);
 
         // Act
         var result = await sut.OnboardAsync(
             CreateRequest(email, "Second Courts"),
-            Guid.NewGuid(),
+            Admin(),
             CancellationToken.None);
 
         // Assert
@@ -146,13 +148,13 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         var name = $"Twin Courts {Guid.NewGuid():N}";
         var first = await sut.OnboardAsync(
             CreateRequest(UniqueEmail(), name),
-            Guid.NewGuid(),
+            Admin(),
             CancellationToken.None);
 
         // Act: two venues legitimately share a name across two cities.
         var second = await sut.OnboardAsync(
             CreateRequest(UniqueEmail(), name),
-            Guid.NewGuid(),
+            Admin(),
             CancellationToken.None);
 
         // Assert
@@ -173,7 +175,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         request = request with { Facility = request.Facility with { TimeZone = "Mars/Olympus_Mons" } };
 
         // Act
-        var result = await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Assert
         result.Failure.Should().Be(OnboardingFailure.UnknownTimeZone);
@@ -189,7 +191,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         request = request with { Facility = request.Facility with { AmenityIds = [Guid.NewGuid()] } };
 
         // Act
-        var result = await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Assert
         result.Failure.Should().Be(OnboardingFailure.UnknownAmenity);
@@ -210,7 +212,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         request = request with { Facility = request.Facility with { AmenityIds = amenityIds } };
 
         // Act
-        var result = await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Assert
         var attached = await context.FacilityAmenities
@@ -231,7 +233,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         // Act
         var result = await sut.OnboardAsync(
             CreateRequest(UniqueEmail(), "Mailjet Is Down Courts"),
-            Guid.NewGuid(),
+            Admin(),
             CancellationToken.None);
 
         // Assert: a mail outage must not undo work the admin has finished.
@@ -265,7 +267,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         var businessName = $"Listable Courts {Guid.NewGuid():N}";
         var request = CreateRequest(UniqueEmail(), "Listable Courts");
         request = request with { Business = request.Business with { BusinessName = businessName } };
-        await sut.OnboardAsync(request, Guid.NewGuid(), CancellationToken.None);
+        await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Act
         var result = await sut.ListAsync(new FacilityOwnerQuery(Search: businessName), CancellationToken.None);
@@ -316,11 +318,15 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
                 }),
                 new FixedTimeProvider(Now)),
             invitationService ?? recorder,
+            new AuditLogger(context, new FixedTimeProvider(Now)),
             new FixedTimeProvider(Now),
             NullLogger<FacilityOwnerOnboardingService>.Instance);
 
         return (service, recorder);
     }
+
+    private static AuditActor Admin(Guid? userId = null) =>
+        new(userId ?? Guid.NewGuid(), UserRoleName.PlatformAdmin);
 
     private static string UniqueEmail() => $"onboarding-{Guid.NewGuid():N}@example.com";
 
@@ -349,7 +355,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
             day,
             new TimeOnly(6, 0),
             new TimeOnly(22, 0)))],
-        new ContractInput(Today, Today.AddYears(1), "Signed at the Davao office."));
+        new ContractInput(Today, Today.AddYears(1), "Signed at the Davao office.", SignedAgreement()));
 
     private static OwnerDocumentInput CreateDocument(string secureUrl) => new(
         FacilityOwnerDocumentType.BusinessPermit,
@@ -358,6 +364,14 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         "permit.pdf",
         "application/pdf",
         2048);
+
+    /// <summary>A signed agreement on our own cloud, which every term needs.</summary>
+    private static UploadedFileInput SignedAgreement() => new(
+        "icyplay/facility-owners/contracts/agreement",
+        $"https://res.cloudinary.com/{CloudName}/image/upload/v1/agreement.pdf",
+        "agreement.pdf",
+        "application/pdf",
+        4096);
 
     private sealed class RecordingInvitation : IAccountInvitationService
     {

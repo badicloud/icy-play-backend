@@ -1,8 +1,10 @@
 using FluentAssertions.Execution;
+using IcyPlay.Application.Audit;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
@@ -51,7 +53,7 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
         var adminUserId = await AddAdminAsync(context, "Detail Admin");
         var onboarded = await sut.OnboardAsync(
             CreateRequest(UniqueEmail(), "Detail Courts", amenityIds),
-            adminUserId,
+            Admin(adminUserId),
             CancellationToken.None);
 
         // Act
@@ -92,9 +94,9 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
         var sut = CreateService(context);
         var request = CreateRequest(UniqueEmail(), "Future Detail Courts", []) with
         {
-            Contract = new ContractInput(Today.AddMonths(1), Today.AddMonths(13), null)
+            Contract = new ContractInput(Today.AddMonths(1), Today.AddMonths(13), null, SignedAgreement())
         };
-        var onboarded = await sut.OnboardAsync(request, await AddAdminAsync(context), CancellationToken.None);
+        var onboarded = await sut.OnboardAsync(request, Admin(await AddAdminAsync(context)), CancellationToken.None);
 
         // Act
         var detail = await sut.GetAsync(onboarded.Value!.FacilityOwnerId, CancellationToken.None);
@@ -122,7 +124,7 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
                     : new OperatingHourInput(day, new TimeOnly(6, 0), new TimeOnly(22, 0)))
             ]
         };
-        var onboarded = await sut.OnboardAsync(request, await AddAdminAsync(context), CancellationToken.None);
+        var onboarded = await sut.OnboardAsync(request, Admin(await AddAdminAsync(context)), CancellationToken.None);
 
         // Act
         var detail = await sut.GetAsync(onboarded.Value!.FacilityOwnerId, CancellationToken.None);
@@ -153,6 +155,7 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
             }),
             new FixedTimeProvider(Now)),
         new SilentInvitation(),
+        new AuditLogger(context, new FixedTimeProvider(Now)),
         new FixedTimeProvider(Now),
         NullLogger<FacilityOwnerOnboardingService>.Instance);
 
@@ -165,6 +168,9 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
         return user.Id;
     }
+
+    private static AuditActor Admin(Guid? userId = null) =>
+        new(userId ?? Guid.NewGuid(), UserRoleName.PlatformAdmin);
 
     private static string UniqueEmail() => $"detail-{Guid.NewGuid():N}@example.com";
 
@@ -204,7 +210,15 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
             day,
             new TimeOnly(6, 0),
             new TimeOnly(22, 0)))],
-        new ContractInput(Today, Today.AddYears(1), "Signed on encoding."));
+        new ContractInput(Today, Today.AddYears(1), "Signed on encoding.", SignedAgreement()));
+
+    /// <summary>A signed agreement on our own cloud, which every term needs.</summary>
+    private static UploadedFileInput SignedAgreement() => new(
+        "icyplay/facility-owners/contracts/agreement",
+        $"https://res.cloudinary.com/{CloudName}/image/upload/v1/agreement.pdf",
+        "agreement.pdf",
+        "application/pdf",
+        4096);
 
     private sealed class SilentInvitation : IAccountInvitationService
     {
