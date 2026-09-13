@@ -32,6 +32,7 @@ public sealed record UpdateFacilityRequest(
     string? SafetyMeasures,
     string? HouseRules,
     IReadOnlyCollection<Guid> AmenityIds,
+    IReadOnlyCollection<PhotoInput> Photos,
     string? Reason);
 
 public sealed record UpdateOperatingHoursRequest(
@@ -61,7 +62,8 @@ public enum EditFailure
     DuplicateSlug,
     AlreadyCancelled,
     OverlappingContract,
-    UntrustedContractDocument
+    UntrustedContractDocument,
+    UntrustedPhotoUrl
 }
 
 public sealed record EditResult(EditFailure Failure = EditFailure.None)
@@ -104,6 +106,10 @@ public sealed class UpdateFacilityRequestValidator : AbstractValidator<UpdateFac
             .WithMessage("A latitude needs a longitude.");
         RuleFor(x => x.Latitude).NotNull().When(x => x.Longitude is not null)
             .WithMessage("A longitude needs a latitude.");
+        RuleForEach(x => x.Photos).SetValidator(new PhotoInputValidator());
+        RuleFor(x => x.Photos)
+            .Must(photos => photos.Count(photo => photo.IsCover) <= 1)
+            .WithMessage("Only one photo can be the cover.");
         RuleFor(x => x.Reason).MaximumLength(500);
     }
 }

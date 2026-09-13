@@ -87,6 +87,59 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task GetAsync_ShouldReadBackTheFacilityGallery()
+    {
+        // Arrange: a venue that actually has pictures. Reading one back is a
+        // different query shape from reading none.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var amenityIds = await context.Amenities
+            .OrderBy(amenity => amenity.Key)
+            .Take(2)
+            .Select(amenity => amenity.Id)
+            .ToArrayAsync();
+        var adminUserId = await AddAdminAsync(context, "Gallery Admin");
+        var onboarded = await sut.OnboardAsync(
+            CreateRequest(UniqueEmail(), "Gallery Courts", amenityIds) with
+            {
+                Facility = CreateRequest(UniqueEmail(), "Gallery Courts", amenityIds).Facility with
+                {
+                    Photos =
+                    [
+                        new PhotoInput(
+                            "venue-a",
+                            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/venue-a.jpg",
+                            "Front court",
+                            1,
+                            false),
+                        new PhotoInput(
+                            "venue-b",
+                            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/venue-b.jpg",
+                            null,
+                            2,
+                            true)
+                    ]
+                }
+            },
+            Admin(adminUserId),
+            CancellationToken.None);
+
+        // Act
+        var detail = await sut.GetAsync(onboarded.Value!.FacilityOwnerId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            detail.Should().NotBeNull();
+            var facility = detail!.Facilities.Single();
+            facility.Photos.Should().HaveCount(2);
+            // The cover leads, because that is the one every list shows.
+            facility.Photos.First().PublicId.Should().Be("venue-b");
+            facility.Photos.Should().ContainSingle(photo => photo.IsCover);
+        }
+    }
+
+    [Fact]
     public async Task GetAsync_ShouldNotMarkAFutureContractAsLiveToday()
     {
         // Arrange
@@ -205,7 +258,8 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
             "hello@example.com",
             "First aid kit on site.",
             "No street shoes on the court.",
-            amenityIds),
+            amenityIds,
+            []),
         [.. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
             day,
             new TimeOnly(6, 0),

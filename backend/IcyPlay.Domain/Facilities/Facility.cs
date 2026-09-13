@@ -112,6 +112,7 @@ public sealed partial class Facility : Entity
 
     public ICollection<FacilityOperatingHour> OperatingHours { get; private set; } = [];
     public ICollection<FacilityAmenity> Amenities { get; private set; } = [];
+    public ICollection<Court> Courts { get; private set; } = [];
 
     public bool HasCoordinates => Latitude is not null && Longitude is not null;
 

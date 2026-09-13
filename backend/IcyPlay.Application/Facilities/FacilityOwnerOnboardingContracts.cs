@@ -49,7 +49,8 @@ public sealed record FacilityInput(
     string? ContactEmail,
     string? SafetyMeasures,
     string? HouseRules,
-    IReadOnlyCollection<Guid> AmenityIds);
+    IReadOnlyCollection<Guid> AmenityIds,
+    IReadOnlyCollection<PhotoInput> Photos);
 
 public sealed record OperatingHourInput(
     DayOfWeek DayOfWeek,

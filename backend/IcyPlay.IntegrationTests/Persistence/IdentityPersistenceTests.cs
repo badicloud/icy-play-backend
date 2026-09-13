@@ -35,6 +35,12 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "FacilityOperatingHours",
             "FacilityAmenities",
             "Amenities",
+            "Sports",
+            "Courts",
+            "CourtSports",
+            "CourtOperatingHours",
+            "MaintenancePeriods",
+            "Photos",
             "EmailTemplates",
             "__EFMigrationsHistory");
     }

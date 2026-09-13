@@ -114,6 +114,97 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task UpdateFacilityAsync_ShouldReplaceTheGalleryAndKeepOneCover()
+    {
+        // Arrange: two photos, the first of them the cover.
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Gallery Courts");
+
+        await sut.UpdateFacilityAsync(
+            owner.FacilityOwnerId,
+            owner.FacilityId,
+            FacilityRequest("Gallery Courts", Photo("court-a", 1, true), Photo("court-b", 2, false)),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: one kept, one dropped, one added, and the cover moved onto the
+        // new picture.
+        var result = await sut.UpdateFacilityAsync(
+            owner.FacilityOwnerId,
+            owner.FacilityId,
+            FacilityRequest("Gallery Courts", Photo("court-b", 1, false), Photo("court-c", 2, true)),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var photos = await context.Photos.AsNoTracking()
+            .Where(photo => photo.FacilityId == owner.FacilityId && photo.CourtId == null)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            photos.Select(photo => photo.PublicId).Should().BeEquivalentTo(["court-b", "court-c"]);
+            photos.Should().ContainSingle(photo => photo.IsCover)
+                .Which.PublicId.Should().Be("court-c");
+        }
+    }
+
+    [Fact]
+    public async Task UpdateFacilityAsync_ShouldMakeTheFirstPhotoTheCoverWhenNoneIsMarked()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Coverless Courts");
+
+        // Act: nothing is marked, which would otherwise leave the booking list
+        // with no picture to show.
+        await sut.UpdateFacilityAsync(
+            owner.FacilityOwnerId,
+            owner.FacilityId,
+            FacilityRequest(
+                "Coverless Courts",
+                Photo("second", 2, false),
+                Photo("first", 1, false)),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var photos = await context.Photos.AsNoTracking()
+            .Where(photo => photo.FacilityId == owner.FacilityId && photo.CourtId == null)
+            .ToListAsync();
+
+        photos.Should().ContainSingle(photo => photo.IsCover)
+            .Which.PublicId.Should().Be("first");
+    }
+
+    [Fact]
+    public async Task UpdateFacilityAsync_ShouldRefuseAPhotoUrlFromAnotherHost()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Spoofed Courts");
+
+        // Act: the metadata is posted by the browser, so a URL can point
+        // anywhere unless the server checks it.
+        var result = await sut.UpdateFacilityAsync(
+            owner.FacilityOwnerId,
+            owner.FacilityId,
+            FacilityRequest(
+                "Spoofed Courts",
+                new PhotoInput("evil", "https://evil.example.com/a.jpg", null, 1, true)),
+            Admin(),
+            CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(EditFailure.UntrustedPhotoUrl);
+            (await context.Photos.CountAsync(photo => photo.FacilityId == owner.FacilityId))
+                .Should().Be(0);
+        }
+    }
+
+    [Fact]
     public async Task UpdateFacilityAsync_ShouldRefuseAFacilityBelongingToAnotherOwner()
     {
         // Arrange
@@ -150,7 +241,10 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         await sut.UpdateFacilityAsync(
             owner.FacilityOwnerId,
             owner.FacilityId,
-            FacilityRequest("Amenity Edit Courts") with { AmenityIds = replacement },
+            FacilityRequest("Amenity Edit Courts") with
+            {
+                AmenityIds = replacement
+            },
             Admin(),
             CancellationToken.None);
 
@@ -316,7 +410,10 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             owner.FacilityOwnerId,
             contractId,
             new ReplaceContractDocumentRequest(
-                SignedAgreement() with { FileName = "agreement-rescanned.pdf" },
+                SignedAgreement() with
+                {
+                    FileName = "agreement-rescanned.pdf"
+                },
                 "First scan was unreadable"),
             Admin(),
             CancellationToken.None);
@@ -351,7 +448,10 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         await sut.UpdateFacilityAsync(
             owner.FacilityOwnerId,
             owner.FacilityId,
-            FacilityRequest("Activity Courts") with { City = "Cagayan de Oro" },
+            FacilityRequest("Activity Courts") with
+            {
+                City = "Cagayan de Oro"
+            },
             Admin(),
             CancellationToken.None);
 
@@ -371,7 +471,9 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         }
     }
 
-    private static UpdateFacilityRequest FacilityRequest(string name) => new(
+    private static UpdateFacilityRequest FacilityRequest(
+        string name,
+        params PhotoInput[] photos) => new(
         name,
         "Six covered courts.",
         "123 Main Street",
@@ -388,7 +490,15 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         "First aid kit on site.",
         "No street shoes on the court.",
         [],
+        photos,
         null);
+
+    private static PhotoInput Photo(string publicId, int order, bool isCover) => new(
+        publicId,
+        $"https://res.cloudinary.com/{CloudName}/image/upload/v1/{publicId}.jpg",
+        null,
+        order,
+        isCover);
 
     private static async Task<(OnboardedFacilityOwnerResponse Owner, FacilityOwnerEditService Service)>
         OnboardAsync(AppDbContext context, string facilityName)
@@ -470,6 +580,7 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             "hello@example.com",
             "First aid kit on site.",
             "No street shoes on the court.",
+            [],
             []),
         [.. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
             day,

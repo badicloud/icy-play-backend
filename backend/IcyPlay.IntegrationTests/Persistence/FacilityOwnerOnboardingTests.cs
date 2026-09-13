@@ -117,6 +117,61 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
     }
 
     [Fact]
+    public async Task OnboardAsync_ShouldStoreTheFacilityGalleryWithOneCover()
+    {
+        // Arrange: three pictures, none of them marked.
+        await using var context = database.CreateContext();
+        var (sut, _) = CreateService(context);
+
+        // Act
+        var result = await sut.OnboardAsync(
+            CreateRequest(UniqueEmail(), "Gallery Venue", Photo("a", 1), Photo("b", 2), Photo("c", 3)),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: the venue is bookable-looking from the first screen it
+        // appears on, which needs exactly one cover.
+        var photos = await context.Photos.AsNoTracking()
+            .Where(photo => photo.FacilityId == result.Value!.FacilityId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            photos.Should().HaveCount(3);
+            photos.Should().ContainSingle(photo => photo.IsCover).Which.PublicId.Should().Be("a");
+            photos.Should().OnlyContain(photo => photo.CourtId == null);
+        }
+    }
+
+    [Fact]
+    public async Task OnboardAsync_ShouldRejectAPhotoUrlThatIsNotOnOurOwnCloud()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (sut, _) = CreateService(context);
+        var email = UniqueEmail();
+        var request = CreateRequest(email, "Spoofed Venue") with
+        {
+            Facility = CreateRequest(email, "Spoofed Venue").Facility with
+            {
+                Photos = [new PhotoInput("evil", "https://attacker.example/a.jpg", null, 1, true)]
+            }
+        };
+
+        // Act
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(OnboardingFailure.UntrustedAssetUrl);
+            // Rejected before anything was written, not cleaned up afterwards.
+            (await context.Users.AnyAsync(user => user.Email == email)).Should().BeFalse();
+        }
+    }
+
+    [Fact]
     public async Task OnboardAsync_ShouldRejectAnEmailThatIsAlreadyInUse()
     {
         // Arrange
@@ -172,7 +227,13 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         await using var context = database.CreateContext();
         var (sut, _) = CreateService(context);
         var request = CreateRequest(UniqueEmail(), "Nowhere Courts");
-        request = request with { Facility = request.Facility with { TimeZone = "Mars/Olympus_Mons" } };
+        request = request with
+        {
+            Facility = request.Facility with
+            {
+                TimeZone = "Mars/Olympus_Mons"
+            }
+        };
 
         // Act
         var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
@@ -188,7 +249,13 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         await using var context = database.CreateContext();
         var (sut, _) = CreateService(context);
         var request = CreateRequest(UniqueEmail(), "Phantom Amenity Courts");
-        request = request with { Facility = request.Facility with { AmenityIds = [Guid.NewGuid()] } };
+        request = request with
+        {
+            Facility = request.Facility with
+            {
+                AmenityIds = [Guid.NewGuid()]
+            }
+        };
 
         // Act
         var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
@@ -209,7 +276,13 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
             .Select(amenity => amenity.Id)
             .ToArrayAsync();
         var request = CreateRequest(UniqueEmail(), "Amenity Rich Courts");
-        request = request with { Facility = request.Facility with { AmenityIds = amenityIds } };
+        request = request with
+        {
+            Facility = request.Facility with
+            {
+                AmenityIds = amenityIds
+            }
+        };
 
         // Act
         var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
@@ -266,7 +339,13 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
         var (sut, _) = CreateService(context);
         var businessName = $"Listable Courts {Guid.NewGuid():N}";
         var request = CreateRequest(UniqueEmail(), "Listable Courts");
-        request = request with { Business = request.Business with { BusinessName = businessName } };
+        request = request with
+        {
+            Business = request.Business with
+            {
+                BusinessName = businessName
+            }
+        };
         await sut.OnboardAsync(request, Admin(), CancellationToken.None);
 
         // Act
@@ -330,7 +409,10 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
 
     private static string UniqueEmail() => $"onboarding-{Guid.NewGuid():N}@example.com";
 
-    private static OnboardFacilityOwnerRequest CreateRequest(string email, string facilityName) => new(
+    private static OnboardFacilityOwnerRequest CreateRequest(
+        string email,
+        string facilityName,
+        params PhotoInput[] photos) => new(
         new OwnerAccountInput("Juan Dela Cruz", email, "+639171234567"),
         new BusinessInput("Abc Sports Ventures", "billing@example.com", "+639171234567", "DTI-123456"),
         [CreateDocument($"https://res.cloudinary.com/{CloudName}/image/upload/v1/permit.pdf")],
@@ -350,12 +432,21 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
             "hello@example.com",
             "First aid kit on site.",
             "No street shoes on the court.",
-            []),
+            [],
+            photos),
         [.. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
             day,
             new TimeOnly(6, 0),
             new TimeOnly(22, 0)))],
         new ContractInput(Today, Today.AddYears(1), "Signed at the Davao office.", SignedAgreement()));
+
+    /// <summary>A picture on our own cloud, with no cover flag of its own.</summary>
+    private static PhotoInput Photo(string publicId, int order) => new(
+        publicId,
+        $"https://res.cloudinary.com/{CloudName}/image/upload/v1/{publicId}.jpg",
+        null,
+        order,
+        false);
 
     private static OwnerDocumentInput CreateDocument(string secureUrl) => new(
         FacilityOwnerDocumentType.BusinessPermit,

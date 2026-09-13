@@ -234,6 +234,10 @@ public sealed class AdminFacilityOwnersController(
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This contract has already been cancelled."),
+            EditFailure.UntrustedPhotoUrl => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.UntrustedAssetUrl,
+                "A photo URL is not a secure link on the configured Cloudinary account."),
             EditFailure.UntrustedContractDocument => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.UntrustedAssetUrl,

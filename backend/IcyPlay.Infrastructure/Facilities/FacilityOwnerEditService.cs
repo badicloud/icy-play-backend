@@ -64,6 +64,12 @@ public sealed class FacilityOwnerEditService(
             return EditResult.Fail(EditFailure.UnknownTimeZone);
         }
 
+        // Posted by the browser, so never taken on trust.
+        if (request.Photos.Any(photo => !assets.IsTrustedSecureUrl(photo.SecureUrl)))
+        {
+            return EditResult.Fail(EditFailure.UntrustedPhotoUrl);
+        }
+
         // Scoped to the owner in the same query. Another owner's facility is
         // answered the same way as a missing one, so the endpoint cannot be used
         // to find out which ids exist.
@@ -119,6 +125,18 @@ public sealed class FacilityOwnerEditService(
             facility.Id,
             before,
             FacilitySnapshot(facility),
+            request.Reason);
+
+        var photosBefore = await PhotoSnapshotAsync(facility.Id, ct);
+        await PhotoGallery.ReplaceAsync(db, facility.Id, null, request.Photos, now, ct);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.FacilityPhotosUpdated,
+            AuditEntityType.Facility,
+            facility.Id,
+            photosBefore,
+            PhotoGallery.Snapshot(request.Photos),
             request.Reason);
 
         ReplaceAmenities(facility, amenityIds, now);
@@ -448,6 +466,23 @@ public sealed class FacilityOwnerEditService(
     /// exists", marking the entity Modified and issuing an UPDATE for a row
     /// that was never inserted.
     /// </summary>
+    private async Task<Dictionary<string, string?>> PhotoSnapshotAsync(
+        Guid facilityId,
+        CancellationToken ct)
+    {
+        var photos = await db.Photos
+            .AsNoTracking()
+            .Where(photo => photo.FacilityId == facilityId && photo.CourtId == null)
+            .Select(photo => new { photo.PublicId, photo.IsCover })
+            .ToListAsync(ct);
+
+        return new Dictionary<string, string?>
+        {
+            ["photos"] = photos.Count.ToString(CultureInfo.InvariantCulture),
+            ["cover"] = photos.FirstOrDefault(photo => photo.IsCover)?.PublicId
+        };
+    }
+
     private void ReplaceAmenities(Facility facility, IReadOnlyCollection<Guid> amenityIds, DateTimeOffset now)
     {
         var current = facility.Amenities.ToList();

@@ -9,6 +9,7 @@ namespace IcyPlay.Infrastructure.Persistence;
 public sealed class AppDbContext : DbContext
 {
     private static readonly DateTimeOffset SeededAt = new(2026, 9, 8, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset SportsSeededAt = new(2026, 9, 11, 0, 0, 0, TimeSpan.Zero);
 
     public AppDbContext(DbContextOptions<AppDbContext> options)
         : base(options)
@@ -32,6 +33,12 @@ public sealed class AppDbContext : DbContext
     public DbSet<FacilityOperatingHour> FacilityOperatingHours => Set<FacilityOperatingHour>();
     public DbSet<Amenity> Amenities => Set<Amenity>();
     public DbSet<FacilityAmenity> FacilityAmenities => Set<FacilityAmenity>();
+    public DbSet<Sport> Sports => Set<Sport>();
+    public DbSet<Court> Courts => Set<Court>();
+    public DbSet<CourtSport> CourtSports => Set<CourtSport>();
+    public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
+    public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
+    public DbSet<Photo> Photos => Set<Photo>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -161,6 +168,285 @@ public sealed class AppDbContext : DbContext
                 .WithMany(x => x.PasswordResetTokens)
                 .HasForeignKey(x => x.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Sport>(entity =>
+        {
+            entity.ToTable("Sports");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Key).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.Category).HasMaxLength(50).IsRequired();
+            entity.HasIndex(x => x.Key).IsUnique();
+
+            entity.HasData(
+                new
+                {
+                    Id = Guid.Parse("74ad5832-6d45-5076-8b4c-d0c79472dd55"),
+                    Key = "basketball",
+                    Name = "Basketball",
+                    Category = SportCategory.Court,
+                    DisplayOrder = 10,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("8e21e167-3c31-5e9e-b203-f94339286f02"),
+                    Key = "volleyball",
+                    Name = "Volleyball",
+                    Category = SportCategory.Court,
+                    DisplayOrder = 20,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("0d37f0cd-9517-5a92-a320-caff82b9bcc6"),
+                    Key = "futsal",
+                    Name = "Futsal",
+                    Category = SportCategory.Court,
+                    DisplayOrder = 30,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("c1f88227-155e-5da6-b12b-479ed504e853"),
+                    Key = "sepak-takraw",
+                    Name = "Sepak takraw",
+                    Category = SportCategory.Court,
+                    DisplayOrder = 40,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("8bf0905e-65ba-5600-a868-0f28087f1d0b"),
+                    Key = "badminton",
+                    Name = "Badminton",
+                    Category = SportCategory.Racket,
+                    DisplayOrder = 10,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("a0f6b01f-491c-5bb0-ad8e-a42f19437ea3"),
+                    Key = "tennis",
+                    Name = "Tennis",
+                    Category = SportCategory.Racket,
+                    DisplayOrder = 20,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("17b95f71-a2b5-50a7-9fde-b07562272bed"),
+                    Key = "table-tennis",
+                    Name = "Table tennis",
+                    Category = SportCategory.Racket,
+                    DisplayOrder = 30,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("63573cf8-2b30-57f8-8ead-1da5098ea88e"),
+                    Key = "pickleball",
+                    Name = "Pickleball",
+                    Category = SportCategory.Racket,
+                    DisplayOrder = 40,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("dad7ebe3-f916-50f4-9317-92d01c75a061"),
+                    Key = "squash",
+                    Name = "Squash",
+                    Category = SportCategory.Racket,
+                    DisplayOrder = 50,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("84ed5c9c-3978-56d8-bc1d-9cac5ae1109e"),
+                    Key = "boxing",
+                    Name = "Boxing",
+                    Category = SportCategory.Combat,
+                    DisplayOrder = 10,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("f22fc719-1486-5215-9cc9-ec04de119105"),
+                    Key = "taekwondo",
+                    Name = "Taekwondo",
+                    Category = SportCategory.Combat,
+                    DisplayOrder = 20,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("2722a749-7853-5d82-a472-5c1ce07862c4"),
+                    Key = "karate",
+                    Name = "Karate",
+                    Category = SportCategory.Combat,
+                    DisplayOrder = 30,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("10a110db-d802-51a0-ada1-8f81bc655dcd"),
+                    Key = "muay-thai",
+                    Name = "Muay Thai",
+                    Category = SportCategory.Combat,
+                    DisplayOrder = 40,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("babc048a-e8a3-5572-8f03-c5a6a7f57d3f"),
+                    Key = "fitness",
+                    Name = "Fitness",
+                    Category = SportCategory.Other,
+                    DisplayOrder = 10,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("aee78495-e295-5753-8b47-de220d9d6f2b"),
+                    Key = "dance",
+                    Name = "Dance",
+                    Category = SportCategory.Other,
+                    DisplayOrder = 20,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("441948f8-b6cf-5a23-8074-b45e692b2d73"),
+                    Key = "yoga",
+                    Name = "Yoga",
+                    Category = SportCategory.Other,
+                    DisplayOrder = 30,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                });
+        });
+
+        modelBuilder.Entity<Court>(entity =>
+        {
+            entity.ToTable("Courts");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.VenueType).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Surface).HasMaxLength(50);
+            entity.Property(x => x.SizeLabel).HasMaxLength(100);
+            entity.Property(x => x.Equipment).HasMaxLength(500);
+            // The pair every listing sorts by, and the scoping predicate.
+            entity.HasIndex(x => new { x.FacilityId, x.DisplayOrder });
+            entity.HasIndex(x => x.FacilityOwnerId);
+            entity.HasOne(x => x.Facility)
+                .WithMany(x => x.Courts)
+                .HasForeignKey(x => x.FacilityId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CourtSport>(entity =>
+        {
+            entity.ToTable("CourtSports");
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.CourtId, x.SportId }).IsUnique();
+            entity.HasOne(x => x.Court)
+                .WithMany(x => x.Sports)
+                .HasForeignKey(x => x.CourtId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Sport)
+                .WithMany()
+                .HasForeignKey(x => x.SportId)
+                // A sport in use must not vanish from under the courts that
+                // list it. Retire it instead.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<CourtOperatingHour>(entity =>
+        {
+            entity.ToTable("CourtOperatingHours");
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => new { x.CourtId, x.DayOfWeek }).IsUnique();
+            entity.Ignore(x => x.IsClosed);
+            entity.HasOne(x => x.Court)
+                .WithMany(x => x.OperatingHours)
+                .HasForeignKey(x => x.CourtId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Photo>(entity =>
+        {
+            entity.ToTable("Photos");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.PublicId).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.SecureUrl).HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.Caption).HasMaxLength(300);
+            entity.Ignore(x => x.BelongsToWholeFacility);
+            // The gallery is always read for one subject, in display order.
+            entity.HasIndex(x => new { x.FacilityId, x.CourtId, x.DisplayOrder });
+            entity.HasOne(x => x.Facility)
+                .WithMany()
+                .HasForeignKey(x => x.FacilityId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Court)
+                .WithMany()
+                .HasForeignKey(x => x.CourtId)
+                // The facility cascade already reaches these rows; a second
+                // cascade path is one more than SQL Server allows.
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<MaintenancePeriod>(entity =>
+        {
+            entity.ToTable("MaintenancePeriods");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+            entity.Ignore(x => x.AppliesToWholeFacility);
+            // Answers "what is closed here, and when" in one seek, for both a
+            // whole facility and a single court.
+            entity.HasIndex(x => new { x.FacilityId, x.StartsAt, x.EndsAt });
+            entity.HasIndex(x => x.CourtId);
+            entity.HasOne(x => x.Facility)
+                .WithMany()
+                .HasForeignKey(x => x.FacilityId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Court)
+                .WithMany()
+                .HasForeignKey(x => x.CourtId)
+                // The facility cascade already reaches these rows; a second
+                // cascade path is one more than SQL Server allows.
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<AuditLog>(entity =>

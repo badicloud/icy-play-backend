@@ -239,7 +239,10 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         {
             get; private set;
         }
-        public IReadOnlyDictionary<string, object> LastVariables { get; private set; } =
+        public IReadOnlyDictionary<string, object> LastVariables
+        {
+            get; private set;
+        } =
             new Dictionary<string, object>();
 
         public Task SendAsync(TransactionalEmailMessage message, CancellationToken ct)

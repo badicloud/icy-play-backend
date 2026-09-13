@@ -106,6 +106,11 @@ public sealed class FacilityInputValidator : AbstractValidator<FacilityInput>
         RuleFor(x => x.Name)
             .Must(name => !string.IsNullOrEmpty(Facility.ToSlug(name)))
             .WithMessage("The facility name needs at least one letter or number.");
+
+        RuleForEach(x => x.Photos).SetValidator(new PhotoInputValidator());
+        RuleFor(x => x.Photos)
+            .Must(photos => photos.Count(photo => photo.IsCover) <= 1)
+            .WithMessage("Only one photo can be the cover.");
     }
 }
 

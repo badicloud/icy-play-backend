@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260911053348_AddCourtsAndSports")]
+    partial class AddCourtsAndSports
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -815,53 +818,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.ToTable("MaintenancePeriods", "dbo");
                 });
 
-            modelBuilder.Entity("IcyPlay.Domain.Facilities.Photo", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Caption")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<Guid?>("CourtId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("DisplayOrder")
-                        .HasColumnType("int");
-
-                    b.Property<Guid>("FacilityId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<bool>("IsCover")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("PublicId")
-                        .IsRequired()
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("SecureUrl")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CourtId");
-
-                    b.HasIndex("FacilityId", "CourtId", "DisplayOrder");
-
-                    b.ToTable("Photos", "dbo");
-                });
-
             modelBuilder.Entity("IcyPlay.Domain.Facilities.Sport", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1500,24 +1456,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Facilities.MaintenancePeriod", b =>
-                {
-                    b.HasOne("IcyPlay.Domain.Facilities.Court", "Court")
-                        .WithMany()
-                        .HasForeignKey("CourtId")
-                        .OnDelete(DeleteBehavior.NoAction);
-
-                    b.HasOne("IcyPlay.Domain.Facilities.Facility", "Facility")
-                        .WithMany()
-                        .HasForeignKey("FacilityId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Court");
-
-                    b.Navigation("Facility");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Facilities.Photo", b =>
                 {
                     b.HasOne("IcyPlay.Domain.Facilities.Court", "Court")
                         .WithMany()

@@ -67,6 +67,11 @@ public sealed class FacilityOwnerOnboardingService(
                 OnboardingFailure.UntrustedContractDocument);
         }
 
+        if (request.Facility.Photos.Any(photo => !assets.IsTrustedSecureUrl(photo.SecureUrl)))
+        {
+            return OnboardingResult<OnboardedFacilityOwnerResponse>.Fail(OnboardingFailure.UntrustedAssetUrl);
+        }
+
         var amenityIds = request.Facility.AmenityIds.Distinct().ToArray();
         if (amenityIds.Length > 0)
         {
@@ -126,7 +131,7 @@ public sealed class FacilityOwnerOnboardingService(
         var facility = new Facility(
             owner.Id,
             request.Facility.Name,
-            await ReserveSlugAsync(request.Facility.Name, ct),
+            await FacilitySlugs.ReserveAsync(db, request.Facility.Name, ct),
             request.Facility.Description,
             new FacilityAddress(
                 request.Facility.AddressLine1,
@@ -156,6 +161,8 @@ public sealed class FacilityOwnerOnboardingService(
         {
             db.FacilityAmenities.Add(new FacilityAmenity(facility.Id, amenityId, now));
         }
+
+        PhotoGallery.Add(db, facility.Id, null, request.Facility.Photos, now);
 
         var contract = new FacilityOwnerContract(
             owner.Id,
@@ -287,6 +294,18 @@ public sealed class FacilityOwnerOnboardingService(
                         facility.SafetyMeasures,
                         facility.HouseRules,
                         facility.IsActive,
+                        db.Photos
+                            .Where(photo => photo.FacilityId == facility.Id && photo.CourtId == null)
+                            .OrderByDescending(photo => photo.IsCover)
+                            .ThenBy(photo => photo.DisplayOrder)
+                            .Select(photo => new PhotoItem(
+                                photo.Id,
+                                photo.PublicId,
+                                photo.SecureUrl,
+                                photo.Caption,
+                                photo.DisplayOrder,
+                                photo.IsCover))
+                            .ToList(),
                         facility.Amenities
                             .OrderBy(link => link.Amenity.Category)
                             .ThenBy(link => link.Amenity.DisplayOrder)
@@ -542,33 +561,6 @@ public sealed class FacilityOwnerOnboardingService(
                 amenity.Category,
                 amenity.DisplayOrder))
             .ToArrayAsync(ct);
-
-    /// <summary>
-    /// Finds a slug nobody is using. Suffixed rather than rejected, because two
-    /// venues legitimately share a name across two cities.
-    /// </summary>
-    private async Task<string> ReserveSlugAsync(string name, CancellationToken ct)
-    {
-        var baseSlug = Facility.ToSlug(name);
-        var taken = await db.Facilities
-            .Where(facility => facility.Slug == baseSlug || facility.Slug.StartsWith(baseSlug + "-"))
-            .Select(facility => facility.Slug)
-            .ToListAsync(ct);
-
-        if (!taken.Contains(baseSlug))
-        {
-            return baseSlug;
-        }
-
-        for (var suffix = 2; ; suffix++)
-        {
-            var candidate = $"{baseSlug}-{suffix}";
-            if (!taken.Contains(candidate))
-            {
-                return candidate;
-            }
-        }
-    }
 
     /// <summary>
     /// Best effort. A Mailjet outage must not undo an onboarding the admin has

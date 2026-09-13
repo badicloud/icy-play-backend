@@ -85,10 +85,19 @@ public static class AuditAction
     public const string FacilityOwnerInvitationSent = "FacilityOwnerInvitationSent";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
+    public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
     public const string FacilityHoursUpdated = "FacilityHoursUpdated";
     public const string ContractCommenced = "ContractCommenced";
     public const string ContractCancelled = "ContractCancelled";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";
+    public const string FacilityCreated = "FacilityCreated";
+    public const string CourtCreated = "CourtCreated";
+    public const string MaintenanceSet = "MaintenanceSet";
+    public const string MaintenanceLifted = "MaintenanceLifted";
+    public const string SportCreated = "SportCreated";
+    public const string SportUpdated = "SportUpdated";
+    public const string SportRetired = "SportRetired";
+    public const string SportReinstated = "SportReinstated";
 }
 
 public static class AuditEntityType
@@ -96,4 +105,6 @@ public static class AuditEntityType
     public const string FacilityOwner = "FacilityOwner";
     public const string Facility = "Facility";
     public const string FacilityOwnerContract = "FacilityOwnerContract";
+    public const string Court = "Court";
+    public const string Sport = "Sport";
 }

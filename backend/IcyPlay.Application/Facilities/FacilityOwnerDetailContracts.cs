@@ -74,6 +74,7 @@ public sealed record FacilityDetail(
     string? SafetyMeasures,
     string? HouseRules,
     bool IsActive,
+    IReadOnlyCollection<PhotoItem> Photos,
     IReadOnlyCollection<FacilityAmenityDetail> Amenities,
     IReadOnlyCollection<FacilityOperatingHourDetail> OperatingHours,
     DateTimeOffset CreatedAt,
