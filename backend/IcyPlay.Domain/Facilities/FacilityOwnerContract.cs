@@ -21,7 +21,9 @@ public sealed class FacilityOwnerContract : Entity
         DateOnly endDate,
         Guid commencedByUserId,
         string? notes,
-        DateTimeOffset commencedAt)
+        DateTimeOffset commencedAt,
+        decimal? platformHourlyRate = null,
+        decimal? commissionPercentage = null)
     {
         if (endDate < startDate)
         {
@@ -33,6 +35,8 @@ public sealed class FacilityOwnerContract : Entity
         EndDate = endDate;
         CommencedByUserId = commencedByUserId;
         Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
+        PlatformHourlyRate = platformHourlyRate ?? PlatformRates.DefaultHourlyRate;
+        CommissionPercentage = commissionPercentage ?? PlatformRates.DefaultCommissionPercentage;
         CreatedAt = commencedAt;
     }
 
@@ -113,6 +117,53 @@ public sealed class FacilityOwnerContract : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// What IcyPlay bills the owner for each hour booked on their courts. Held
+    /// on the term rather than on the owner: a rate that changed on the owner
+    /// would rewrite what was agreed for terms already served.
+    /// </summary>
+    public decimal PlatformHourlyRate { get; private set; } = PlatformRates.DefaultHourlyRate;
+
+    /// <summary>
+    /// The maintenance and commission share of each billing, as a percentage of
+    /// the bill itself.
+    /// </summary>
+    public decimal CommissionPercentage
+    {
+        get; private set;
+    } =
+        PlatformRates.DefaultCommissionPercentage;
+
+    public void SetRates(decimal platformHourlyRate, decimal commissionPercentage, DateTimeOffset now)
+    {
+        PlatformHourlyRate = platformHourlyRate;
+        CommissionPercentage = commissionPercentage;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// What the owner owes IcyPlay for a period's bookings, and how much of
+    /// that bill is the maintenance and commission share. Worked out here
+    /// rather than at each call site, because a rate charged in one place and a
+    /// percentage taken in another is exactly the arithmetic nobody notices is
+    /// wrong.
+    /// </summary>
+    public ContractCharges ChargesFor(decimal bookedHours)
+    {
+        var platformBill = Round(PlatformHourlyRate * bookedHours);
+        // Of the bill, not on top of it.
+        var commission = Round(platformBill * CommissionPercentage / 100m);
+
+        return new ContractCharges(
+            bookedHours,
+            platformBill,
+            commission,
+            platformBill - commission);
+    }
+
+    private static decimal Round(decimal amount) =>
+        Math.Round(amount, 2, MidpointRounding.AwayFromZero);
+
     public bool Covers(DateOnly date) =>
         CancelledAt is null && StartDate <= date && date <= EndDate;
 
@@ -122,6 +173,33 @@ public sealed class FacilityOwnerContract : Entity
         UpdatedAt = now;
     }
 }
+
+/// <summary>
+/// What IcyPlay charges unless a contract says otherwise. Constants rather than
+/// a settings table: nobody has asked to change the platform-wide figure, and a
+/// screen for it is a different feature from overriding one owner's terms.
+/// </summary>
+public static class PlatformRates
+{
+    /// <summary>Pesos added to every booked hour, on top of the court's own rate.</summary>
+    public const decimal DefaultHourlyRate = 15.00m;
+
+    /// <summary>Per cent of each billing kept for maintenance and commission.</summary>
+    public const decimal DefaultCommissionPercentage = 3.00m;
+}
+
+/// <summary>
+/// One period's bill to a facility owner. Every figure is derived from the
+/// hours and the term's rates, so an invoice and a statement can never disagree
+/// about the same period.
+/// </summary>
+public readonly record struct ContractCharges(
+    decimal BookedHours,
+    /// <summary>Hours booked times the term's hourly rate.</summary>
+    decimal PlatformBill,
+    /// <summary>The maintenance and commission share, taken out of the bill.</summary>
+    decimal Commission,
+    decimal NetAfterCommission);
 
 /// <summary>
 /// The dates of one live contract, so status can be derived from a projection

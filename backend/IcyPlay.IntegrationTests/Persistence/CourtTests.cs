@@ -478,6 +478,866 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         order,
         isCover);
 
+    [Fact]
+    public async Task GetAsync_ShouldReadOneCourtTheSameWayTheListDoes()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Readable Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var court = await sut.GetAsync(created.Value!.CourtId, CancellationToken.None);
+
+        // Assert: a detail page that disagrees with the list it came from is
+        // worse than no detail page.
+        var fromList = (await sut.ListAsync(created.Value.FacilityId, CancellationToken.None)).Single();
+
+        using (new AssertionScope())
+        {
+            court.Should().NotBeNull();
+            court.Should().BeEquivalentTo(fromList);
+            court!.FacilityOwnerId.Should().Be(owner);
+        }
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldReturnNullWhenNoCourtHasThatId()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+
+        // Act
+        var court = await sut.GetAsync(Guid.NewGuid(), CancellationToken.None);
+
+        // Assert
+        court.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldMoveThePrimarySportWithoutChurningTheLinkThatStays()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 3);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Movable Courts"), sportIds: sports.Take(2).ToArray()),
+            Admin(),
+            CancellationToken.None);
+
+        var kept = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value!.CourtId && link.SportId == sports[1])
+            .Select(link => link.Id)
+            .SingleAsync();
+
+        // Act: the first sport goes, a third arrives, and the second becomes
+        // the main one.
+        var result = await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(
+                Court([sports[1], sports[2]]) with
+                {
+                    PrimarySportId = sports[1]
+                },
+                IsActive: true,
+                "Owner changed what it takes"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value.CourtId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            links.Select(link => link.SportId).Should().BeEquivalentTo([sports[1], sports[2]]);
+            links.Should().ContainSingle(link => link.IsPrimary)
+                .Which.SportId.Should().Be(sports[1]);
+            // The surviving link keeps its row, and with it the record of when
+            // this sport was first put on this court.
+            links.Should().Contain(link => link.Id == kept);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldSetOwnHoursInPlaceWhenTheCourtStopsFollowingTheFacility()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Late Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        var ownHours = Enum.GetValues<DayOfWeek>()
+            .Select(day => new OperatingHourInput(day, new TimeOnly(8, 0), new TimeOnly(20, 0)))
+            .ToArray();
+
+        // Act: twice, because one row per day is unique and the second save is
+        // what a delete-then-insert would collide on.
+        await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(
+                Court(sports) with
+                {
+                    UsesFacilityHours = false,
+                    OperatingHours = ownHours
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        var result = await sut.UpdateAsync(
+            created.Value.CourtId,
+            new UpdateCourtRequest(
+                Court(sports) with
+                {
+                    UsesFacilityHours = false,
+                    OperatingHours = ownHours
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var hours = await context.CourtOperatingHours
+            .AsNoTracking()
+            .Where(hour => hour.CourtId == created.Value.CourtId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            hours.Should().HaveCount(7);
+            hours.Should().OnlyContain(hour => hour.OpensAt == new TimeOnly(8, 0));
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRefuseAPrimarySportThatIsNotSelected()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Mismatched Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(
+                Court([sports[0]]) with
+                {
+                    PrimarySportId = sports[1]
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.PrimarySportNotSelected);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldRefuseAPhotoUrlFromAnotherHost()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Spoofable Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(
+                Court(sports) with
+                {
+                    Photos = [new PhotoInput("evil", "https://evil.example.com/a.jpg", null, 1, true)]
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(CourtFailure.UntrustedPhotoUrl);
+            (await context.Photos.CountAsync(photo => photo.CourtId == created.Value.CourtId))
+                .Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldTakeTheCourtOffTheBookingPortalWhenDeactivated()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Closable Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(Court(sports), IsActive: false, "Resurfacing for good"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var court = await context.Courts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == created.Value.CourtId);
+
+        court.IsActive.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldReturnNotFoundForACourtThatDoesNotExist()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var sports = await SportIdsAsync(context, 1);
+
+        // Act
+        var result = await sut.UpdateAsync(
+            Guid.NewGuid(),
+            new UpdateCourtRequest(Court(sports), IsActive: true, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.CourtNotFound);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldDivideTheCourtPerSport()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+
+        // Act: played whole for the first sport, three across for the second.
+        var result = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Divisible Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Sports =
+                    [
+                        new CourtSportInput(sports[0], 1),
+                        new CourtSportInput(sports[1], 3)
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == result.Value!.CourtId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            links.Single(link => link.SportId == sports[0]).Divisions.Should().Be(1);
+            links.Single(link => link.SportId == sports[1]).Divisions.Should().Be(3);
+            links.Single(link => link.SportId == sports[1]).IsDivided.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldChangeHowManyCourtsASportMakes()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Remarked Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: the hall gets marked out into four.
+        await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(Court(sports, divisions: 4), IsActive: true, "Re-marked the floor"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var link = await context.CourtSports
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.CourtId == created.Value.CourtId);
+
+        link.Divisions.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task UpdateDivisionsAsync_ShouldRemarkOneSportWithoutTouchingTheRest()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Marked Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: only the second sport is re-marked.
+        var result = await sut.UpdateDivisionsAsync(
+            created.Value!.CourtId,
+            new UpdateCourtDivisionsRequest(
+                [new CourtSportInput(sports[1], 3)],
+                "Floor re-marked for pickleball"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value.CourtId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            links.Single(link => link.SportId == sports[1]).Divisions.Should().Be(3);
+            // Untouched, because it was not sent.
+            links.Single(link => link.SportId == sports[0]).Divisions.Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateDivisionsAsync_ShouldRefuseASportThisCourtDoesNotTake()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 3);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Unmarked Courts"), sportIds: sports.Take(2).ToArray()),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdateDivisionsAsync(
+            created.Value!.CourtId,
+            new UpdateCourtDivisionsRequest([new CourtSportInput(sports[2], 2)], null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.UnknownSport);
+    }
+
+    [Fact]
+    public async Task UpdateDivisionsAsync_ShouldKeepThePriceOnASportThatIsRemarked()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Priced Marked Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, null, null, null)],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        await sut.UpdateDivisionsAsync(
+            created.Value.CourtId,
+            new UpdateCourtDivisionsRequest([new CourtSportInput(sports[0], 3)], null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: re-marking a floor is not a reason to make its owner retype a
+        // rate card.
+        var link = await context.CourtSports
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.CourtId == created.Value.CourtId);
+
+        using (new AssertionScope())
+        {
+            link.Divisions.Should().Be(3);
+            link.StandardHourlyRate.Should().Be(500m);
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldPriceEachSportOnItsOwn()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Priced Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: an hour of one sport is not worth an hour of the other.
+        var result = await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [
+                    new SportPricingInput(sports[0], 500m, 750m, 600m, 900m),
+                    new SportPricingInput(sports[1], 350m, null, null, null)
+                ],
+                new PeakWindowInput(new TimeOnly(18, 0), new TimeOnly(22, 0), true, false),
+                "Owner sent the rate card"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value.CourtId)
+            .ToListAsync();
+
+        var first = links.Single(link => link.SportId == sports[0]);
+        var second = links.Single(link => link.SportId == sports[1]);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            first.StandardHourlyRate.Should().Be(500m);
+            first.PeakHourlyRate.Should().Be(750m);
+            first.HolidayRate.Should().Be(900m);
+            second.StandardHourlyRate.Should().Be(350m);
+            // A venue charging the same all week stores one number, not four
+            // copies of it.
+            second.PeakHourlyRate.Should().BeNull();
+            second.RateFor(CourtRateKind.Peak).Should().Be(350m);
+            second.RateFor(CourtRateKind.Holiday).Should().Be(350m);
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldStoreWhenThePeakRateApplies()
+    {
+        // Arrange: the facility opens 06:00 and closes 22:00 every day.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Evening Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: busy on weekday evenings, ordinary at the weekend.
+        var result = await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, 750m, null, null)],
+                new PeakWindowInput(new TimeOnly(18, 0), new TimeOnly(22, 0), true, false),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var court = await context.Courts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == created.Value.CourtId);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            court.PeakStartsAt.Should().Be(new TimeOnly(18, 0));
+            court.PeakOnWeekdays.Should().BeTrue();
+            court.PeakOnWeekends.Should().BeFalse();
+            court.IsPeakAt(DayOfWeek.Tuesday, new TimeOnly(19, 0)).Should().BeTrue();
+            court.IsPeakAt(DayOfWeek.Tuesday, new TimeOnly(17, 0)).Should().BeFalse();
+            // The same hour, but the window does not run at the weekend.
+            court.IsPeakAt(DayOfWeek.Saturday, new TimeOnly(19, 0)).Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldRefuseAPeakWindowThatRunsPastClosingTime()
+    {
+        // Arrange: the facility closes at 22:00.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Overrun Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, 750m, null, null)],
+                new PeakWindowInput(new TimeOnly(20, 0), new TimeOnly(23, 30), true, true),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: an hour nobody can book is not an hour anybody can be charged
+        // a premium for.
+        result.Failure.Should().Be(CourtFailure.PeakWindowOutsideHours);
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldRefuseAPeakWindowBeforeOpeningTime()
+    {
+        // Arrange: the facility opens at 06:00.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Early Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, 750m, null, null)],
+                new PeakWindowInput(new TimeOnly(5, 0), new TimeOnly(9, 0), true, true),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.PeakWindowOutsideHours);
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldRefuseAPeakWindowOnDaysTheCourtIsShut()
+    {
+        // Arrange: open on weekdays only.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Weekday Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        await sut.UpdateAsync(
+            created.Value!.CourtId,
+            new UpdateCourtRequest(
+                Court(sports) with
+                {
+                    UsesFacilityHours = false,
+                    OperatingHours =
+                    [
+                        .. Enum.GetValues<DayOfWeek>().Select(day =>
+                            new OperatingHourInput(
+                                day,
+                                day is DayOfWeek.Saturday or DayOfWeek.Sunday ? null : new TimeOnly(6, 0),
+                                day is DayOfWeek.Saturday or DayOfWeek.Sunday ? null : new TimeOnly(22, 0)))
+                    ]
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdatePricingAsync(
+            created.Value.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, 750m, null, null)],
+                new PeakWindowInput(new TimeOnly(18, 0), new TimeOnly(21, 0), false, true),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.PeakWindowOnClosedDays);
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldClearTheWindowWhenNoSportChargesAPeakRate()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Flattened Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, 750m, null, null)],
+                new PeakWindowInput(new TimeOnly(18, 0), new TimeOnly(22, 0), true, true),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: the peak rate is taken away again.
+        await sut.UpdatePricingAsync(
+            created.Value.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, null, null, null)],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: a window nobody is charged for would read as a live rule the
+        // next time someone opened the screen.
+        var court = await context.Courts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == created.Value.CourtId);
+
+        using (new AssertionScope())
+        {
+            court.HasPeakWindow.Should().BeFalse();
+            court.PeakOnWeekdays.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldLeaveSportsThatWereNotSentAlone()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Partly Priced Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [
+                    new SportPricingInput(sports[0], 500m, null, null, null),
+                    new SportPricingInput(sports[1], 350m, null, null, null)
+                ],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: only one sport is corrected.
+        await sut.UpdatePricingAsync(
+            created.Value.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[1], 400m, null, null, null)],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value.CourtId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            links.Single(link => link.SportId == sports[0]).StandardHourlyRate.Should().Be(500m);
+            links.Single(link => link.SportId == sports[1]).StandardHourlyRate.Should().Be(400m);
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldRefuseASportThisCourtDoesNotTake()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 3);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Narrow Courts"), sportIds: sports.Take(2).ToArray()),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: a price for a sport that is not on this court would sit in the
+        // table unreachable, and be silently wrong if the sport is added later.
+        var result = await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[2], 500m, null, null, null)],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.UnknownSport);
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldReturnNotFoundForACourtThatDoesNotExist()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+
+        // Act
+        var result = await sut.UpdatePricingAsync(
+            Guid.NewGuid(),
+            new UpdateCourtPricingRequest([], null, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(CourtFailure.CourtNotFound);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ShouldKeepThePriceOnASportThatSurvivesTheEdit()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 3);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Repriced Courts"), sportIds: sports.Take(2).ToArray()),
+            Admin(),
+            CancellationToken.None);
+
+        await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[1], 500m, null, null, null)],
+                null,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: the sports change around the one that was priced.
+        await sut.UpdateAsync(
+            created.Value.CourtId,
+            new UpdateCourtRequest(
+                Court([sports[1], sports[2]]) with
+                {
+                    PrimarySportId = sports[1]
+                },
+                IsActive: true,
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: editing a court is not a reason to make its owner retype a
+        // rate card.
+        var link = await context.CourtSports
+            .AsNoTracking()
+            .SingleAsync(candidate =>
+                candidate.CourtId == created.Value.CourtId && candidate.SportId == sports[1]);
+
+        link.StandardHourlyRate.Should().Be(500m);
+    }
+
+    [Fact]
+    public async Task Sports_ShouldBeSeededWithEventsAlongsideTheGames()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+
+        // Act
+        var entries = await context.Sports.AsNoTracking().ToListAsync();
+
+        // Assert: a court is hired for occasions as well as played on, and the
+        // two are told apart by kind rather than by reading the category.
+        using (new AssertionScope())
+        {
+            entries.Should().Contain(entry =>
+                entry.Name == "Birthday party" && entry.Kind == ActivityKind.Event);
+            entries.Should().Contain(entry =>
+                entry.Name == "Basketball" && entry.Kind == ActivityKind.Sport);
+            entries.Where(entry => entry.Kind == ActivityKind.Event)
+                .Should().OnlyContain(entry => entry.Category == SportCategory.Events);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldLetACourtBeBookedForAnEvent()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var party = await context.Sports
+            .Where(entry => entry.Kind == ActivityKind.Event)
+            .Select(entry => entry.Id)
+            .FirstAsync();
+
+        // Act: an occasion takes the whole floor, so it is one court.
+        var result = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Function Courts"), sportIds: [party]),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var court = await sut.GetAsync(result.Value!.CourtId, CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            court!.Sports.Single().Kind.Should().Be(ActivityKind.Event);
+            court.Sports.Single().Divisions.Should().Be(1);
+        }
+    }
+
     private static AuditActor Admin() => new(Guid.NewGuid(), UserRoleName.PlatformAdmin);
 
     private static CreateCourtRequest Request(
@@ -487,11 +1347,13 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         NewFacilityInput? newFacility = null) =>
         new(ownerId, facilityId, newFacility, Court(sportIds));
 
-    private static CourtInput Court(IReadOnlyCollection<Guid> sportIds) => new(
+    private static CourtInput Court(
+        IReadOnlyCollection<Guid> sportIds,
+        int divisions = 1) => new(
         "Court 1",
         10,
         "The near court.",
-        sportIds,
+        [.. sportIds.Select(id => new CourtSportInput(id, divisions))],
         sportIds.First(),
         CourtVenueType.Covered,
         CourtSurface.Concrete,

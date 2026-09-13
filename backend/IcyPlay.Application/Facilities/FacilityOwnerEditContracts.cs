@@ -46,6 +46,17 @@ public sealed record RenewContractRequest(
     UploadedFileInput Document,
     string? Reason);
 
+/// <summary>
+/// What IcyPlay charges under one contract term. Its own request, because a
+/// rate is renegotiated far more often than a term is renewed, and routing it
+/// through a renewal would mean re-attaching the signed agreement to change a
+/// percentage.
+/// </summary>
+public sealed record UpdateContractRatesRequest(
+    decimal PlatformHourlyRate,
+    decimal CommissionPercentage,
+    string? Reason);
+
 /// <summary>Replaces the agreement on a term that already exists.</summary>
 public sealed record ReplaceContractDocumentRequest(
     UploadedFileInput Document,
@@ -110,6 +121,24 @@ public sealed class UpdateFacilityRequestValidator : AbstractValidator<UpdateFac
         RuleFor(x => x.Photos)
             .Must(photos => photos.Count(photo => photo.IsCover) <= 1)
             .WithMessage("Only one photo can be the cover.");
+        RuleFor(x => x.Reason).MaximumLength(500);
+    }
+}
+
+public sealed class UpdateContractRatesRequestValidator
+    : AbstractValidator<UpdateContractRatesRequest>
+{
+    public UpdateContractRatesRequestValidator()
+    {
+        // Zero is allowed on both: a venue onboarded as a favour pays nothing,
+        // and refusing to record that would only push it into a side agreement
+        // nobody can see.
+        RuleFor(x => x.PlatformHourlyRate)
+            .InclusiveBetween(0, 10_000)
+            .WithMessage("The platform rate has to be between 0 and 10,000 pesos an hour.");
+        RuleFor(x => x.CommissionPercentage)
+            .InclusiveBetween(0, 100)
+            .WithMessage("Commission has to be between 0 and 100 per cent.");
         RuleFor(x => x.Reason).MaximumLength(500);
     }
 }

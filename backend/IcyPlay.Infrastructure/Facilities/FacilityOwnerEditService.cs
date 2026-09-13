@@ -299,6 +299,55 @@ public sealed class FacilityOwnerEditService(
         return EditResult.Success();
     }
 
+    public async Task<EditResult> UpdateContractRatesAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        UpdateContractRatesRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        // Scoped to the owner in the same query, so another owner's term is
+        // answered the same way as a missing one.
+        var contract = await db.FacilityOwnerContracts
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == contractId && candidate.FacilityOwnerId == facilityOwnerId,
+                ct);
+
+        if (contract is null)
+        {
+            return EditResult.Fail(EditFailure.NotFound);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = RateSnapshot(contract);
+        contract.SetRates(request.PlatformHourlyRate, request.CommissionPercentage, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.ContractRatesUpdated,
+            AuditEntityType.FacilityOwnerContract,
+            contract.Id,
+            before,
+            RateSnapshot(contract),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Rates on contract {ContractId} were updated by {ActorUserId}.",
+            contract.Id,
+            actor.UserId);
+        return EditResult.Success();
+    }
+
+    private static Dictionary<string, string?> RateSnapshot(FacilityOwnerContract contract) =>
+        new()
+        {
+            ["platformHourlyRate"] =
+                contract.PlatformHourlyRate.ToString("0.00", CultureInfo.InvariantCulture),
+            ["commissionPercentage"] =
+                contract.CommissionPercentage.ToString("0.00", CultureInfo.InvariantCulture)
+        };
+
     public async Task<EditResult> ReplaceContractDocumentAsync(
         Guid facilityOwnerId,
         Guid contractId,

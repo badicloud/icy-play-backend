@@ -90,6 +90,30 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
     }
 
     [Fact]
+    public async Task OnboardAsync_ShouldAcceptAnOwnerWithNoVerificationDocuments()
+    {
+        // Arrange: an owner set up from a phone call, with the permit still to
+        // come. It is attached later from their own page.
+        await using var context = database.CreateContext();
+        var (sut, _) = CreateService(context);
+        var email = UniqueEmail();
+        var request = CreateRequest(email, "Undocumented Courts") with
+        {
+            Documents = []
+        };
+
+        // Act
+        var result = await sut.OnboardAsync(request, Admin(), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            (await context.Users.AnyAsync(user => user.Email == email)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
     public async Task OnboardAsync_ShouldRejectADocumentUrlThatIsNotOnOurOwnCloud()
     {
         // Arrange

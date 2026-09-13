@@ -110,6 +110,35 @@ public sealed class Court : Entity
     /// <summary>Permanent. Maintenance is the temporary one.</summary>
     public bool IsActive { get; private set; } = true;
 
+    /// <summary>
+    /// When the peak rate applies. On the court rather than on each sport,
+    /// because a venue is busy at the same hours whatever is being played on
+    /// it. Null until someone sets a peak rate worth having a window for.
+    /// </summary>
+    public TimeOnly? PeakStartsAt
+    {
+        get; private set;
+    }
+    public TimeOnly? PeakEndsAt
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// Which days the window counts on. Both false means the window is set but
+    /// applies nowhere, which the service refuses rather than storing.
+    /// </summary>
+    public bool PeakOnWeekdays
+    {
+        get; private set;
+    }
+    public bool PeakOnWeekends
+    {
+        get; private set;
+    }
+
+    public bool HasPeakWindow => PeakStartsAt is not null && PeakEndsAt is not null;
+
     public ICollection<CourtSport> Sports { get; private set; } = [];
     public ICollection<CourtOperatingHour> OperatingHours { get; private set; } = [];
 
@@ -128,6 +157,58 @@ public sealed class Court : Entity
         ApplyBookingRules(bookingRules);
         UpdatedAt = now;
     }
+
+    public void SetPeakWindow(
+        TimeOnly? startsAt,
+        TimeOnly? endsAt,
+        bool onWeekdays,
+        bool onWeekends,
+        DateTimeOffset now)
+    {
+        PeakStartsAt = startsAt;
+        PeakEndsAt = endsAt;
+        PeakOnWeekdays = onWeekdays;
+        PeakOnWeekends = onWeekends;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Whether a moment falls inside the peak window. This is what decides
+    /// between a court's standard and peak rate. The window is held inside the
+    /// court's opening hours, which do not run past midnight, so neither does
+    /// this.
+    /// </summary>
+    public bool IsPeakAt(DayOfWeek day, TimeOnly time)
+    {
+        if (PeakStartsAt is not TimeOnly start || PeakEndsAt is not TimeOnly end)
+        {
+            return false;
+        }
+
+        var isWeekend = day is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+        if (isWeekend ? !PeakOnWeekends : !PeakOnWeekdays)
+        {
+            return false;
+        }
+
+        return time >= start && time < end;
+    }
+
+    public static bool IsWeekend(DayOfWeek day) => day is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+    /// <summary>
+    /// What one division is called: the court, the sport it is set up for, and
+    /// which of them it is. Derived rather than stored, so renaming the court
+    /// renames its divisions with it instead of leaving a name that lies.
+    ///
+    /// A court played whole keeps its own name; numbering one of one would
+    /// only invite the question of where the second is.
+    /// </summary>
+    public static string DivisionName(string courtName, string sportName, int number, int divisions) =>
+        divisions <= 1
+            ? courtName
+            : $"{courtName} · {sportName} {number}";
 
     public void SetUsesFacilityHours(bool usesFacilityHours, DateTimeOffset now)
     {

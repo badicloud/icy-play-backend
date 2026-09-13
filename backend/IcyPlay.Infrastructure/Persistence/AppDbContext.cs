@@ -39,6 +39,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
+    public DbSet<Holiday> Holidays => Set<Holiday>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -177,6 +178,11 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.Key).HasMaxLength(100).IsRequired();
             entity.Property(x => x.Name).HasMaxLength(150).IsRequired();
             entity.Property(x => x.Category).HasMaxLength(50).IsRequired();
+            entity.Property(x => x.Kind)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(ActivityKind.Sport);
+            entity.Ignore(x => x.IsEvent);
             entity.HasIndex(x => x.Key).IsUnique();
 
             entity.HasData(
@@ -186,6 +192,7 @@ public sealed class AppDbContext : DbContext
                     Key = "basketball",
                     Name = "Basketball",
                     Category = SportCategory.Court,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 10,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -197,6 +204,7 @@ public sealed class AppDbContext : DbContext
                     Key = "volleyball",
                     Name = "Volleyball",
                     Category = SportCategory.Court,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 20,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -208,6 +216,7 @@ public sealed class AppDbContext : DbContext
                     Key = "futsal",
                     Name = "Futsal",
                     Category = SportCategory.Court,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 30,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -219,6 +228,7 @@ public sealed class AppDbContext : DbContext
                     Key = "sepak-takraw",
                     Name = "Sepak takraw",
                     Category = SportCategory.Court,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 40,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -230,6 +240,7 @@ public sealed class AppDbContext : DbContext
                     Key = "badminton",
                     Name = "Badminton",
                     Category = SportCategory.Racket,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 10,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -241,6 +252,7 @@ public sealed class AppDbContext : DbContext
                     Key = "tennis",
                     Name = "Tennis",
                     Category = SportCategory.Racket,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 20,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -252,6 +264,7 @@ public sealed class AppDbContext : DbContext
                     Key = "table-tennis",
                     Name = "Table tennis",
                     Category = SportCategory.Racket,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 30,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -263,6 +276,7 @@ public sealed class AppDbContext : DbContext
                     Key = "pickleball",
                     Name = "Pickleball",
                     Category = SportCategory.Racket,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 40,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -274,6 +288,7 @@ public sealed class AppDbContext : DbContext
                     Key = "squash",
                     Name = "Squash",
                     Category = SportCategory.Racket,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 50,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -285,6 +300,7 @@ public sealed class AppDbContext : DbContext
                     Key = "boxing",
                     Name = "Boxing",
                     Category = SportCategory.Combat,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 10,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -296,6 +312,7 @@ public sealed class AppDbContext : DbContext
                     Key = "taekwondo",
                     Name = "Taekwondo",
                     Category = SportCategory.Combat,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 20,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -307,6 +324,7 @@ public sealed class AppDbContext : DbContext
                     Key = "karate",
                     Name = "Karate",
                     Category = SportCategory.Combat,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 30,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -318,6 +336,7 @@ public sealed class AppDbContext : DbContext
                     Key = "muay-thai",
                     Name = "Muay Thai",
                     Category = SportCategory.Combat,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 40,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -329,6 +348,7 @@ public sealed class AppDbContext : DbContext
                     Key = "fitness",
                     Name = "Fitness",
                     Category = SportCategory.Other,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 10,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -340,6 +360,7 @@ public sealed class AppDbContext : DbContext
                     Key = "dance",
                     Name = "Dance",
                     Category = SportCategory.Other,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 20,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
@@ -351,16 +372,79 @@ public sealed class AppDbContext : DbContext
                     Key = "yoga",
                     Name = "Yoga",
                     Category = SportCategory.Other,
+                    Kind = ActivityKind.Sport,
                     DisplayOrder = 30,
                     IsActive = true,
                     CreatedAt = SportsSeededAt,
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("1c4f8a2e-5b6d-5c7e-8f90-a1b2c3d4e5f6"),
+                    Key = "birthday-party",
+                    Name = "Birthday party",
+                    Category = SportCategory.Events,
+                    Kind = ActivityKind.Event,
+                    DisplayOrder = 10,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("2d5a9b3f-6c7e-5d8f-9a01-b2c3d4e5f607"),
+                    Key = "corporate-event",
+                    Name = "Corporate event",
+                    Category = SportCategory.Events,
+                    Kind = ActivityKind.Event,
+                    DisplayOrder = 20,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("3e6bac40-7d8f-5e90-ab12-c3d4e5f60718"),
+                    Key = "tournament",
+                    Name = "Tournament",
+                    Category = SportCategory.Events,
+                    Kind = ActivityKind.Event,
+                    DisplayOrder = 30,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("4f7cbd51-8e90-5fa1-bc23-d4e5f6071829"),
+                    Key = "training-clinic",
+                    Name = "Training clinic",
+                    Category = SportCategory.Events,
+                    Kind = ActivityKind.Event,
+                    DisplayOrder = 40,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("5a8dce62-9fa1-50b2-cd34-e5f60718293a"),
+                    Key = "concert-or-show",
+                    Name = "Concert or show",
+                    Category = SportCategory.Events,
+                    Kind = ActivityKind.Event,
+                    DisplayOrder = 50,
+                    IsActive = true,
+                    CreatedAt = SportsSeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
                 });
+
         });
 
         modelBuilder.Entity<Court>(entity =>
         {
             entity.ToTable("Courts");
+            entity.Ignore(x => x.HasPeakWindow);
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.VenueType).HasMaxLength(50).IsRequired();
@@ -381,6 +465,16 @@ public sealed class AppDbContext : DbContext
             entity.ToTable("CourtSports");
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => new { x.CourtId, x.SportId }).IsUnique();
+            // Money, so a fixed scale rather than a float: two decimal places
+            // is what a peso amount is, and rounding drift in a price is the
+            // kind of bug nobody reports until the receipts disagree.
+            entity.Property(x => x.StandardHourlyRate).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PeakHourlyRate).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.WeekendRate).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.HolidayRate).HasColumnType("decimal(10,2)");
+            entity.Ignore(x => x.IsPriced);
+            entity.Ignore(x => x.IsDivided);
+            entity.Property(x => x.Divisions).HasDefaultValue(1);
             entity.HasOne(x => x.Court)
                 .WithMany(x => x.Sports)
                 .HasForeignKey(x => x.CourtId)
@@ -499,6 +593,15 @@ public sealed class AppDbContext : DbContext
         modelBuilder.Entity<FacilityOwnerContract>(entity =>
         {
             entity.ToTable("FacilityOwnerContracts");
+            // Money and a percentage, so a fixed scale rather than a float:
+            // rounding drift in a payout is the kind of bug nobody reports
+            // until the statements disagree.
+            entity.Property(x => x.PlatformHourlyRate)
+                .HasColumnType("decimal(10,2)")
+                .HasDefaultValue(PlatformRates.DefaultHourlyRate);
+            entity.Property(x => x.CommissionPercentage)
+                .HasColumnType("decimal(5,2)")
+                .HasDefaultValue(PlatformRates.DefaultCommissionPercentage);
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Notes).HasMaxLength(1000);
             entity.Property(x => x.DocumentPublicId).HasMaxLength(300);
@@ -555,6 +658,146 @@ public sealed class AppDbContext : DbContext
                 .WithMany(x => x.OperatingHours)
                 .HasForeignKey(x => x.FacilityId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Holiday>(entity =>
+        {
+            entity.ToTable("Holidays");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Kind).HasMaxLength(50).IsRequired();
+            // Serves the date-ordered listing. A repeating holiday cannot be
+            // matched on its stored date at all -- only its month and day count
+            // -- so that comparison is made in memory, which a calendar's worth
+            // of rows can afford.
+            entity.HasIndex(x => x.Date);
+            // The same holiday twice on one date is a duplicate, not a second
+            // holiday; two different ones sharing a date is allowed, and does
+            // happen when a proclamation lands on a regular holiday.
+            entity.HasIndex(x => new { x.Name, x.Date }).IsUnique();
+
+            entity.HasData(
+                new
+                {
+                    Id = Guid.Parse("4f6bd1a7-9b9c-5d3e-8a1f-11a2b3c4d5e6"),
+                    Name = "New Year's Day",
+                    Date = new DateOnly(2026, 1, 1),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("5a7ce2b8-acad-5e4f-9b2a-22b3c4d5e6f7"),
+                    Name = "Araw ng Kagitingan",
+                    Date = new DateOnly(2026, 4, 9),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("6b8df3c9-bdbe-5f50-ac3b-33c4d5e6f708"),
+                    Name = "Labor Day",
+                    Date = new DateOnly(2026, 5, 1),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("7c9e04da-cecf-5061-bd4c-44d5e6f70819"),
+                    Name = "Independence Day",
+                    Date = new DateOnly(2026, 6, 12),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("8daf15eb-dfd0-5172-ce5d-55e6f708192a"),
+                    Name = "Bonifacio Day",
+                    Date = new DateOnly(2026, 11, 30),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("9eb026fc-e0e1-5283-df6e-66f708192a3b"),
+                    Name = "Christmas Day",
+                    Date = new DateOnly(2026, 12, 25),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("afc1370d-f1f2-5394-e07f-7708192a3b4c"),
+                    Name = "Rizal Day",
+                    Date = new DateOnly(2026, 12, 30),
+                    Kind = "Regular",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("b0d2481e-0203-54a5-f180-88192a3b4c5d"),
+                    Name = "Ninoy Aquino Day",
+                    Date = new DateOnly(2026, 8, 21),
+                    Kind = "Special non-working",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("c1e3592f-1314-55b6-0291-992a3b4c5d6e"),
+                    Name = "All Saints' Day",
+                    Date = new DateOnly(2026, 11, 1),
+                    Kind = "Special non-working",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("d2f46a30-2425-56c7-13a2-aa3b4c5d6e7f"),
+                    Name = "Feast of the Immaculate Conception",
+                    Date = new DateOnly(2026, 12, 8),
+                    Kind = "Special non-working",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("e3057b41-3536-57d8-24b3-bb4c5d6e7f80"),
+                    Name = "Last day of the year",
+                    Date = new DateOnly(2026, 12, 31),
+                    Kind = "Special non-working",
+                    RepeatsAnnually = true,
+                    IsActive = true,
+                    CreatedAt = SeededAt,
+                    UpdatedAt = (DateTimeOffset?)null
+                });
         });
 
         modelBuilder.Entity<Amenity>(entity =>

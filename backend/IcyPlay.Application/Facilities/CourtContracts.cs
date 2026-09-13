@@ -27,7 +27,7 @@ public sealed record CourtInput(
     int DisplayOrder,
     string? Description,
     /// <summary>At least one. A court that accommodates no sport cannot be booked.</summary>
-    IReadOnlyCollection<Guid> SportIds,
+    IReadOnlyCollection<CourtSportInput> Sports,
     /// <summary>Must be one of the above: it is what the court is listed as.</summary>
     Guid PrimarySportId,
     string VenueType,
@@ -44,7 +44,35 @@ public sealed record CourtInput(
     IReadOnlyCollection<OperatingHourInput> OperatingHours,
     IReadOnlyCollection<PhotoInput> Photos);
 
+/// <summary>
+/// One sport on a court, and how many playable courts it makes when set up for
+/// it. A full basketball court is three pickleball courts across, and each of
+/// those is booked and paid for on its own.
+/// </summary>
+public sealed record CourtSportInput(Guid SportId, int Divisions);
+
+/// <summary>
+/// How the court is marked out, on its own. Changing a division count is a
+/// small, frequent correction — a floor gets re-marked — and making it go
+/// through the whole court would put every other field at risk to change one
+/// number. Sports left out keep what they had.
+/// </summary>
+public sealed record UpdateCourtDivisionsRequest(
+    IReadOnlyCollection<CourtSportInput> Sports,
+    string? Reason);
+
 public sealed record CreatedCourtResponse(Guid CourtId, Guid FacilityId, string FacilityName);
+
+/// <summary>
+/// Editing answers the court whole, the way the wizard created it: the same
+/// shape in, so a screen that can add a court can also correct one. Whether
+/// the court is active is separate, because taking one off the booking portal
+/// is a decision rather than a detail.
+/// </summary>
+public sealed record UpdateCourtRequest(
+    CourtInput Court,
+    bool IsActive,
+    string? Reason);
 
 /// <summary>
 /// One picture already in Cloudinary. Exactly one per subject carries the cover
@@ -69,6 +97,7 @@ public sealed record CourtListItem(
     Guid Id,
     Guid FacilityId,
     string FacilityName,
+    Guid FacilityOwnerId,
     string Name,
     int DisplayOrder,
     string? Description,
@@ -83,6 +112,11 @@ public sealed record CourtListItem(
     int BufferMinutes,
     bool UsesFacilityHours,
     bool IsActive,
+    /// <summary>When the peak rate applies. Null until a peak rate is set.</summary>
+    TimeOnly? PeakStartsAt,
+    TimeOnly? PeakEndsAt,
+    bool PeakOnWeekdays,
+    bool PeakOnWeekends,
     IReadOnlyCollection<CourtSportItem> Sports,
     IReadOnlyCollection<PhotoItem> Photos,
     IReadOnlyCollection<FacilityOperatingHourDetail> OperatingHours,
@@ -90,7 +124,48 @@ public sealed record CourtListItem(
     MaintenanceStatus? Maintenance,
     DateTimeOffset CreatedAt);
 
-public sealed record CourtSportItem(Guid SportId, string Key, string Name, string Category, bool IsPrimary);
+public sealed record CourtSportItem(
+    Guid SportId,
+    string Key,
+    string Name,
+    string Category,
+    /// <summary>"Sport" or "Event", so a customer looking for a game is not offered a wedding.</summary>
+    string Kind,
+    bool IsPrimary,
+    /// <summary>How many playable courts this one makes for this sport. One means whole.</summary>
+    int Divisions,
+    /// <summary>Null until a price has been set. The other three fall back to it.</summary>
+    decimal? StandardHourlyRate,
+    decimal? PeakHourlyRate,
+    decimal? WeekendRate,
+    decimal? HolidayRate);
+
+/// <summary>
+/// What one sport costs on one court. The console can fill every sport from a
+/// single set of rates, but each is still sent on its own: applying one price
+/// to all of them is a convenience, not a constraint the data should carry.
+/// </summary>
+public sealed record SportPricingInput(
+    Guid SportId,
+    decimal? StandardHourlyRate,
+    decimal? PeakHourlyRate,
+    decimal? WeekendRate,
+    decimal? HolidayRate);
+
+/// <summary>
+/// When the peak rate applies. On the court rather than on each sport, because
+/// a venue is busy at the same hours whatever is being played on it.
+/// </summary>
+public sealed record PeakWindowInput(
+    TimeOnly? StartsAt,
+    TimeOnly? EndsAt,
+    bool OnWeekdays,
+    bool OnWeekends);
+
+public sealed record UpdateCourtPricingRequest(
+    IReadOnlyCollection<SportPricingInput> Sports,
+    PeakWindowInput? PeakWindow,
+    string? Reason);
 
 /// <summary>
 /// Why a court is out of service, and at which level. The level matters: a
@@ -150,14 +225,24 @@ public sealed record SportListItem(
     string Key,
     string Name,
     string Category,
+    /// <summary>"Sport" for something played, "Event" for something held.</summary>
+    string Kind,
     int DisplayOrder,
     bool IsActive,
     /// <summary>How many courts list it, so retiring one is a decision with a number attached.</summary>
     int CourtCount);
 
-public sealed record CreateSportRequest(string Name, string Category, int DisplayOrder);
+public sealed record CreateSportRequest(
+    string Name,
+    string Category,
+    int DisplayOrder,
+    string Kind);
 
-public sealed record UpdateSportRequest(string Name, string Category, int DisplayOrder);
+public sealed record UpdateSportRequest(
+    string Name,
+    string Category,
+    int DisplayOrder,
+    string Kind);
 
 public enum CourtFailure
 {
@@ -175,7 +260,11 @@ public enum CourtFailure
     AlreadyUnderMaintenance,
     MaintenanceNotFound,
     UntrustedPhotoUrl,
-    TooManyCovers
+    TooManyCovers,
+    DuplicateHoliday,
+    HolidayNotFound,
+    PeakWindowOutsideHours,
+    PeakWindowOnClosedDays
 }
 
 public sealed record CourtResult<T>(T? Value, CourtFailure Failure = CourtFailure.None)
@@ -183,6 +272,131 @@ public sealed record CourtResult<T>(T? Value, CourtFailure Failure = CourtFailur
     public bool Succeeded => Failure == CourtFailure.None;
     public static CourtResult<T> Success(T value) => new(value);
     public static CourtResult<T> Fail(CourtFailure failure) => new(default, failure);
+}
+
+public sealed class UpdateCourtDivisionsRequestValidator
+    : AbstractValidator<UpdateCourtDivisionsRequest>
+{
+    public UpdateCourtDivisionsRequestValidator()
+    {
+        RuleFor(x => x.Sports).NotEmpty();
+        RuleForEach(x => x.Sports).SetValidator(new CourtSportInputValidator());
+        RuleFor(x => x.Sports)
+            .Must(sports => sports.Select(sport => sport.SportId).Distinct().Count() == sports.Count)
+            .WithMessage("Each sport can appear only once.");
+        RuleFor(x => x.Reason).MaximumLength(500);
+    }
+}
+
+public sealed class CourtSportInputValidator : AbstractValidator<CourtSportInput>
+{
+    /// <summary>
+    /// High enough for a hall marked out end to end, low enough that a typo
+    /// does not silently create a hundred bookable courts.
+    /// </summary>
+    private const int MaximumDivisions = 12;
+
+    public CourtSportInputValidator()
+    {
+        RuleFor(x => x.Divisions)
+            .InclusiveBetween(1, MaximumDivisions)
+            .WithMessage($"A court divides into between 1 and {MaximumDivisions} courts.");
+    }
+}
+
+public sealed class UpdateCourtPricingRequestValidator : AbstractValidator<UpdateCourtPricingRequest>
+{
+    public UpdateCourtPricingRequestValidator()
+    {
+        RuleForEach(x => x.Sports).SetValidator(new SportPricingInputValidator());
+        RuleFor(x => x.Sports)
+            .Must(sports => sports.Select(sport => sport.SportId).Distinct().Count() == sports.Count)
+            .WithMessage("Each sport can appear only once.");
+        RuleFor(x => x.Reason).MaximumLength(500);
+
+        // A peak rate with no window can never be charged, so the two are
+        // asked for together rather than letting one sit uselessly without
+        // the other.
+        RuleFor(x => x.PeakWindow)
+            .NotNull()
+            .When(x => x.Sports.Any(sport => sport.PeakHourlyRate is not null))
+            .WithMessage("Say when the peak rate applies before setting one.");
+
+        RuleFor(x => x.PeakWindow!)
+            .SetValidator(new PeakWindowInputValidator())
+            .When(x => x.PeakWindow is not null);
+    }
+}
+
+public sealed class PeakWindowInputValidator : AbstractValidator<PeakWindowInput>
+{
+    public PeakWindowInputValidator()
+    {
+        // Either the window is set whole or it is not set at all: half of one
+        // describes no stretch of time.
+        RuleFor(x => x.EndsAt)
+            .NotNull()
+            .When(x => x.StartsAt is not null)
+            .WithMessage("A peak window needs an end time.");
+        RuleFor(x => x.StartsAt)
+            .NotNull()
+            .When(x => x.EndsAt is not null)
+            .WithMessage("A peak window needs a start time.");
+
+        RuleFor(x => x.EndsAt)
+            .Must((window, endsAt) => endsAt > window.StartsAt)
+            .When(x => x.StartsAt is not null && x.EndsAt is not null)
+            .WithMessage("The peak window has to end after it starts.");
+
+        RuleFor(x => x.OnWeekdays)
+            .Must((window, _) => window.OnWeekdays || window.OnWeekends)
+            .When(x => x.StartsAt is not null)
+            .WithMessage("Apply the peak window to weekdays, weekends, or both.");
+    }
+}
+
+public sealed class SportPricingInputValidator : AbstractValidator<SportPricingInput>
+{
+    /// <summary>
+    /// High enough that no real court hits it, low enough that a mistyped rate
+    /// with three extra zeros is caught before it reaches a customer.
+    /// </summary>
+    private const decimal MaximumHourlyRate = 100_000m;
+
+    public SportPricingInputValidator()
+    {
+        RuleFor(x => x.StandardHourlyRate)
+            .InclusiveBetween(0, MaximumHourlyRate)
+            .When(x => x.StandardHourlyRate is not null);
+        RuleFor(x => x.PeakHourlyRate)
+            .InclusiveBetween(0, MaximumHourlyRate)
+            .When(x => x.PeakHourlyRate is not null);
+        RuleFor(x => x.WeekendRate)
+            .InclusiveBetween(0, MaximumHourlyRate)
+            .When(x => x.WeekendRate is not null);
+        RuleFor(x => x.HolidayRate)
+            .InclusiveBetween(0, MaximumHourlyRate)
+            .When(x => x.HolidayRate is not null);
+
+        // A special rate with nothing to be special against would be charged as
+        // the standard one anyway, which is not what typing it meant.
+        RuleFor(x => x.StandardHourlyRate)
+            .NotNull()
+            .When(x =>
+                x.PeakHourlyRate is not null ||
+                x.WeekendRate is not null ||
+                x.HolidayRate is not null)
+            .WithMessage("Set the standard rate before the peak, weekend or holiday one.");
+    }
+}
+
+public sealed class UpdateCourtRequestValidator : AbstractValidator<UpdateCourtRequest>
+{
+    public UpdateCourtRequestValidator()
+    {
+        RuleFor(x => x.Court).NotNull().SetValidator(new CourtInputValidator());
+        RuleFor(x => x.Reason).MaximumLength(500);
+    }
 }
 
 public sealed class CourtInputValidator : AbstractValidator<CourtInput>
@@ -193,12 +407,16 @@ public sealed class CourtInputValidator : AbstractValidator<CourtInput>
         RuleFor(x => x.Description).MaximumLength(1000);
         RuleFor(x => x.DisplayOrder).GreaterThanOrEqualTo(0);
 
-        RuleFor(x => x.SportIds)
+        RuleFor(x => x.Sports)
             .NotEmpty()
             .WithMessage("Pick at least one sport this court can take.");
+        RuleFor(x => x.Sports)
+            .Must(sports => sports.Select(sport => sport.SportId).Distinct().Count() == sports.Count)
+            .WithMessage("Each sport can appear only once.");
         RuleFor(x => x.PrimarySportId)
-            .Must((input, primary) => input.SportIds.Contains(primary))
+            .Must((input, primary) => input.Sports.Any(sport => sport.SportId == primary))
             .WithMessage("The main sport has to be one of the sports selected.");
+        RuleForEach(x => x.Sports).SetValidator(new CourtSportInputValidator());
 
         RuleFor(x => x.VenueType)
             .NotEmpty()
@@ -306,6 +524,10 @@ public sealed class CreateSportRequestValidator : AbstractValidator<CreateSportR
             .Must(SportCategory.IsSupported)
             .WithMessage($"Category must be one of: {string.Join(", ", SportCategory.All)}.");
         RuleFor(x => x.DisplayOrder).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Kind)
+            .NotEmpty()
+            .Must(ActivityKind.IsSupported)
+            .WithMessage("An entry is either a Sport or an Event.");
     }
 }
 
@@ -319,5 +541,9 @@ public sealed class UpdateSportRequestValidator : AbstractValidator<UpdateSportR
             .Must(SportCategory.IsSupported)
             .WithMessage($"Category must be one of: {string.Join(", ", SportCategory.All)}.");
         RuleFor(x => x.DisplayOrder).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Kind)
+            .NotEmpty()
+            .Must(ActivityKind.IsSupported)
+            .WithMessage("An entry is either a Sport or an Event.");
     }
 }

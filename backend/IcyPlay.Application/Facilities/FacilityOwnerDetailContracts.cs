@@ -101,6 +101,10 @@ public sealed record ContractDetail(
     bool IsLiveToday,
     /// <summary>Null on terms commenced before an agreement was required.</summary>
     ContractDocumentDetail? Document,
+    /// <summary>Pesos added to every booked hour, on top of the court's rate.</summary>
+    decimal PlatformHourlyRate,
+    /// <summary>Per cent of each billing kept for maintenance and commission.</summary>
+    decimal CommissionPercentage,
     DateTimeOffset CreatedAt);
 
 public sealed record ContractDocumentDetail(

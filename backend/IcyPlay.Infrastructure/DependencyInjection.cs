@@ -62,6 +62,7 @@ public static class DependencyInjection
         services.AddScoped<IFacilityOwnerEditService, FacilityOwnerEditService>();
         services.AddScoped<ICourtService, CourtService>();
         services.AddScoped<ISportService, SportService>();
+        services.AddScoped<IHolidayService, HolidayService>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");

@@ -15,6 +15,9 @@ namespace IcyPlay.Api.Controllers;
 public sealed class AdminCourtsController(
     ICourtService courts,
     IValidator<CreateCourtRequest> createValidator,
+    IValidator<UpdateCourtRequest> updateValidator,
+    IValidator<UpdateCourtPricingRequest> pricingValidator,
+    IValidator<UpdateCourtDivisionsRequest> divisionsValidator,
     IValidator<SetMaintenanceRequest> maintenanceValidator,
     ILogger<AdminCourtsController> logger) : ControllerBase
 {
@@ -62,6 +65,89 @@ public sealed class AdminCourtsController(
         return Ok(new ApiListEnvelope<FacilityInventoryItem>(
             result.Items,
             new PaginationMeta(result.Page, result.PageSize, result.TotalItems, result.TotalPages)));
+    }
+
+    /// <summary>One court, for the page that views and edits it.</summary>
+    [HttpGet("courts/{courtId:guid}")]
+    public async Task<IActionResult> Get(Guid courtId, CancellationToken ct)
+    {
+        var court = await courts.GetAsync(courtId, ct);
+
+        return court is null
+            ? Failure(CourtFailure.CourtNotFound)
+            : Ok(new ApiEnvelope<CourtListItem>(court));
+    }
+
+    [HttpPut("courts/{courtId:guid}")]
+    public async Task<IActionResult> Update(
+        Guid courtId,
+        UpdateCourtRequest request,
+        CancellationToken ct)
+    {
+        if (await Invalid(updateValidator, request, ct) is IActionResult invalid)
+        {
+            return invalid;
+        }
+
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        var result = await courts.UpdateAsync(courtId, request, actor, ct);
+        return result.Succeeded ? NoContent() : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// How many playable courts each sport makes here. Its own endpoint because
+    /// re-marking a floor is a small, frequent change, and routing it through
+    /// the whole court would put every other field at risk to move one number.
+    /// </summary>
+    [HttpPut("courts/{courtId:guid}/divisions")]
+    public async Task<IActionResult> UpdateDivisions(
+        Guid courtId,
+        UpdateCourtDivisionsRequest request,
+        CancellationToken ct)
+    {
+        if (await Invalid(divisionsValidator, request, ct) is IActionResult invalid)
+        {
+            return invalid;
+        }
+
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        var result = await courts.UpdateDivisionsAsync(courtId, request, actor, ct);
+        return result.Succeeded ? NoContent() : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// What each sport costs on this court. Sports left out keep what they had,
+    /// so the console can send one sport or all of them.
+    /// </summary>
+    [HttpPut("courts/{courtId:guid}/pricing")]
+    public async Task<IActionResult> UpdatePricing(
+        Guid courtId,
+        UpdateCourtPricingRequest request,
+        CancellationToken ct)
+    {
+        if (await Invalid(pricingValidator, request, ct) is IActionResult invalid)
+        {
+            return invalid;
+        }
+
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        var result = await courts.UpdatePricingAsync(courtId, request, actor, ct);
+        return result.Succeeded ? NoContent() : Failure(result.Failure);
     }
 
     [HttpGet("facilities/{facilityId:guid}/courts")]
@@ -160,6 +246,14 @@ public sealed class AdminCourtsController(
                 StatusCodes.Status404NotFound, ErrorCodes.NotFound, "No court with that id."),
             CourtFailure.MaintenanceNotFound => (
                 StatusCodes.Status404NotFound, ErrorCodes.NotFound, "No maintenance period with that id."),
+            CourtFailure.PeakWindowOutsideHours => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "The peak window has to fall inside the hours this court is open."),
+            CourtFailure.PeakWindowOnClosedDays => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "This court is closed on the days that peak window applies to."),
             CourtFailure.UnknownSport => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

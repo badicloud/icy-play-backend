@@ -8,6 +8,21 @@ public sealed class CourtTests
     private static readonly DateTimeOffset Now =
         new(2026, 9, 11, 10, 0, 0, TimeSpan.Zero);
 
+    [Theory]
+    [InlineData(1, "Court 1")]
+    [InlineData(3, "Court 1 \u00b7 Pickleball 2")]
+    public void Should_Number_A_Division_Only_When_The_Court_Is_Actually_Divided(
+        int divisions,
+        string expected)
+    {
+        // Act
+        var name = Court.DivisionName("Court 1", "Pickleball", 2, divisions);
+
+        // Assert: a court played whole keeps its own name. Numbering one of one
+        // only invites the question of where the second one is.
+        name.Should().Be(expected);
+    }
+
     [Fact]
     public void Should_Follow_The_Facility_Hours_Until_Told_Otherwise()
     {

@@ -40,6 +40,17 @@ public interface IFacilityOwnerEditService
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Sets what IcyPlay charges under one term. Its own call, because a rate
+    /// is renegotiated far more often than a term is renewed.
+    /// </summary>
+    Task<EditResult> UpdateContractRatesAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        UpdateContractRatesRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Swaps the signed agreement on a term that already exists. Allowed
     /// because an unreadable or wrong scan is a real mistake, and the swap is
     /// recorded.

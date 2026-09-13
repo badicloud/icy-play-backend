@@ -26,6 +26,7 @@ public sealed class SportService(
                 sport.Key,
                 sport.Name,
                 sport.Category,
+                sport.Kind,
                 sport.DisplayOrder,
                 sport.IsActive,
                 // Retiring one is a decision with a number attached, so the
@@ -53,7 +54,13 @@ public sealed class SportService(
         }
 
         var now = timeProvider.GetUtcNow();
-        var sport = new Sport(key, request.Name, request.Category, request.DisplayOrder, now);
+        var sport = new Sport(
+            key,
+            request.Name,
+            request.Category,
+            request.DisplayOrder,
+            now,
+            request.Kind);
         db.Sports.Add(sport);
 
         audit.RecordEvent(
@@ -89,7 +96,12 @@ public sealed class SportService(
 
         // The key is deliberately left alone. Renaming "Table tennis" to "Ping
         // pong" should not move the address customers filter on.
-        sport.Rename(request.Name, request.Category, request.DisplayOrder, timeProvider.GetUtcNow());
+        sport.Rename(
+            request.Name,
+            request.Category,
+            request.DisplayOrder,
+            timeProvider.GetUtcNow(),
+            request.Kind);
 
         audit.RecordChange(
             actor,

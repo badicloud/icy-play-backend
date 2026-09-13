@@ -160,6 +160,23 @@ public sealed class AdminFacilityOwnersController(
     public Task<IActionResult> RenewContract(Guid id, RenewContractRequest request, CancellationToken ct) =>
         EditAsync(request, actor => edits.RenewContractAsync(id, request, actor, ct), ct);
 
+    /// <summary>
+    /// What IcyPlay charges under one term. Its own endpoint because a rate is
+    /// renegotiated far more often than a term is renewed, and going through a
+    /// renewal would mean re-attaching the signed agreement to move a
+    /// percentage.
+    /// </summary>
+    [HttpPut("{id:guid}/contracts/{contractId:guid}/rates")]
+    public Task<IActionResult> UpdateContractRates(
+        Guid id,
+        Guid contractId,
+        UpdateContractRatesRequest request,
+        CancellationToken ct) =>
+        EditAsync(
+            request,
+            actor => edits.UpdateContractRatesAsync(id, contractId, request, actor, ct),
+            ct);
+
     [HttpPut("{id:guid}/contracts/{contractId:guid}/document")]
     public Task<IActionResult> ReplaceContractDocument(
         Guid id,

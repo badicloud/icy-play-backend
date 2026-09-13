@@ -22,6 +22,39 @@ public interface ICourtService
         FacilityInventoryQuery query,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// One court, read the same way the list reads it, so the detail page and
+    /// the list can never disagree about what closes a court.
+    /// </summary>
+    Task<CourtListItem?> GetAsync(Guid courtId, CancellationToken cancellationToken);
+
+    /// <summary>Corrects a court that already exists. All or nothing.</summary>
+    Task<CourtResult<bool>> UpdateAsync(
+        Guid courtId,
+        UpdateCourtRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sets how many playable courts each sport makes here. Sports left out of
+    /// the request keep what they had.
+    /// </summary>
+    Task<CourtResult<bool>> UpdateDivisionsAsync(
+        Guid courtId,
+        UpdateCourtDivisionsRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sets what each sport costs on one court. Sports left out of the request
+    /// keep whatever they already had.
+    /// </summary>
+    Task<CourtResult<bool>> UpdatePricingAsync(
+        Guid courtId,
+        UpdateCourtPricingRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
     /// <summary>Every court in a facility, in display order, with what closes it.</summary>
     Task<IReadOnlyCollection<CourtListItem>> ListAsync(
         Guid facilityId,

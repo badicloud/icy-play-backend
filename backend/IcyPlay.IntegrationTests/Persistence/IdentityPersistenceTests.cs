@@ -36,6 +36,7 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "FacilityAmenities",
             "Amenities",
             "Sports",
+            "Holidays",
             "Courts",
             "CourtSports",
             "CourtOperatingHours",

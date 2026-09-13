@@ -87,6 +87,71 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task UpdateContractRatesAsync_ShouldOverrideThePlatformStandard()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Negotiated Courts");
+        var contractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        // Act
+        var result = await sut.UpdateContractRatesAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractRatesRequest(25.00m, 5.00m, "Renegotiated at renewal"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var contract = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == contractId);
+        var entry = await LatestAsync(context, AuditAction.ContractRatesUpdated);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            contract.PlatformHourlyRate.Should().Be(25.00m);
+            contract.CommissionPercentage.Should().Be(5.00m);
+            Fields(entry.OldValuesJson)["platformHourlyRate"].Should().Be("15.00");
+            entry.Reason.Should().Be("Renegotiated at renewal");
+        }
+    }
+
+    [Fact]
+    public async Task UpdateContractRatesAsync_ShouldRefuseATermBelongingToAnotherOwner()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (first, sut) = await OnboardAsync(context, "First Rates Courts");
+        var (second, _) = await OnboardAsync(context, "Second Rates Courts");
+        var otherContractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == second.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        // Act
+        var result = await sut.UpdateContractRatesAsync(
+            first.FacilityOwnerId,
+            otherContractId,
+            new UpdateContractRatesRequest(1.00m, 99.00m, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: answered the same way as a missing one, so the endpoint
+        // cannot be used to find out which ids exist.
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(EditFailure.NotFound);
+            (await context.FacilityOwnerContracts.AsNoTracking()
+                    .SingleAsync(candidate => candidate.Id == otherContractId))
+                .CommissionPercentage.Should().Be(3.00m);
+        }
+    }
+
+    [Fact]
     public async Task UpdateFacilityAsync_ShouldKeepTheSlugWhenTheNameChanges()
     {
         // Arrange

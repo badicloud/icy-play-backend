@@ -14,12 +14,19 @@ public sealed class Sport : Entity
     {
     }
 
-    public Sport(string key, string name, string category, int displayOrder, DateTimeOffset createdAt)
+    public Sport(
+        string key,
+        string name,
+        string category,
+        int displayOrder,
+        DateTimeOffset createdAt,
+        string? kind = null)
     {
         Key = key.Trim().ToLowerInvariant();
         Name = name.Trim();
         Category = category.Trim();
         DisplayOrder = displayOrder;
+        Kind = (kind ?? ActivityKind.Sport).Trim();
         CreatedAt = createdAt;
     }
 
@@ -38,11 +45,26 @@ public sealed class Sport : Entity
     }
     public bool IsActive { get; private set; } = true;
 
-    public void Rename(string name, string category, int displayOrder, DateTimeOffset now)
+    /// <summary>
+    /// Whether this is something played or something held. A court hosting a
+    /// birthday party is not accommodating a sport, and a customer browsing for
+    /// a game should not be offered one.
+    /// </summary>
+    public string Kind { get; private set; } = ActivityKind.Sport;
+
+    public bool IsEvent => Kind == ActivityKind.Event;
+
+    public void Rename(
+        string name,
+        string category,
+        int displayOrder,
+        DateTimeOffset now,
+        string? kind = null)
     {
         Name = name.Trim();
         Category = category.Trim();
         DisplayOrder = displayOrder;
+        Kind = (kind ?? Kind).Trim();
         UpdatedAt = now;
     }
 
@@ -72,9 +94,28 @@ public static class SportCategory
     public const string Court = "Court sports";
     public const string Racket = "Racket sports";
     public const string Combat = "Combat";
+    /// <summary>For the things a court is hired for rather than played at.</summary>
+    public const string Events = "Events";
     public const string Other = "Other";
 
-    public static readonly IReadOnlyCollection<string> All = [Court, Racket, Combat, Other];
+    public static readonly IReadOnlyCollection<string> All = [Court, Racket, Combat, Events, Other];
+
+    public static bool IsSupported(string value) => All.Contains(value);
+}
+
+/// <summary>
+/// A court is booked for two different kinds of thing: a game, and an occasion
+/// that simply needs the floor. They are priced and divided the same way, so
+/// they share a table — but a customer looking for a game must not be offered a
+/// wedding, which is why the difference is recorded rather than inferred from
+/// the category.
+/// </summary>
+public static class ActivityKind
+{
+    public const string Sport = "Sport";
+    public const string Event = "Event";
+
+    public static readonly IReadOnlyCollection<string> All = [Sport, Event];
 
     public static bool IsSupported(string value) => All.Contains(value);
 }

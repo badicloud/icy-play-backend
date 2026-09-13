@@ -16,12 +16,6 @@ public sealed class OnboardFacilityOwnerRequestValidator : AbstractValidator<Onb
         RuleForEach(x => x.Documents).SetValidator(new OwnerDocumentInputValidator());
         RuleForEach(x => x.OperatingHours).SetValidator(new OperatingHourInputValidator());
 
-        // A facility owner encoded without proof of who they are is the exact
-        // thing admin-led onboarding exists to prevent.
-        RuleFor(x => x.Documents)
-            .NotEmpty()
-            .WithMessage("Attach at least one verification document.");
-
         RuleFor(x => x.OperatingHours)
             .Must(hours => hours.Select(hour => hour.DayOfWeek).Distinct().Count() == hours.Count)
             .WithMessage("Each day of the week can appear only once.");

@@ -340,6 +340,8 @@ public sealed class FacilityOwnerOnboardingService(
                         contract.DocumentFileName,
                         contract.DocumentContentType,
                         contract.DocumentSizeInBytes,
+                        contract.PlatformHourlyRate,
+                        contract.CommissionPercentage,
                         contract.CreatedAt
                     })
                     .ToList()
@@ -415,6 +417,8 @@ public sealed class FacilityOwnerOnboardingService(
                         contract.DocumentFileName!,
                         contract.DocumentContentType!,
                         contract.DocumentSizeInBytes ?? 0),
+                contract.PlatformHourlyRate,
+                contract.CommissionPercentage,
                 contract.CreatedAt))],
             new InvitationStatus(
                 latestInvitation?.AcceptedAt is not null,

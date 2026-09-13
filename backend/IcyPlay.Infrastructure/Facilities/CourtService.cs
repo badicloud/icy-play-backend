@@ -33,7 +33,12 @@ public sealed class CourtService(
             return CourtResult<CreatedCourtResponse>.Fail(CourtFailure.FacilityOwnerNotFound);
         }
 
-        var sportIds = request.Court.SportIds.Distinct().ToArray();
+        var courtSports = request.Court.Sports
+            .GroupBy(sport => sport.SportId)
+            .Select(group => group.First())
+            .ToArray();
+        var sportIds = courtSports.Select(sport => sport.SportId).ToArray();
+
         var knownSports = await db.Sports
             .CountAsync(sport => sportIds.Contains(sport.Id) && sport.IsActive, ct);
 
@@ -109,12 +114,13 @@ public sealed class CourtService(
         court.SetUsesFacilityHours(request.Court.UsesFacilityHours, now);
         db.Courts.Add(court);
 
-        foreach (var sportId in sportIds)
+        foreach (var sport in courtSports)
         {
             db.CourtSports.Add(new CourtSport(
                 court.Id,
-                sportId,
-                sportId == request.Court.PrimarySportId,
+                sport.SportId,
+                sport.SportId == request.Court.PrimarySportId,
+                sport.Divisions,
                 now));
         }
 
@@ -290,6 +296,512 @@ public sealed class CourtService(
         return new PagedResult<FacilityInventoryItem>([.. items], page, pageSize, totalItems);
     }
 
+    public async Task<CourtListItem?> GetAsync(Guid courtId, CancellationToken ct)
+    {
+        var facilityId = await db.Courts
+            .AsNoTracking()
+            .Where(court => court.Id == courtId)
+            .Select(court => (Guid?)court.FacilityId)
+            .SingleOrDefaultAsync(ct);
+
+        if (facilityId is null)
+        {
+            return null;
+        }
+
+        // Read through the list rather than repeating its hour resolution and
+        // its two levels of maintenance. A facility holds a handful of courts,
+        // and a detail page that can disagree with the list it came from is a
+        // worse problem than a few extra rows read.
+        var courts = await ListAsync(facilityId.Value, ct);
+        return courts.SingleOrDefault(court => court.Id == courtId);
+    }
+
+    public async Task<CourtResult<bool>> UpdateAsync(
+        Guid courtId,
+        UpdateCourtRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var court = await db.Courts
+            .Include(candidate => candidate.Sports)
+            .Include(candidate => candidate.OperatingHours)
+            .SingleOrDefaultAsync(candidate => candidate.Id == courtId, ct);
+
+        if (court is null)
+        {
+            return CourtResult<bool>.Fail(CourtFailure.CourtNotFound);
+        }
+
+        var input = request.Court;
+        var courtSports = input.Sports
+            .GroupBy(sport => sport.SportId)
+            .Select(group => group.First())
+            .ToArray();
+        var sportIds = courtSports.Select(sport => sport.SportId).ToArray();
+
+        if (!sportIds.Contains(input.PrimarySportId))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.PrimarySportNotSelected);
+        }
+
+        var knownSports = await db.Sports
+            .CountAsync(sport => sportIds.Contains(sport.Id) && sport.IsActive, ct);
+        if (knownSports != sportIds.Length)
+        {
+            return CourtResult<bool>.Fail(CourtFailure.UnknownSport);
+        }
+
+        // Posted by the browser, so never taken on trust.
+        if (input.Photos.Any(photo => !assets.IsTrustedSecureUrl(photo.SecureUrl)))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.UntrustedPhotoUrl);
+        }
+
+        if (input.Photos.Count(photo => photo.IsCover) > 1)
+        {
+            return CourtResult<bool>.Fail(CourtFailure.TooManyCovers);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = CourtSnapshot(court);
+
+        court.UpdateDetails(
+            input.Name,
+            input.DisplayOrder,
+            input.Description,
+            new CourtSpace(
+                input.VenueType,
+                input.Surface,
+                input.HasLighting,
+                input.SizeLabel,
+                input.Capacity,
+                input.Equipment),
+            new CourtBookingRules(
+                input.SlotLengthMinutes,
+                input.MinimumDurationMinutes,
+                input.BufferMinutes),
+            now);
+
+        if (request.IsActive != court.IsActive)
+        {
+            if (request.IsActive)
+            {
+                court.Reactivate(now);
+            }
+            else
+            {
+                court.Deactivate(now);
+            }
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            before,
+            CourtSnapshot(court),
+            request.Reason);
+
+        var sportsBefore = SportSnapshot(court);
+        ReplaceSports(court, courtSports, input.PrimarySportId, now);
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtSportsUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            sportsBefore,
+            SportSnapshot(court),
+            request.Reason);
+
+        var hoursBefore = HoursSnapshot(court);
+        ApplyOwnHours(court, input, now);
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtHoursUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            hoursBefore,
+            HoursSnapshot(court),
+            request.Reason);
+
+        var photosBefore = await PhotoSnapshotAsync(court.Id, ct);
+        await PhotoGallery.ReplaceAsync(db, court.FacilityId, court.Id, input.Photos, now, ct);
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtPhotosUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            photosBefore,
+            PhotoGallery.Snapshot(input.Photos),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Court {CourtId} was updated by {ActorUserId}.", court.Id, actor.UserId);
+        return CourtResult<bool>.Success(true);
+    }
+
+    public async Task<CourtResult<bool>> UpdateDivisionsAsync(
+        Guid courtId,
+        UpdateCourtDivisionsRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var court = await db.Courts
+            .Include(candidate => candidate.Sports)
+            .SingleOrDefaultAsync(candidate => candidate.Id == courtId, ct);
+
+        if (court is null)
+        {
+            return CourtResult<bool>.Fail(CourtFailure.CourtNotFound);
+        }
+
+        // Dividing a sport this court does not take would sit in the table
+        // unreachable, and quietly become wrong when the sport is added later.
+        if (request.Sports.Any(input => court.Sports.All(link => link.SportId != input.SportId)))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.UnknownSport);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = SportSnapshot(court);
+
+        foreach (var input in request.Sports)
+        {
+            court.Sports
+                .Single(candidate => candidate.SportId == input.SportId)
+                .SetDivisions(input.Divisions, now);
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtDivisionsUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            before,
+            SportSnapshot(court),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Divisions on court {CourtId} were updated by {ActorUserId}.",
+            court.Id,
+            actor.UserId);
+        return CourtResult<bool>.Success(true);
+    }
+
+    public async Task<CourtResult<bool>> UpdatePricingAsync(
+        Guid courtId,
+        UpdateCourtPricingRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var court = await db.Courts
+            .Include(candidate => candidate.Sports)
+            .Include(candidate => candidate.OperatingHours)
+            .SingleOrDefaultAsync(candidate => candidate.Id == courtId, ct);
+
+        if (court is null)
+        {
+            return CourtResult<bool>.Fail(CourtFailure.CourtNotFound);
+        }
+
+        // A price for a sport this court does not take would sit in the table
+        // unreachable, and quietly become wrong when the sport is added later.
+        if (request.Sports.Any(input => court.Sports.All(link => link.SportId != input.SportId)))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.UnknownSport);
+        }
+
+        if (request.PeakWindow is { StartsAt: not null, EndsAt: not null } proposed)
+        {
+            var fit = await PeakWindowFitsHoursAsync(court, proposed, ct);
+            if (fit != CourtFailure.None)
+            {
+                return CourtResult<bool>.Fail(fit);
+            }
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = PricingSnapshot(court);
+        var beforeWindow = PeakWindowSnapshot(court);
+
+        foreach (var input in request.Sports)
+        {
+            var link = court.Sports.Single(candidate => candidate.SportId == input.SportId);
+            link.SetPricing(
+                input.StandardHourlyRate,
+                input.PeakHourlyRate,
+                input.WeekendRate,
+                input.HolidayRate,
+                now);
+        }
+
+        if (request.PeakWindow is PeakWindowInput window)
+        {
+            court.SetPeakWindow(window.StartsAt, window.EndsAt, window.OnWeekdays, window.OnWeekends, now);
+        }
+
+        // A window nobody is charged for is clutter that will read as a live
+        // rule the next time someone opens the screen.
+        if (court.Sports.All(link => link.PeakHourlyRate is null))
+        {
+            court.SetPeakWindow(null, null, false, false, now);
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.CourtPricingUpdated,
+            AuditEntityType.Court,
+            court.Id,
+            Merge(before, beforeWindow),
+            Merge(PricingSnapshot(court), PeakWindowSnapshot(court)),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Pricing on court {CourtId} was updated by {ActorUserId}.",
+            court.Id,
+            actor.UserId);
+        return CourtResult<bool>.Success(true);
+    }
+
+    private static Dictionary<string, string?> Merge(
+        Dictionary<string, string?> first,
+        Dictionary<string, string?> second)
+    {
+        var merged = new Dictionary<string, string?>(first);
+
+        foreach (var pair in second)
+        {
+            merged[pair.Key] = pair.Value;
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// One line per sport, so the audit diff names the sport whose price moved
+    /// rather than reporting that "pricing" changed.
+    /// </summary>
+    private static Dictionary<string, string?> PricingSnapshot(Court court) =>
+        court.Sports
+            .OrderBy(link => link.SportId)
+            .ToDictionary(
+                link => link.SportId.ToString(),
+                link => link.StandardHourlyRate is null
+                    ? null
+                    : string.Join(
+                        "/",
+                        Money(link.StandardHourlyRate),
+                        Money(link.PeakHourlyRate),
+                        Money(link.WeekendRate),
+                        Money(link.HolidayRate)));
+
+    /// <summary>
+    /// Whether the proposed peak window sits inside the hours this court is
+    /// actually open on the days it applies to. A window running past closing
+    /// time prices hours nobody can book, which reads as a rule and behaves as
+    /// nothing.
+    /// </summary>
+    private async Task<CourtFailure> PeakWindowFitsHoursAsync(
+        Court court,
+        PeakWindowInput window,
+        CancellationToken ct)
+    {
+        var hours = court.UsesFacilityHours
+            ? await db.FacilityOperatingHours
+                .AsNoTracking()
+                .Where(hour => hour.FacilityId == court.FacilityId)
+                .Select(hour => new { hour.DayOfWeek, hour.OpensAt, hour.ClosesAt })
+                .ToArrayAsync(ct)
+            : [.. court.OperatingHours.Select(hour => new { hour.DayOfWeek, hour.OpensAt, hour.ClosesAt })];
+
+        var applicable = hours
+            .Where(hour =>
+                Court.IsWeekend(hour.DayOfWeek) ? window.OnWeekends : window.OnWeekdays)
+            .Where(hour => hour.OpensAt is not null && hour.ClosesAt is not null)
+            .ToArray();
+
+        if (applicable.Length == 0)
+        {
+            return CourtFailure.PeakWindowOnClosedDays;
+        }
+
+        // Measured against the narrowest of the days it covers: a window that
+        // fits Monday but overruns an early Saturday close is wrong on the
+        // Saturday, and saying so is more use than silently applying it.
+        var latestOpen = applicable.Max(hour => hour.OpensAt!.Value);
+        var earliestClose = applicable.Min(hour => hour.ClosesAt!.Value);
+
+        return window.StartsAt >= latestOpen && window.EndsAt <= earliestClose
+            ? CourtFailure.None
+            : CourtFailure.PeakWindowOutsideHours;
+    }
+
+    private static Dictionary<string, string?> PeakWindowSnapshot(Court court) =>
+        new()
+        {
+            ["peakWindow"] = court.HasPeakWindow
+                ? FormattableString.Invariant($"{court.PeakStartsAt}-{court.PeakEndsAt}")
+                : null,
+            ["peakDays"] = court.HasPeakWindow
+                ? string.Join(
+                    " and ",
+                    new[]
+                    {
+                        court.PeakOnWeekdays ? "weekdays" : null,
+                        court.PeakOnWeekends ? "weekends" : null
+                    }.Where(part => part is not null))
+                : null
+        };
+
+    private static string Money(decimal? amount) =>
+        amount?.ToString("0.00", CultureInfo.InvariantCulture) ?? "-";
+
+    /// <summary>
+    /// Keeps the links that survive rather than deleting and re-adding them:
+    /// the row carries its own id, and churning it would throw away when a
+    /// sport was first put on this court.
+    /// </summary>
+    private void ReplaceSports(
+        Court court,
+        IReadOnlyCollection<CourtSportInput> sports,
+        Guid primarySportId,
+        DateTimeOffset now)
+    {
+        var sportIds = sports.Select(sport => sport.SportId).ToArray();
+
+        foreach (var dropped in court.Sports.Where(link => !sportIds.Contains(link.SportId)).ToArray())
+        {
+            db.CourtSports.Remove(dropped);
+            court.Sports.Remove(dropped);
+        }
+
+        foreach (var sport in sports)
+        {
+            var existing = court.Sports.FirstOrDefault(link => link.SportId == sport.SportId);
+
+            if (existing is null)
+            {
+                // Through the set, because a client-generated key added only to
+                // a tracked navigation is read by EF as a row that already exists.
+                db.CourtSports.Add(new CourtSport(
+                    court.Id,
+                    sport.SportId,
+                    sport.SportId == primarySportId,
+                    sport.Divisions,
+                    now));
+            }
+            else
+            {
+                existing.SetPrimary(sport.SportId == primarySportId, now);
+                existing.SetDivisions(sport.Divisions, now);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Hours are set in place. A court keeps one row per day under a unique
+    /// index, so deleting and re-inserting them collides with itself inside the
+    /// same transaction.
+    /// </summary>
+    private void ApplyOwnHours(Court court, CourtInput input, DateTimeOffset now)
+    {
+        court.SetUsesFacilityHours(input.UsesFacilityHours, now);
+
+        if (input.UsesFacilityHours)
+        {
+            // The rows are left where they are: a court that goes back to
+            // keeping its own hours should find them as it left them.
+            return;
+        }
+
+        foreach (var hour in input.OperatingHours)
+        {
+            var existing = court.OperatingHours.FirstOrDefault(row => row.DayOfWeek == hour.DayOfWeek);
+
+            if (existing is null)
+            {
+                db.CourtOperatingHours.Add(new CourtOperatingHour(
+                    court.Id,
+                    hour.DayOfWeek,
+                    hour.OpensAt,
+                    hour.ClosesAt,
+                    now));
+            }
+            else
+            {
+                existing.SetHours(hour.OpensAt, hour.ClosesAt, now);
+            }
+        }
+    }
+
+    private static Dictionary<string, string?> CourtSnapshot(Court court) =>
+        new()
+        {
+            ["name"] = court.Name,
+            ["displayOrder"] = court.DisplayOrder.ToString(CultureInfo.InvariantCulture),
+            ["description"] = court.Description,
+            ["venueType"] = court.VenueType,
+            ["surface"] = court.Surface,
+            ["hasLighting"] = court.HasLighting.ToString(),
+            ["sizeLabel"] = court.SizeLabel,
+            ["capacity"] = court.Capacity?.ToString(CultureInfo.InvariantCulture),
+            ["equipment"] = court.Equipment,
+            ["slotLengthMinutes"] = court.SlotLengthMinutes.ToString(CultureInfo.InvariantCulture),
+            ["minimumDurationMinutes"] = court.MinimumDurationMinutes.ToString(CultureInfo.InvariantCulture),
+            ["bufferMinutes"] = court.BufferMinutes.ToString(CultureInfo.InvariantCulture),
+            ["isActive"] = court.IsActive.ToString()
+        };
+
+    private static Dictionary<string, string?> SportSnapshot(Court court) =>
+        new()
+        {
+            ["sportIds"] = string.Join(
+                ",",
+                court.Sports.Select(link => link.SportId.ToString()).OrderBy(id => id)),
+            ["primarySportId"] = court.Sports
+                .FirstOrDefault(link => link.IsPrimary)?.SportId.ToString(),
+            ["divisions"] = string.Join(
+                ",",
+                court.Sports
+                    .OrderBy(link => link.SportId)
+                    .Select(link => FormattableString.Invariant($"{link.SportId}:{link.Divisions}")))
+        };
+
+    private static Dictionary<string, string?> HoursSnapshot(Court court) =>
+        new()
+        {
+            ["usesFacilityHours"] = court.UsesFacilityHours.ToString(),
+            ["hours"] = court.UsesFacilityHours
+                ? null
+                : string.Join(
+                    ",",
+                    court.OperatingHours
+                        .OrderBy(hour => hour.DayOfWeek)
+                        .Select(hour => hour.IsClosed
+                            ? FormattableString.Invariant($"{hour.DayOfWeek}:closed")
+                            : FormattableString.Invariant(
+                                $"{hour.DayOfWeek}:{hour.OpensAt}-{hour.ClosesAt}")))
+        };
+
+    private async Task<Dictionary<string, string?>> PhotoSnapshotAsync(Guid courtId, CancellationToken ct)
+    {
+        var photos = await db.Photos
+            .AsNoTracking()
+            .Where(photo => photo.CourtId == courtId)
+            .Select(photo => new { photo.PublicId, photo.IsCover })
+            .ToListAsync(ct);
+
+        return new Dictionary<string, string?>
+        {
+            ["photos"] = photos.Count.ToString(CultureInfo.InvariantCulture),
+            ["cover"] = photos.FirstOrDefault(photo => photo.IsCover)?.PublicId
+        };
+    }
+
     public async Task<IReadOnlyCollection<CourtListItem>> ListAsync(Guid facilityId, CancellationToken ct)
     {
         var now = timeProvider.GetUtcNow();
@@ -304,6 +816,7 @@ public sealed class CourtService(
                 court.Id,
                 court.FacilityId,
                 FacilityName = court.Facility.Name,
+                court.FacilityOwnerId,
                 court.Name,
                 court.DisplayOrder,
                 court.Description,
@@ -318,6 +831,10 @@ public sealed class CourtService(
                 court.BufferMinutes,
                 court.UsesFacilityHours,
                 court.IsActive,
+                court.PeakStartsAt,
+                court.PeakEndsAt,
+                court.PeakOnWeekdays,
+                court.PeakOnWeekends,
                 court.CreatedAt,
                 Photos = db.Photos
                     .Where(photo => photo.CourtId == court.Id)
@@ -340,7 +857,13 @@ public sealed class CourtService(
                         link.Sport.Key,
                         link.Sport.Name,
                         link.Sport.Category,
-                        link.IsPrimary))
+                        link.Sport.Kind,
+                        link.IsPrimary,
+                        link.Divisions,
+                        link.StandardHourlyRate,
+                        link.PeakHourlyRate,
+                        link.WeekendRate,
+                        link.HolidayRate))
                     .ToList(),
                 OwnHours = court.OperatingHours
                     .OrderBy(hour => hour.DayOfWeek)
@@ -402,6 +925,7 @@ public sealed class CourtService(
                     court.Id,
                     court.FacilityId,
                     court.FacilityName,
+                    court.FacilityOwnerId,
                     court.Name,
                     court.DisplayOrder,
                     court.Description,
@@ -416,6 +940,10 @@ public sealed class CourtService(
                     court.BufferMinutes,
                     court.UsesFacilityHours,
                     court.IsActive,
+                    court.PeakStartsAt,
+                    court.PeakEndsAt,
+                    court.PeakOnWeekdays,
+                    court.PeakOnWeekends,
                     court.Sports,
                     court.Photos,
                     court.UsesFacilityHours ? facilityHours : court.OwnHours,

@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260913121424_AddCourtSportPricing")]
+    partial class AddCourtSportPricing
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -414,18 +417,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
-                    b.Property<TimeOnly?>("PeakEndsAt")
-                        .HasColumnType("time");
-
-                    b.Property<bool>("PeakOnWeekdays")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("PeakOnWeekends")
-                        .HasColumnType("bit");
-
-                    b.Property<TimeOnly?>("PeakStartsAt")
-                        .HasColumnType("time");
-
                     b.Property<string>("SizeLabel")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
@@ -500,11 +491,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("Divisions")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(1);
 
                     b.Property<decimal?>("HolidayRate")
                         .HasColumnType("decimal(10,2)");
@@ -705,11 +691,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("CommencedByUserId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<decimal>("CommissionPercentage")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(5,2)")
-                        .HasDefaultValue(3.00m);
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -741,11 +722,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<string>("Notes")
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
-
-                    b.Property<decimal>("PlatformHourlyRate")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(10,2)")
-                        .HasDefaultValue(15.00m);
 
                     b.Property<DateOnly>("StartDate")
                         .HasColumnType("date");
@@ -808,159 +784,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("FacilityOwnerId", "DocumentType");
 
                     b.ToTable("FacilityOwnerDocuments", "dbo");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Facilities.Holiday", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateOnly>("Date")
-                        .HasColumnType("date");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<bool>("RepeatsAnnually")
-                        .HasColumnType("bit");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Date");
-
-                    b.HasIndex("Name", "Date")
-                        .IsUnique();
-
-                    b.ToTable("Holidays", "dbo");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("4f6bd1a7-9b9c-5d3e-8a1f-11a2b3c4d5e6"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 1, 1),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "New Year's Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("5a7ce2b8-acad-5e4f-9b2a-22b3c4d5e6f7"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 4, 9),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Araw ng Kagitingan",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("6b8df3c9-bdbe-5f50-ac3b-33c4d5e6f708"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 5, 1),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Labor Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("7c9e04da-cecf-5061-bd4c-44d5e6f70819"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 6, 12),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Independence Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("8daf15eb-dfd0-5172-ce5d-55e6f708192a"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 11, 30),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Bonifacio Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("9eb026fc-e0e1-5283-df6e-66f708192a3b"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 12, 25),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Christmas Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("afc1370d-f1f2-5394-e07f-7708192a3b4c"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 12, 30),
-                            IsActive = true,
-                            Kind = "Regular",
-                            Name = "Rizal Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("b0d2481e-0203-54a5-f180-88192a3b4c5d"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 8, 21),
-                            IsActive = true,
-                            Kind = "Special non-working",
-                            Name = "Ninoy Aquino Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("c1e3592f-1314-55b6-0291-992a3b4c5d6e"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 11, 1),
-                            IsActive = true,
-                            Kind = "Special non-working",
-                            Name = "All Saints' Day",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("d2f46a30-2425-56c7-13a2-aa3b4c5d6e7f"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 12, 8),
-                            IsActive = true,
-                            Kind = "Special non-working",
-                            Name = "Feast of the Immaculate Conception",
-                            RepeatsAnnually = true
-                        },
-                        new
-                        {
-                            Id = new Guid("e3057b41-3536-57d8-24b3-bb4c5d6e7f80"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 8, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            Date = new DateOnly(2026, 12, 31),
-                            IsActive = true,
-                            Kind = "Special non-working",
-                            Name = "Last day of the year",
-                            RepeatsAnnually = true
-                        });
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Facilities.MaintenancePeriod", b =>
@@ -1079,13 +902,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("Sport");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(150)
@@ -1110,7 +926,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 10,
                             IsActive = true,
                             Key = "basketball",
-                            Kind = "Sport",
                             Name = "Basketball"
                         },
                         new
@@ -1121,7 +936,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 20,
                             IsActive = true,
                             Key = "volleyball",
-                            Kind = "Sport",
                             Name = "Volleyball"
                         },
                         new
@@ -1132,7 +946,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 30,
                             IsActive = true,
                             Key = "futsal",
-                            Kind = "Sport",
                             Name = "Futsal"
                         },
                         new
@@ -1143,7 +956,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 40,
                             IsActive = true,
                             Key = "sepak-takraw",
-                            Kind = "Sport",
                             Name = "Sepak takraw"
                         },
                         new
@@ -1154,7 +966,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 10,
                             IsActive = true,
                             Key = "badminton",
-                            Kind = "Sport",
                             Name = "Badminton"
                         },
                         new
@@ -1165,7 +976,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 20,
                             IsActive = true,
                             Key = "tennis",
-                            Kind = "Sport",
                             Name = "Tennis"
                         },
                         new
@@ -1176,7 +986,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 30,
                             IsActive = true,
                             Key = "table-tennis",
-                            Kind = "Sport",
                             Name = "Table tennis"
                         },
                         new
@@ -1187,7 +996,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 40,
                             IsActive = true,
                             Key = "pickleball",
-                            Kind = "Sport",
                             Name = "Pickleball"
                         },
                         new
@@ -1198,7 +1006,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 50,
                             IsActive = true,
                             Key = "squash",
-                            Kind = "Sport",
                             Name = "Squash"
                         },
                         new
@@ -1209,7 +1016,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 10,
                             IsActive = true,
                             Key = "boxing",
-                            Kind = "Sport",
                             Name = "Boxing"
                         },
                         new
@@ -1220,7 +1026,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 20,
                             IsActive = true,
                             Key = "taekwondo",
-                            Kind = "Sport",
                             Name = "Taekwondo"
                         },
                         new
@@ -1231,7 +1036,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 30,
                             IsActive = true,
                             Key = "karate",
-                            Kind = "Sport",
                             Name = "Karate"
                         },
                         new
@@ -1242,7 +1046,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 40,
                             IsActive = true,
                             Key = "muay-thai",
-                            Kind = "Sport",
                             Name = "Muay Thai"
                         },
                         new
@@ -1253,7 +1056,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 10,
                             IsActive = true,
                             Key = "fitness",
-                            Kind = "Sport",
                             Name = "Fitness"
                         },
                         new
@@ -1264,7 +1066,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 20,
                             IsActive = true,
                             Key = "dance",
-                            Kind = "Sport",
                             Name = "Dance"
                         },
                         new
@@ -1275,63 +1076,7 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             DisplayOrder = 30,
                             IsActive = true,
                             Key = "yoga",
-                            Kind = "Sport",
                             Name = "Yoga"
-                        },
-                        new
-                        {
-                            Id = new Guid("1c4f8a2e-5b6d-5c7e-8f90-a1b2c3d4e5f6"),
-                            Category = "Events",
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 11, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayOrder = 10,
-                            IsActive = true,
-                            Key = "birthday-party",
-                            Kind = "Event",
-                            Name = "Birthday party"
-                        },
-                        new
-                        {
-                            Id = new Guid("2d5a9b3f-6c7e-5d8f-9a01-b2c3d4e5f607"),
-                            Category = "Events",
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 11, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayOrder = 20,
-                            IsActive = true,
-                            Key = "corporate-event",
-                            Kind = "Event",
-                            Name = "Corporate event"
-                        },
-                        new
-                        {
-                            Id = new Guid("3e6bac40-7d8f-5e90-ab12-c3d4e5f60718"),
-                            Category = "Events",
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 11, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayOrder = 30,
-                            IsActive = true,
-                            Key = "tournament",
-                            Kind = "Event",
-                            Name = "Tournament"
-                        },
-                        new
-                        {
-                            Id = new Guid("4f7cbd51-8e90-5fa1-bc23-d4e5f6071829"),
-                            Category = "Events",
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 11, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayOrder = 40,
-                            IsActive = true,
-                            Key = "training-clinic",
-                            Kind = "Event",
-                            Name = "Training clinic"
-                        },
-                        new
-                        {
-                            Id = new Guid("5a8dce62-9fa1-50b2-cd34-e5f60718293a"),
-                            Category = "Events",
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 11, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            DisplayOrder = 50,
-                            IsActive = true,
-                            Key = "concert-or-show",
-                            Kind = "Event",
-                            Name = "Concert or show"
                         });
                 });
 
