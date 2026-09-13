@@ -220,6 +220,37 @@ public sealed record FacilityInventoryQuery(
     int Page = 1,
     int PageSize = 20);
 
+/// <summary>
+/// One court, read across the whole platform rather than through its facility.
+/// An admin correcting a court should not have to remember which venue it is in
+/// to find it.
+/// </summary>
+public sealed record CourtInventoryItem(
+    Guid Id,
+    string Name,
+    int DisplayOrder,
+    bool IsActive,
+    Guid FacilityId,
+    string FacilityName,
+    Guid FacilityOwnerId,
+    string BusinessName,
+    string City,
+    string Province,
+    string VenueType,
+    string? CoverPhotoUrl,
+    IReadOnlyCollection<CourtSportItem> Sports,
+    /// <summary>Every division of every sport: what a customer could actually book here.</summary>
+    int BookableUnits,
+    /// <summary>Null when nothing is closed. Carries which level closed it.</summary>
+    MaintenanceStatus? Maintenance);
+
+public sealed record CourtInventoryQuery(
+    string? Search = null,
+    Guid? FacilityOwnerId = null,
+    Guid? FacilityId = null,
+    int Page = 1,
+    int PageSize = 20);
+
 public sealed record SportListItem(
     Guid Id,
     string Key,

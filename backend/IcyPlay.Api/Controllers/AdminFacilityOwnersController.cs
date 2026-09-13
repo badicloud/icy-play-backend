@@ -161,6 +161,22 @@ public sealed class AdminFacilityOwnersController(
         EditAsync(request, actor => edits.RenewContractAsync(id, request, actor, ct), ct);
 
     /// <summary>
+    /// Corrects the dates of a term. A start date typed wrong leaves an owner
+    /// invisible to customers until it comes round, and the only way to see
+    /// that is to be able to look at it.
+    /// </summary>
+    [HttpPut("{id:guid}/contracts/{contractId:guid}")]
+    public Task<IActionResult> UpdateContractTerm(
+        Guid id,
+        Guid contractId,
+        UpdateContractTermRequest request,
+        CancellationToken ct) =>
+        EditAsync(
+            request,
+            actor => edits.UpdateContractTermAsync(id, contractId, request, actor, ct),
+            ct);
+
+    /// <summary>
     /// What IcyPlay charges under one term. Its own endpoint because a rate is
     /// renegotiated far more often than a term is renewed, and going through a
     /// renewal would mean re-attaching the signed agreement to move a

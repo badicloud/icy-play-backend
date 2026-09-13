@@ -279,8 +279,56 @@ Do not include:
 
 ---
 
+## Maintenance and Commission
+
+Added after this document was first written, and not anticipated by it.
+
+Alongside the per-hour platform rate, each contract term carries a
+**commission percentage**. It is taken out of the platform bill, not added on
+top of it, and not taken from what the Customer paid.
+
+```text
+50 hours booked in the period
+50 × 15.00           = 750.00    billed to the Facility Owner
+3% of 750.00         =  22.50    maintenance and commission
+                        ──────
+the rest of the bill   727.50
+```
+
+Both figures live on the contract term rather than on the Facility Owner, so a
+renegotiation does not rewrite what was agreed for terms already served.
+
+```text
+FacilityOwnerContracts.PlatformHourlyRate      decimal(10,2)  default 15.00
+FacilityOwnerContracts.CommissionPercentage    decimal(5,2)   default  3.00
+```
+
+Zero is allowed on both. A venue onboarded as a favour pays nothing, and
+refusing to record that would only push it into a side agreement nobody can see.
+
+Platform-wide defaults are constants in the domain (`PlatformRates`), not a
+settings table. Overriding one owner's terms and changing the figure for
+everybody are different features, and only the first has been asked for.
+
+### What is implemented
+
+`FacilityOwnerContract.ChargesFor(bookedHours)` produces the bill and the
+commission from the term's rates.
+
+**Nothing yet totals booked hours into a period or produces an invoice.** The
+rates and the arithmetic exist; the bookings to count do not. The customer-side
+half of this document — Customer paying court rental plus platform fee at
+booking time — belongs to Phase 5 and is also not built.
+
+See [courts-and-pricing.md](courts-and-pricing.md) for the court-side rates that
+sit on the other side of this.
+
+---
+
 ## Related Documents
 
+* `courts-and-pricing.md`
+* `web-app.md`
 * `business-model.md`
 * `payment-workflow.md`
 * `billing-workflow.md`

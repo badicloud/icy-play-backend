@@ -40,6 +40,18 @@ public interface IFacilityOwnerEditService
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Corrects the dates and notes of a term. Refused on a cancelled one:
+    /// cancelling is what ends a term, and moving the dates of an ended one
+    /// says nothing about what was agreed.
+    /// </summary>
+    Task<EditResult> UpdateContractTermAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        UpdateContractTermRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Sets what IcyPlay charges under one term. Its own call, because a rate
     /// is renegotiated far more often than a term is renewed.
     /// </summary>

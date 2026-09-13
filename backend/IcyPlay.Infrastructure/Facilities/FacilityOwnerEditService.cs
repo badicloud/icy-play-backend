@@ -13,6 +13,7 @@ namespace IcyPlay.Infrastructure.Facilities;
 public sealed class FacilityOwnerEditService(
     AppDbContext db,
     IAuditLogger audit,
+    IActivityCatalog catalog,
     ICloudinaryAssetService assets,
     TimeProvider timeProvider,
     ILogger<FacilityOwnerEditService> logger) : IFacilityOwnerEditService
@@ -49,6 +50,7 @@ public sealed class FacilityOwnerEditService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         return EditResult.Success();
     }
 
@@ -299,6 +301,73 @@ public sealed class FacilityOwnerEditService(
         return EditResult.Success();
     }
 
+    public async Task<EditResult> UpdateContractTermAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        UpdateContractTermRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var owner = await db.FacilityOwners
+            .Include(candidate => candidate.Contracts)
+            .SingleOrDefaultAsync(candidate => candidate.Id == facilityOwnerId, ct);
+
+        var contract = owner?.Contracts.FirstOrDefault(candidate => candidate.Id == contractId);
+
+        if (contract is null)
+        {
+            return EditResult.Fail(EditFailure.NotFound);
+        }
+
+        if (contract.CancelledAt is not null)
+        {
+            return EditResult.Fail(EditFailure.AlreadyCancelled);
+        }
+
+        // The same rule renewal uses: two live terms covering one day cannot
+        // both be the one fees are calculated against. This term is left out of
+        // the comparison, or it would overlap itself.
+        var overlaps = owner!.Contracts.Any(candidate =>
+            candidate.Id != contractId &&
+            candidate.CancelledAt is null &&
+            candidate.StartDate <= request.EndDate &&
+            request.StartDate <= candidate.EndDate);
+
+        if (overlaps)
+        {
+            return EditResult.Fail(EditFailure.OverlappingContract);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = TermSnapshot(contract);
+        contract.Reschedule(request.StartDate, request.EndDate, request.Notes, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.ContractTermUpdated,
+            AuditEntityType.FacilityOwnerContract,
+            contract.Id,
+            before,
+            TermSnapshot(contract),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
+        logger.LogInformation(
+            "Contract {ContractId} was rescheduled by {ActorUserId}.",
+            contract.Id,
+            actor.UserId);
+        return EditResult.Success();
+    }
+
+    private static Dictionary<string, string?> TermSnapshot(FacilityOwnerContract contract) =>
+        new()
+        {
+            ["startDate"] = contract.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["endDate"] = contract.EndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            ["notes"] = contract.Notes
+        };
+
     public async Task<EditResult> UpdateContractRatesAsync(
         Guid facilityOwnerId,
         Guid contractId,
@@ -435,6 +504,7 @@ public sealed class FacilityOwnerEditService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         logger.LogInformation("Contract {ContractId} was cancelled by {ActorUserId}.", contractId, actor.UserId);
         return EditResult.Success();
     }

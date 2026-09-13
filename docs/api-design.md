@@ -1025,6 +1025,214 @@ Business rules:
 
 ---
 
+## Catalogue Endpoints
+
+Anonymous. The landing page is the first thing a visitor sees, and asking them
+to sign in to find out whether anyone plays badminton nearby would be the wrong
+way round.
+
+Both are cached for ten minutes on the server and sent with
+`Cache-Control: public, max-age=60`. The server's copy is cleared on every write
+that could change the answer: creating or updating a court, changing divisions,
+setting or lifting maintenance, any sport lookup change, and renewing,
+rescheduling or cancelling a contract.
+
+Maintenance is on that list even though the activity list ignores it, because
+the **court list carries it**. A reopened court that still reads as closed turns
+customers away from a court that is free.
+
+### List activities
+
+```http
+GET /api/v1/catalog/activities
+```
+
+The sports and events that have a court **actually configured** for them, with
+counts. An activity appears only when it has an active court, in an active
+facility, whose owner has a contract covering today.
+
+Maintenance is deliberately not counted: it is temporary, and dropping a sport
+because one venue is resurfacing would hide every other venue that has it.
+
+A filter that returns nothing is worse than one that was never offered.
+
+```json
+{
+  "data": [
+    {
+      "id": "…",
+      "key": "pickleball",
+      "name": "Pickleball",
+      "category": "Racket sports",
+      "kind": "Sport",
+      "courtCount": 3,
+      "facilityCount": 1
+    }
+  ]
+}
+```
+
+`courtCount` counts every division separately: a floor marked out three ways is
+three courts to book.
+
+### List courts
+
+```http
+GET /api/v1/catalog/courts?sport=pickleball
+```
+
+Every bookable court, or those for one sport. Omit `sport` for everything on
+offer — a visitor should see what is available before being asked to choose.
+
+A divided floor is returned **part by part**, one row per division, each
+carrying the sport it is for. A court set up for three sports appears three
+times at three prices, so the sport has to be on the row or the rows read as
+duplicates.
+
+Each row carries the court and division name, the venue and its address and
+coordinates, the cover photo, the four rates, the peak window, and whether it is
+under maintenance at either level.
+
+### Read one court
+
+```http
+GET /api/v1/catalog/courts/{courtId}?sport=pickleball&division=2
+```
+
+One bookable court, whole: the court, the venue around it, and what it costs.
+The sport and division identify **which offering is meant**, because a court set
+up for three sports is three of them at three prices.
+
+Returns `404` when the court is not on offer for that sport, or the division
+does not exist — a typed URL cannot invent a court.
+
+The response carries the court's own gallery, the venue's gallery, amenities,
+house rules, safety measures, contact details, and the opening hours already
+resolved from whichever level the court follows.
+
+**One read, not five.** A page assembled from five calls shows five different
+moments, and the detail is read through the same listing that produced the card,
+so the two can never disagree about the same court.
+
+---
+
+## Admin Court Endpoints
+
+### List courts
+
+```http
+GET /api/v1/admin/courts?search=&facilityOwnerId=&facilityId=&page=1&pageSize=20
+```
+
+Every court on the platform. An admin correcting one should not have to remember
+which venue it is in to find it. The search matches the court, the facility or
+the business name.
+
+### Create a court
+
+```http
+POST /api/v1/admin/courts
+```
+
+The whole wizard in one call. The facility is either one the owner already has
+or is created here alongside the court, and either way it is a single
+transaction — an abandoned wizard leaves nothing half-built.
+
+### Read and update a court
+
+```http
+GET /api/v1/admin/courts/{courtId}
+PUT /api/v1/admin/courts/{courtId}
+```
+
+`GET` reads through the same projection the facility's court list uses, so the
+detail page and the list can never disagree about what closes a court.
+
+`PUT` answers the court whole — the sports, the hours and the gallery interlock,
+and saving them separately would let a court sit in a state none of the screens
+meant.
+
+### Divisions and pricing
+
+```http
+PUT /api/v1/admin/courts/{courtId}/divisions
+PUT /api/v1/admin/courts/{courtId}/pricing
+```
+
+Each has its own endpoint. Re-marking a floor and renegotiating a rate are
+small, frequent changes, and routing either through the whole court would put
+every other field at risk to move one number.
+
+Sports left out of either request keep what they had.
+
+`pricing` also carries the court's peak window. A peak rate cannot be set
+without one, the window must fall inside the court's opening hours, and it is
+cleared when no sport charges a peak rate.
+
+### Maintenance
+
+```http
+POST /api/v1/admin/facilities/{facilityId}/maintenance
+POST /api/v1/admin/courts/{courtId}/maintenance
+POST /api/v1/admin/maintenance/{periodId}/lift
+```
+
+Two levels. A facility closure closes every court in it and cannot be lifted
+from a court, which the response says rather than leaving the admin looking for
+a button that is not there.
+
+---
+
+## Admin Lookup Endpoints
+
+```http
+GET    /api/v1/admin/sports?includeRetired=false
+POST   /api/v1/admin/sports
+PUT    /api/v1/admin/sports/{id}
+POST   /api/v1/admin/sports/{id}/retire
+POST   /api/v1/admin/sports/{id}/reinstate
+```
+
+Holds events as well as sports, told apart by `kind`.
+
+```http
+GET    /api/v1/admin/holidays?includeRetired=false
+POST   /api/v1/admin/holidays
+PUT    /api/v1/admin/holidays/{id}
+POST   /api/v1/admin/holidays/{id}/retire
+POST   /api/v1/admin/holidays/{id}/reinstate
+```
+
+Retired rather than deleted in both cases: courts reference a sport, and a
+booking priced as a holiday needs the day that made it one to still be there
+when the receipt is questioned.
+
+---
+
+## Contract Endpoints
+
+```http
+POST /api/v1/admin/facility-owners/{id}/contracts
+PUT  /api/v1/admin/facility-owners/{id}/contracts/{contractId}
+PUT  /api/v1/admin/facility-owners/{id}/contracts/{contractId}/rates
+PUT  /api/v1/admin/facility-owners/{id}/contracts/{contractId}/document
+POST /api/v1/admin/facility-owners/{id}/contracts/{contractId}/cancel
+```
+
+Contracts are renewed, never rewritten: last year's term has to stay readable
+beside this year's, and platform fees hang off a specific one.
+
+The dates can be corrected. A start date typed wrong leaves an owner invisible
+to customers until it comes round, which looks like a broken listing rather than
+a mistyped date. Two live terms may not overlap, and a cancelled term cannot be
+rescheduled — cancelling is what ends a term.
+
+`rates` sets the platform hourly rate and the commission percentage for that
+term. See [platform-fee-strategy.md](platform-fee-strategy.md) for the
+arithmetic.
+
+---
+
 ## Public Discovery Endpoints
 
 ### Search Facilities

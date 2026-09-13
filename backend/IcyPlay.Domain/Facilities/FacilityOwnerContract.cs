@@ -134,6 +134,24 @@ public sealed class FacilityOwnerContract : Entity
     } =
         PlatformRates.DefaultCommissionPercentage;
 
+    /// <summary>
+    /// Corrects the dates and the notes of a term. A start date typed wrong is
+    /// an ordinary mistake, and a term that can never be corrected is worse
+    /// than one that records the correction.
+    /// </summary>
+    public void Reschedule(DateOnly startDate, DateOnly endDate, string? notes, DateTimeOffset now)
+    {
+        if (endDate < startDate)
+        {
+            throw new ArgumentException("A contract cannot end before it starts.", nameof(endDate));
+        }
+
+        StartDate = startDate;
+        EndDate = endDate;
+        Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
+        UpdatedAt = now;
+    }
+
     public void SetRates(decimal platformHourlyRate, decimal commissionPercentage, DateTimeOffset now)
     {
         PlatformHourlyRate = platformHourlyRate;

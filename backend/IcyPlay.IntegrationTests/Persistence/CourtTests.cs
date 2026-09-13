@@ -9,6 +9,7 @@ using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -438,8 +439,12 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
 
     private const string CloudName = "icyplay-test";
 
-    private static CourtService CreateService(AppDbContext context) => new(
+    private static CourtService CreateService(AppDbContext context) =>
+        CreateService(context, CreateCatalog(context));
+
+    private static CourtService CreateService(AppDbContext context, IActivityCatalog catalog) => new(
         context,
+        catalog,
         new AuditLogger(context, new FixedTimeProvider(Now)),
         new CloudinaryAssetService(
             Options.Create(new CloudinaryOptions
@@ -1336,6 +1341,520 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             court!.Sports.Single().Kind.Should().Be(ActivityKind.Event);
             court.Sports.Single().Divisions.Should().Be(1);
         }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldOfferOnlyWhatHasACourtConfigured()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+
+        await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Catalogued Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var offered = await catalog.ListAsync(CancellationToken.None);
+
+        // Assert: a filter that returns nothing is worse than one never offered,
+        // so only what somebody can actually book appears.
+        using (new AssertionScope())
+        {
+            offered.Should().Contain(activity => activity.Id == sports[0]);
+            offered.Should().OnlyContain(activity => activity.CourtCount > 0);
+            var seededWithNoCourt = await context.Sports
+                .Where(sport => sport.Key == "squash")
+                .Select(sport => sport.Id)
+                .SingleAsync();
+            offered.Should().NotContain(activity => activity.Id == seededWithNoCourt);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldCountEachDivisionAsACourtToBook()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+
+        var before = (await catalog.ListAsync(CancellationToken.None))
+            .FirstOrDefault(activity => activity.Id == sports[0])?.CourtCount ?? 0;
+
+        await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Divided Catalogue Courts"), sportIds: sports) with
+            {
+                Court = Court(sports, divisions: 3)
+            },
+            Admin(),
+            CancellationToken.None);
+        catalog.Invalidate();
+
+        // Act
+        var offered = await catalog.ListAsync(CancellationToken.None);
+
+        // Assert: a floor marked out into three is three courts to book, and
+        // saying "one" would undersell the venue.
+        offered.Single(activity => activity.Id == sports[0]).CourtCount
+            .Should().Be(before + 3);
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldServeTheSameAnswerUntilItIsCleared()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+
+        var before = await catalog.ListAsync(CancellationToken.None);
+
+        await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Uncached Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: this catalogue was never told, so it still holds the old answer.
+        var stillCached = await catalog.ListAsync(CancellationToken.None);
+        catalog.Invalidate();
+        var afterClearing = await catalog.ListAsync(CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            stillCached.Should().BeEquivalentTo(before);
+            afterClearing.Should().Contain(activity => activity.Id == sports[0]);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldListEveryPartOfADividedCourtSeparately()
+    {
+        // Arrange: one floor, marked out three ways for this sport.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Sliced Listing Courts"), sportIds: sports) with
+            {
+                Court = Court(sports, divisions: 3) with
+                {
+                    Name = "Hall A"
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var listed = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var parts = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
+
+        // Assert: three games can run at once, so a customer is offered three
+        // courts rather than one.
+        using (new AssertionScope())
+        {
+            parts.Should().HaveCount(3);
+            parts.Select(court => court.DivisionNumber).Should().BeEquivalentTo([1, 2, 3]);
+            parts.Select(court => court.Name).Should().OnlyHaveUniqueItems();
+            parts.Should().OnlyContain(court => court.FacilityName == "Sliced Listing Courts");
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldListACourtPlayedWholeUnderItsOwnName()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Whole Listing Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Name = "Main Court"
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var listed = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var court = listed.Single(candidate => candidate.CourtId == created.Value!.CourtId);
+
+        // Assert: numbering one of one only invites the question of where the
+        // second is.
+        using (new AssertionScope())
+        {
+            court.Name.Should().Be("Main Court");
+            court.DivisionNumber.Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldListACourtOncePerSportItIsSetUpFor()
+    {
+        // Arrange: one floor, three sports, and the middle one marked out twice.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 3);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Many Sports Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Sports =
+                    [
+                        new CourtSportInput(sports[0], 1),
+                        new CourtSportInput(sports[1], 2),
+                        new CourtSportInput(sports[2], 1)
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act: nothing named, so everything on offer.
+        var listed = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var mine = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
+
+        // Assert: one offering per sport, and the divided one twice. Each is
+        // priced on its own, so the sport has to be on the row or they read as
+        // duplicates.
+        using (new AssertionScope())
+        {
+            mine.Should().HaveCount(4);
+            mine.Select(court => court.SportKey).Distinct().Should().HaveCount(3);
+            mine.Should().OnlyContain(court => court.SportName.Length > 0);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldOfferNoCourtsForASportNobodyHasSetUp()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+
+        // Act
+        var listed = await catalog.ListCourtsAsync("squash", CancellationToken.None);
+
+        // Assert: the page can say so plainly rather than showing an empty grid.
+        listed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListInventoryAsync_ShouldNarrowToOneFacilityWithoutLosingTheRest()
+    {
+        // Arrange: one owner, two venues, a court in each.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+
+        var first = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Inventory Venue One"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+        var second = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Inventory Venue Two"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var everything = await sut.ListInventoryAsync(
+            new CourtInventoryQuery(FacilityOwnerId: owner, PageSize: 100),
+            CancellationToken.None);
+        var justOne = await sut.ListInventoryAsync(
+            new CourtInventoryQuery(FacilityId: first.Value!.FacilityId, PageSize: 100),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            everything.Items.Should().HaveCount(2);
+            everything.Items.Should().OnlyContain(court => court.FacilityOwnerId == owner);
+            justOne.Items.Should().ContainSingle()
+                .Which.FacilityId.Should().Be(first.Value.FacilityId);
+            justOne.Items.Should().NotContain(court => court.Id == second.Value!.CourtId);
+        }
+    }
+
+    [Fact]
+    public async Task ListInventoryAsync_ShouldCountEveryDivisionAsSomethingToBook()
+    {
+        // Arrange: one floor, two sports, the second marked out three ways.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 2);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Counted Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Sports =
+                    [
+                        new CourtSportInput(sports[0], 1),
+                        new CourtSportInput(sports[1], 3)
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var listed = await sut.ListInventoryAsync(
+            new CourtInventoryQuery(FacilityId: created.Value!.FacilityId),
+            CancellationToken.None);
+
+        // Assert: saying "one court" would undersell what the venue can take.
+        listed.Items.Single().BookableUnits.Should().Be(4);
+    }
+
+    [Fact]
+    public async Task ListInventoryAsync_ShouldFindACourtByTheVenueItIsIn()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var name = $"Searchable Venue {Guid.NewGuid():N}";
+
+        await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility(name), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: an admin types the venue, not the court.
+        var found = await sut.ListInventoryAsync(
+            new CourtInventoryQuery(Search: name),
+            CancellationToken.None);
+
+        // Assert
+        found.Items.Should().ContainSingle().Which.FacilityName.Should().Be(name);
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldReadOneCourtWithTheVenueAroundIt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Detailed Venue"), sportIds: sports) with
+            {
+                Court = Court(sports, divisions: 2)
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var detail = await catalog.GetCourtAsync(
+            created.Value!.CourtId,
+            sportKey,
+            2,
+            CancellationToken.None);
+
+        // Assert: one read, because a page assembled from five calls shows five
+        // different moments.
+        using (new AssertionScope())
+        {
+            detail.Should().NotBeNull();
+            detail!.Court.DivisionNumber.Should().Be(2);
+            detail.Court.FacilityName.Should().Be("Detailed Venue");
+            detail.Venue.HouseRules.Should().Be("No street shoes on the court.");
+            detail.Venue.SafetyMeasures.Should().Be("First aid kit on site.");
+            // Seven days, resolved from whichever level the court follows.
+            detail.Venue.OperatingHours.Should().HaveCount(7);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldNotReadADivisionThatDoesNotExist()
+    {
+        // Arrange: a court played whole, so there is no second part.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Whole Detail Venue"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var detail = await catalog.GetCourtAsync(
+            created.Value!.CourtId,
+            sportKey,
+            2,
+            CancellationToken.None);
+
+        // Assert: a typed URL cannot invent a court.
+        detail.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldShowACourtReopeningAsSoonAsMaintenanceIsLifted()
+    {
+        // Arrange: a court, closed, and read while it is closed so there is a
+        // cached answer to go stale.
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+        var sut = CreateService(context, catalog);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Reopening Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        var closure = await sut.SetCourtMaintenanceAsync(
+            created.Value!.CourtId,
+            new SetMaintenanceRequest(Now.AddHours(-1), null, "Resurfacing"),
+            Admin(),
+            CancellationToken.None);
+
+        var whileShut = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+
+        // Act
+        await sut.LiftMaintenanceAsync(closure.Value, Admin(), CancellationToken.None);
+        var afterLifting = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+
+        // Assert: a reopened court still reading as shut turns customers away
+        // from a court that is free.
+        using (new AssertionScope())
+        {
+            whileShut.Single(court => court.CourtId == created.Value.CourtId)
+                .IsUnderMaintenance.Should().BeTrue();
+            afterLifting.Single(court => court.CourtId == created.Value.CourtId)
+                .IsUnderMaintenance.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldShowAClosureAsSoonAsItIsSet()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+        var sut = CreateService(context, catalog);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var sportKey = await context.Sports
+            .Where(sport => sport.Id == sports[0])
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Closing Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        var whileOpen = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+
+        // Act: the whole venue is shut, which takes every court in it down.
+        await sut.SetFacilityMaintenanceAsync(
+            created.Value!.FacilityId,
+            new SetMaintenanceRequest(Now.AddHours(-1), Now.AddDays(3), "Storm damage"),
+            Admin(),
+            CancellationToken.None);
+
+        var afterClosing = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+
+        // Assert: the other way round is worse — a booking taken for a court
+        // nobody can get into.
+        var court = afterClosing.Single(candidate => candidate.CourtId == created.Value.CourtId);
+
+        using (new AssertionScope())
+        {
+            whileOpen.Single(candidate => candidate.CourtId == created.Value.CourtId)
+                .IsUnderMaintenance.Should().BeFalse();
+            court.IsUnderMaintenance.Should().BeTrue();
+            court.WholeVenueClosed.Should().BeTrue();
+            court.MaintenanceEndsAt.Should().Be(Now.AddDays(3));
+        }
+    }
+
+    private static ActivityCatalog CreateCatalog(AppDbContext context) =>
+        new(
+            context,
+            new MemoryCache(new MemoryCacheOptions()),
+            new CatalogCacheSignal(),
+            new FixedTimeProvider(Now));
+
+    /// <summary>
+    /// A term covering today. The public catalogue only offers owners who are
+    /// live, so a court test that wants to appear in it needs one.
+    /// </summary>
+    private static async Task AddLiveContractAsync(AppDbContext context, Guid ownerId)
+    {
+        var today = DateOnly.FromDateTime(Now.UtcDateTime);
+        context.FacilityOwnerContracts.Add(new FacilityOwnerContract(
+            ownerId,
+            today.AddMonths(-1),
+            today.AddMonths(11),
+            Guid.NewGuid(),
+            null,
+            Now));
+        await context.SaveChangesAsync();
     }
 
     private static AuditActor Admin() => new(Guid.NewGuid(), UserRoleName.PlatformAdmin);

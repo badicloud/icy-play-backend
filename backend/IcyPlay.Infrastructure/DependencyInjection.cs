@@ -63,6 +63,10 @@ public static class DependencyInjection
         services.AddScoped<ICourtService, CourtService>();
         services.AddScoped<ISportService, SportService>();
         services.AddScoped<IHolidayService, HolidayService>();
+        services.AddMemoryCache();
+        // One signal outlives the requests that clear it.
+        services.AddSingleton<CatalogCacheSignal>();
+        services.AddScoped<IActivityCatalog, ActivityCatalog>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");

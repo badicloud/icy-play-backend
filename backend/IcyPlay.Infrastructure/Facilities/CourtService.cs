@@ -14,6 +14,7 @@ namespace IcyPlay.Infrastructure.Facilities;
 
 public sealed class CourtService(
     AppDbContext db,
+    IActivityCatalog catalog,
     IAuditLogger audit,
     ICloudinaryAssetService assets,
     TimeProvider timeProvider,
@@ -167,6 +168,7 @@ public sealed class CourtService(
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
+        catalog.Invalidate();
         logger.LogInformation("Court {CourtId} was created by {ActorUserId}.", court.Id, actor.UserId);
         return CourtResult<CreatedCourtResponse>.Success(
             new CreatedCourtResponse(court.Id, facility.Id, facility.Name));
@@ -294,6 +296,125 @@ public sealed class CourtService(
         });
 
         return new PagedResult<FacilityInventoryItem>([.. items], page, pageSize, totalItems);
+    }
+
+    public async Task<PagedResult<CourtInventoryItem>> ListInventoryAsync(
+        CourtInventoryQuery query,
+        CancellationToken ct)
+    {
+        var now = timeProvider.GetUtcNow();
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize <= 0 ? 20 : query.PageSize, 1, 100);
+
+        var courts = db.Courts.AsNoTracking();
+
+        if (query.FacilityOwnerId is Guid ownerId)
+        {
+            courts = courts.Where(court => court.FacilityOwnerId == ownerId);
+        }
+
+        if (query.FacilityId is Guid facilityId)
+        {
+            courts = courts.Where(court => court.FacilityId == facilityId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var search = query.Search.Trim();
+            // The three names an admin would actually type: the court, the
+            // venue it is in, or the business that owns it.
+            courts = courts.Where(court =>
+                EF.Functions.Like(court.Name, $"%{search}%") ||
+                EF.Functions.Like(court.Facility.Name, $"%{search}%") ||
+                EF.Functions.Like(court.Facility.FacilityOwner.BusinessName, $"%{search}%"));
+        }
+
+        var totalItems = await courts.CountAsync(ct);
+
+        var rows = await courts
+            .OrderBy(court => court.Facility.Name)
+            .ThenBy(court => court.DisplayOrder)
+            .ThenBy(court => court.Name)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(court => new
+            {
+                court.Id,
+                court.Name,
+                court.DisplayOrder,
+                court.IsActive,
+                court.FacilityId,
+                FacilityName = court.Facility.Name,
+                court.FacilityOwnerId,
+                BusinessName = court.Facility.FacilityOwner.BusinessName,
+                court.Facility.City,
+                court.Facility.Province,
+                court.VenueType,
+                CoverPhotoUrl = db.Photos
+                    .Where(photo => photo.CourtId == court.Id && photo.IsCover)
+                    .Select(photo => photo.SecureUrl)
+                    .FirstOrDefault(),
+                Sports = court.Sports
+                    .OrderByDescending(link => link.IsPrimary)
+                    .ThenBy(link => link.Sport.Name)
+                    .Select(link => new CourtSportItem(
+                        link.SportId,
+                        link.Sport.Key,
+                        link.Sport.Name,
+                        link.Sport.Category,
+                        link.Sport.Kind,
+                        link.IsPrimary,
+                        link.Divisions,
+                        link.StandardHourlyRate,
+                        link.PeakHourlyRate,
+                        link.WeekendRate,
+                        link.HolidayRate))
+                    .ToList(),
+                // A court marked out three ways for one sport is three things to
+                // book, and saying "one court" would undersell the venue.
+                BookableUnits = court.Sports.Sum(link => link.Divisions),
+                Closure = db.MaintenancePeriods
+                    .Where(period =>
+                        period.LiftedAt == null &&
+                        period.StartsAt <= now &&
+                        (period.EndsAt == null || now < period.EndsAt) &&
+                        (period.CourtId == court.Id ||
+                            (period.CourtId == null && period.FacilityId == court.FacilityId)))
+                    // The facility closure wins when both apply: it is the one
+                    // that cannot be lifted from the court.
+                    .OrderBy(period => period.CourtId == null ? 0 : 1)
+                    .Select(period => new MaintenanceStatus(
+                        period.Id,
+                        period.CourtId == null,
+                        period.Reason,
+                        period.StartsAt,
+                        period.EndsAt))
+                    .FirstOrDefault()
+            })
+            .ToListAsync(ct);
+
+        return new PagedResult<CourtInventoryItem>(
+            [
+                .. rows.Select(row => new CourtInventoryItem(
+                    row.Id,
+                    row.Name,
+                    row.DisplayOrder,
+                    row.IsActive,
+                    row.FacilityId,
+                    row.FacilityName,
+                    row.FacilityOwnerId,
+                    row.BusinessName,
+                    row.City,
+                    row.Province,
+                    row.VenueType,
+                    row.CoverPhotoUrl,
+                    row.Sports,
+                    row.BookableUnits,
+                    row.Closure))
+            ],
+            page,
+            pageSize,
+            totalItems);
     }
 
     public async Task<CourtListItem?> GetAsync(Guid courtId, CancellationToken ct)
@@ -438,6 +559,7 @@ public sealed class CourtService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         logger.LogInformation("Court {CourtId} was updated by {ActorUserId}.", court.Id, actor.UserId);
         return CourtResult<bool>.Success(true);
     }
@@ -484,6 +606,7 @@ public sealed class CourtService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         logger.LogInformation(
             "Divisions on court {CourtId} were updated by {ActorUserId}.",
             court.Id,
@@ -1016,6 +1139,7 @@ public sealed class CourtService(
             new Dictionary<string, string?> { ["reason"] = period.Reason });
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         return CourtResult<bool>.Success(true);
     }
 
@@ -1070,6 +1194,7 @@ public sealed class CourtService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         logger.LogInformation(
             "Maintenance set on {Scope} {SubjectId} by {ActorUserId}.",
             courtId is null ? "facility" : "court",

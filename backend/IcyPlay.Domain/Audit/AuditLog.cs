@@ -91,6 +91,7 @@ public static class AuditAction
     public const string ContractCancelled = "ContractCancelled";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";
     public const string ContractRatesUpdated = "ContractRatesUpdated";
+    public const string ContractTermUpdated = "ContractTermUpdated";
     public const string FacilityCreated = "FacilityCreated";
     public const string CourtCreated = "CourtCreated";
     public const string CourtUpdated = "CourtUpdated";

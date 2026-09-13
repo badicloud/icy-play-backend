@@ -12,6 +12,7 @@ using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -84,6 +85,129 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         // Assert: an audit full of "nothing changed" buries the entries that
         // matter.
         (await CountAsync(context, AuditAction.FacilityOwnerBusinessUpdated)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task UpdateContractTermAsync_ShouldBringAFutureTermForwardSoTheOwnerGoesLive()
+    {
+        // Arrange: a term typed with next year's start date, which leaves the
+        // owner invisible to customers until it comes round.
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Mistyped Courts");
+        var contractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        await sut.UpdateContractTermAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractTermRequest(Today.AddYears(1), Today.AddYears(2), null, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Act: corrected to cover today.
+        var result = await sut.UpdateContractTermAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractTermRequest(
+                Today.AddMonths(-1),
+                Today.AddMonths(11),
+                "Start date was typed wrong",
+                "Owner rang about it"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var contract = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == contractId);
+        var entry = await context.AuditLogs.AsNoTracking()
+            .SingleAsync(candidate =>
+                candidate.Action == AuditAction.ContractTermUpdated &&
+                candidate.EntityId == contractId &&
+                candidate.Reason == "Owner rang about it");
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            contract.Covers(Today).Should().BeTrue();
+            contract.Notes.Should().Be("Start date was typed wrong");
+            Fields(entry.NewValuesJson).Should().ContainKey("startDate");
+            Fields(entry.OldValuesJson)["startDate"]
+                .Should().Be(Today.AddYears(1).ToString("yyyy-MM-dd"));
+        }
+    }
+
+    [Fact]
+    public async Task UpdateContractTermAsync_ShouldRefuseDatesThatOverlapAnotherLiveTerm()
+    {
+        // Arrange: two live terms, back to back.
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Overlapping Courts");
+        var first = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        await sut.RenewContractAsync(
+            owner.FacilityOwnerId,
+            new RenewContractRequest(
+                Today.AddYears(1).AddDays(1),
+                Today.AddYears(2),
+                null,
+                SignedAgreement(),
+                null),
+            Admin(),
+            CancellationToken.None);
+
+        var second = await context.FacilityOwnerContracts
+            .Where(contract =>
+                contract.FacilityOwnerId == owner.FacilityOwnerId && contract.Id != first)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        // Act: dragging the second back over the first.
+        var result = await sut.UpdateContractTermAsync(
+            owner.FacilityOwnerId,
+            second,
+            new UpdateContractTermRequest(Today, Today.AddYears(2), null, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: two live terms covering one day cannot both be the one fees
+        // are calculated against.
+        result.Failure.Should().Be(EditFailure.OverlappingContract);
+    }
+
+    [Fact]
+    public async Task UpdateContractTermAsync_ShouldRefuseACancelledTerm()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Ended Courts");
+        var contractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        await sut.CancelContractAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new CancelContractRequest("Owner withdrew"),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var result = await sut.UpdateContractTermAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractTermRequest(Today, Today.AddYears(1), null, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: cancelling is what ends a term, and moving the dates of an
+        // ended one says nothing about what was agreed.
+        result.Failure.Should().Be(EditFailure.AlreadyCancelled);
     }
 
     [Fact]
@@ -592,6 +716,11 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         var edits = new FacilityOwnerEditService(
             context,
             new AuditLogger(context, new FixedTimeProvider(Now)),
+            new ActivityCatalog(
+                context,
+                new MemoryCache(new MemoryCacheOptions()),
+                new CatalogCacheSignal(),
+                new FixedTimeProvider(Now)),
             Assets(),
             new FixedTimeProvider(Now),
             NullLogger<FacilityOwnerEditService>.Instance);

@@ -57,6 +57,17 @@ public sealed record UpdateContractRatesRequest(
     decimal CommissionPercentage,
     string? Reason);
 
+/// <summary>
+/// Corrects the dates of a term that already exists. A start date typed wrong
+/// leaves an owner invisible to customers for a year, and the only way to see
+/// that is to be able to look at it and change it.
+/// </summary>
+public sealed record UpdateContractTermRequest(
+    DateOnly StartDate,
+    DateOnly EndDate,
+    string? Notes,
+    string? Reason);
+
 /// <summary>Replaces the agreement on a term that already exists.</summary>
 public sealed record ReplaceContractDocumentRequest(
     UploadedFileInput Document,
@@ -121,6 +132,19 @@ public sealed class UpdateFacilityRequestValidator : AbstractValidator<UpdateFac
         RuleFor(x => x.Photos)
             .Must(photos => photos.Count(photo => photo.IsCover) <= 1)
             .WithMessage("Only one photo can be the cover.");
+        RuleFor(x => x.Reason).MaximumLength(500);
+    }
+}
+
+public sealed class UpdateContractTermRequestValidator
+    : AbstractValidator<UpdateContractTermRequest>
+{
+    public UpdateContractTermRequestValidator()
+    {
+        RuleFor(x => x.EndDate)
+            .GreaterThanOrEqualTo(x => x.StartDate)
+            .WithMessage("A term cannot end before it starts.");
+        RuleFor(x => x.Notes).MaximumLength(1000);
         RuleFor(x => x.Reason).MaximumLength(500);
     }
 }

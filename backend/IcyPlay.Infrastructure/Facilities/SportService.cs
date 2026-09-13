@@ -10,6 +10,7 @@ namespace IcyPlay.Infrastructure.Facilities;
 public sealed class SportService(
     AppDbContext db,
     IAuditLogger audit,
+    IActivityCatalog catalog,
     TimeProvider timeProvider) : ISportService
 {
     public async Task<IReadOnlyCollection<SportListItem>> ListAsync(
@@ -76,6 +77,7 @@ public sealed class SportService(
             });
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         return CourtResult<Guid>.Success(sport.Id);
     }
 
@@ -112,6 +114,7 @@ public sealed class SportService(
             Snapshot(sport));
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         return CourtResult<bool>.Success(true);
     }
 
@@ -147,6 +150,7 @@ public sealed class SportService(
             new Dictionary<string, string?> { ["name"] = sport.Name });
 
         await db.SaveChangesAsync(ct);
+        catalog.Invalidate();
         return CourtResult<bool>.Success(true);
     }
 

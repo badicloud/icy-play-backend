@@ -144,17 +144,30 @@ inventory, and give owners the screens to manage their own courts afterwards.
 
 Scope:
 
-* Admin console: onboarding wizard, facility owner list, facility inventory
-  *(API done: onboarding, owner list, amenities, signed uploads)*
-* Facility owner contracts: commence, renew, end
-* Facility CRUD, including contact details, map coordinates, slug and photos
-  *(schema and creation-through-onboarding done; editing still to come)*
-* Facility amenities: a seeded lookup plus free-text safety measures and rules
-* Facility operating hours, with a per-court override
-* Court CRUD
-* Court maintenance blocks
-* Court active/inactive status
-* Facility Owner ownership rules
+* Admin console: onboarding wizard, facility owner list, facility inventory *(done)*
+* Facility owner contracts: commence, renew, reschedule, end *(done)*
+* Facility CRUD, including contact details, map coordinates, slug and photos *(done)*
+* Facility amenities: a seeded lookup plus free-text safety measures and rules *(done)*
+* Facility operating hours, with a per-court override *(done)*
+* Court CRUD *(done)*
+* Court maintenance blocks, at facility and court level *(done)*
+* Court active/inactive status *(done)*
+* Facility Owner ownership rules *(done for the admin console)*
+
+Built beyond the original scope, and worth recording:
+
+* A **sports and events lookup**, managed rather than compiled in. A court is
+  hired for occasions as well as played on.
+* **Dividing a court per sport**: a basketball floor is three pickleball courts,
+  and each is booked and priced on its own.
+* A **holiday calendar**, because half the Philippine calendar moves.
+* **Court pricing** — four rates per sport with a peak window. This was Phase 3
+  scope and has been pulled forward; see below.
+* A **public catalogue**, cached, backing the landing page.
+* A **courts panel** across the whole platform, so a court can be found without
+  knowing which venue it is in.
+
+See [courts-and-pricing.md](courts-and-pricing.md) for what was built and why.
 
 Four decisions shape this phase:
 
@@ -175,9 +188,29 @@ Exit criteria:
 * Facility Owner can block unavailable court schedules.
 * Facility Owner cannot access another Facility Owner's records.
 
+Still outstanding in this phase:
+
+* The facility owner's **own** console. Everything built so far is the platform
+  admin acting on their behalf; the `RoleGuard` and `app/(facility-owner)`
+  route group described in the plan are not built.
+* Google Maps Places Autocomplete on the address field. `NEXT_PUBLIC_MAP_KEY` is
+  still empty, so addresses are typed and coordinates pasted.
+
 ---
 
 ## Phase 3: Basic Pricing Foundation
+
+> **Largely done ahead of schedule.** Court rates — standard, peak, weekend and
+> holiday, per sport, with a peak window and a holiday calendar — were built
+> during Phase 2 because dividing a court made pricing per sport unavoidable.
+> Promotional and package pricing remain outstanding.
+>
+> The platform side is also partly there: each contract term carries an hourly
+> rate billed to the owner and a commission percentage taken out of that bill.
+> Nothing totals booked hours into a period or produces an invoice yet — the
+> arithmetic exists, the bookings to count do not.
+>
+> See [courts-and-pricing.md](courts-and-pricing.md).
 
 Goal:
 
@@ -243,6 +276,11 @@ Exit criteria:
 ---
 
 ## Phase 5: Booking Workflow
+
+> **Carries one rule nothing enforces today.** A court divided for one sport
+> shares its floor with the whole court and with every other sport's divisions.
+> Booking any of them has to take the others with it. `CourtSport.Divisions` is
+> the field that answers it.
 
 Goal:
 

@@ -67,6 +67,28 @@ public sealed class AdminCourtsController(
             new PaginationMeta(result.Page, result.PageSize, result.TotalItems, result.TotalPages)));
     }
 
+    /// <summary>
+    /// Every court on the platform. An admin correcting one should not have to
+    /// remember which venue it is in to find it.
+    /// </summary>
+    [HttpGet("courts")]
+    public async Task<IActionResult> ListCourts(
+        [FromQuery] string? search,
+        [FromQuery] Guid? facilityOwnerId,
+        [FromQuery] Guid? facilityId,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        var result = await courts.ListInventoryAsync(
+            new CourtInventoryQuery(search, facilityOwnerId, facilityId, page, pageSize),
+            ct);
+
+        return Ok(new ApiListEnvelope<CourtInventoryItem>(
+            result.Items,
+            new PaginationMeta(result.Page, result.PageSize, result.TotalItems, result.TotalPages)));
+    }
+
     /// <summary>One court, for the page that views and edits it.</summary>
     [HttpGet("courts/{courtId:guid}")]
     public async Task<IActionResult> Get(Guid courtId, CancellationToken ct)

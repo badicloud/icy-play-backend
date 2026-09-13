@@ -55,6 +55,14 @@ public interface ICourtService
         AuditActor actor,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Every court on the platform, narrowed by owner, facility or a search.
+    /// Paged, because this grows with the platform rather than with a venue.
+    /// </summary>
+    Task<PagedResult<CourtInventoryItem>> ListInventoryAsync(
+        CourtInventoryQuery query,
+        CancellationToken cancellationToken);
+
     /// <summary>Every court in a facility, in display order, with what closes it.</summary>
     Task<IReadOnlyCollection<CourtListItem>> ListAsync(
         Guid facilityId,

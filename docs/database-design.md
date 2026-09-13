@@ -504,6 +504,114 @@ Suggested columns:
 
 ---
 
+## As Built
+
+The sections above describe the intended design. What follows records where the
+implementation differs or goes further, so the two can be told apart.
+
+### Sports
+
+The lookup holds events as well as sports.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Kind | nvarchar(20) | `Sport` or `Event`. Default `Sport`. |
+
+A court is hired for occasions as well as played on, and a customer browsing for
+a game must not be offered a wedding. The difference is recorded rather than
+inferred from `Category`, which an admin can file wrongly.
+
+Seeded with the common sports plus five events under the `Events` category.
+
+### CourtSports
+
+This is the pair everything commercial hangs off: it carries what the court
+costs for one sport and how many playable courts that makes.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Divisions | int | How many courts this floor makes for this sport. Default 1, maximum 12. |
+| StandardHourlyRate | decimal(10,2) | Null until priced. |
+| PeakHourlyRate | decimal(10,2) | Null falls back to standard. |
+| WeekendRate | decimal(10,2) | Null falls back to standard. |
+| HolidayRate | decimal(10,2) | Null falls back to standard. |
+
+A blank special rate means "same as standard", not "free". A venue charging the
+same all week stores one number rather than four copies of it.
+
+Division names are derived from the court name, the sport and the number
+(`Court 1 · Pickleball 2`), never stored — a stored name would survive a rename
+and lie.
+
+### Courts
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| PeakStartsAt | time | Null until a peak rate is set. |
+| PeakEndsAt | time | Null until a peak rate is set. |
+| PeakOnWeekdays | bit | |
+| PeakOnWeekends | bit | |
+
+The peak *rate* is per sport; the peak *window* is per court, because a venue is
+busy at the same hours whatever is being played on it. The window is held inside
+the court's opening hours, so it cannot wrap past midnight.
+
+### Photos
+
+One table for both facility and court pictures.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| FacilityId | uniqueidentifier | Always set. |
+| CourtId | uniqueidentifier | Null when the photo is of the venue rather than one court. |
+| PublicId | nvarchar(300) | Cloudinary public id. The source of truth. |
+| SecureUrl | nvarchar(1000) | Cloudinary `secure_url`, never `url`. |
+| Caption | nvarchar(300) | |
+| DisplayOrder | int | |
+| IsCover | bit | Exactly one per subject. |
+
+Index on `(FacilityId, CourtId, DisplayOrder)`: a gallery is always read for one
+subject, in order.
+
+### Holidays
+
+The days a court charges its holiday rate on.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| Name | nvarchar(200) | |
+| Date | date | For a repeating holiday only month and day are read. |
+| Kind | nvarchar(50) | `Regular` or `Special non-working`. |
+| RepeatsAnnually | bit | False for a holiday that moves. |
+| IsActive | bit | Retired rather than deleted. |
+
+Unique on `(Name, Date)`. Two different holidays may share a date, which happens
+when a proclamation lands on a regular holiday.
+
+Seeded with the eleven fixed Philippine holidays. The movable ones are
+deliberately absent: seeding them as repeating would put them on the wrong day
+for every year after the first.
+
+### FacilityOwnerContracts
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| PlatformHourlyRate | decimal(10,2) | Billed to the owner per booked hour. Default 15.00. |
+| CommissionPercentage | decimal(5,2) | Maintenance and commission, as a per cent of that bill. Default 3.00. |
+| DocumentPublicId | nvarchar(300) | The signed agreement. Nullable, because terms commenced before it was required genuinely have none. |
+| DocumentSecureUrl | nvarchar(1000) | |
+| DocumentFileName | nvarchar(300) | |
+| DocumentContentType | nvarchar(150) | |
+| DocumentSizeInBytes | bigint | |
+
+On the term rather than on the owner: a rate changed on the owner would rewrite
+what was agreed for terms already served.
+
+See [courts-and-pricing.md](courts-and-pricing.md) for the arithmetic and the
+rules around these.
+
+---
+
 ## Payment Setup
 
 ### PaymentMethods
