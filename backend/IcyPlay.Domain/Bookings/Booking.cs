@@ -208,10 +208,32 @@ public sealed class Booking : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Somebody at the venue has looked at the payment and it is good.
+    /// </summary>
     public void Confirm(DateTimeOffset now)
     {
         Status = BookingStatus.Confirmed;
         ConfirmedAt = now;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Somebody at the venue has looked at the payment and it is not.
+    ///
+    /// Its own state rather than a cancellation: a customer who changed their
+    /// mind and a receipt that did not add up are different things, and a venue
+    /// reading its own history has to be able to tell them apart. The court
+    /// goes back on sale either way, because neither still holds it.
+    ///
+    /// The moment lands on <see cref="CancelledAt"/>, which is when the booking
+    /// stopped standing whichever way it stopped.
+    /// </summary>
+    public void Reject(string? reason, DateTimeOffset now)
+    {
+        Status = BookingStatus.Rejected;
+        CancelledAt = now;
+        CancellationReason = reason;
         UpdatedAt = now;
     }
 

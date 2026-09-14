@@ -2088,6 +2088,45 @@ PUT /api/v1/admin/facility-owners/{id}/payment-details
 Role: PlatformAdmin. The GCash number, account name and QR code a customer pays
 into, and how long an unpaid hold survives.
 
+### The venue's desk
+
+```http
+GET  /api/v1/desk/venues
+GET  /api/v1/desk/bookings?tab=Waiting&facilityId=&page=1&pageSize=10
+POST /api/v1/desk/bookings/{bookingId}/confirm
+POST /api/v1/desk/bookings/{bookingId}/reject
+```
+
+Roles: FacilityOwner, FacilityAttendant. This replaces the planned **Facility
+Owner Booking Verification Endpoints** above, which were scoped to the owner
+alone.
+
+**Which venues a caller sees is worked out from who they are**, never from a
+facility id they send: an owner attends every venue they own, an attendant the
+ones they are on the desk of today. `facilityId` only narrows that set, and one
+outside it answers the same as one that does not exist.
+
+`tab` is `Waiting` (paid and handed over, nobody has looked yet) or
+`Confirmed`. Two piles rather than one list: what is waiting is work and what
+is confirmed is a record, and three that need doing must not be buried under
+fifty that are done. Waiting is ordered oldest first — somebody who paid an hour
+ago should not sit behind somebody who paid a minute ago.
+
+A row carries who booked it, because checking a GCash receipt means checking the
+name on it against the person who sent it. That is what `BookingDetail` does not
+have and why the desk has a shape of its own.
+
+`confirm` refuses anything not still waiting, so a second press cannot undo the
+first, and anything with no receipt on it. It emails the customer their
+confirmation — the one letter that reads as one — after the save, best effort: a
+mail provider being down must not undo a decision somebody has already made.
+
+`reject` takes a reason and puts the hours straight back on sale. Its own
+status rather than a cancellation: a customer changing their mind and a receipt
+that did not add up read differently in a venue's history. **No letter goes
+out** — a rejection needs somewhere for the customer to answer from, and that is
+the message thread, which is not built.
+
 ---
 
 ## Cloudinary Upload Flow

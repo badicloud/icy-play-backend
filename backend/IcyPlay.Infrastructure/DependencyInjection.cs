@@ -72,6 +72,7 @@ public static class DependencyInjection
         services.AddSingleton<CatalogCacheSignal>();
         services.AddScoped<IActivityCatalog, ActivityCatalog>();
         services.AddScoped<IBookingService, BookingService>();
+        services.AddScoped<IDeskService, DeskService>();
         services.AddScoped<IFacilityAttendantService, FacilityAttendantService>();
         services.AddScoped<IBookingNotifier, BookingNotifier>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>

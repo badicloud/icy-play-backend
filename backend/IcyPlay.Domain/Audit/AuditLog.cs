@@ -91,6 +91,8 @@ public static class AuditAction
     public const string FacilityAttendantAdded = "FacilityAttendantAdded";
     public const string FacilityAttendantRemoved = "FacilityAttendantRemoved";
     public const string FacilityAttendantInvitationSent = "FacilityAttendantInvitationSent";
+    public const string BookingConfirmed = "BookingConfirmed";
+    public const string BookingRejected = "BookingRejected";
     public const string ContractCommenced = "ContractCommenced";
     public const string ContractCancelled = "ContractCancelled";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";
@@ -124,4 +126,5 @@ public static class AuditEntityType
     public const string Court = "Court";
     public const string Sport = "Sport";
     public const string Holiday = "Holiday";
+    public const string Booking = "Booking";
 }
