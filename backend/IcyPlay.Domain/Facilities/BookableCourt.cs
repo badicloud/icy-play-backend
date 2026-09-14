@@ -109,18 +109,17 @@ public sealed class BookableCourt : Entity
     {
         ArgumentNullException.ThrowIfNull(other);
 
-        if (CourtId != other.CourtId)
-        {
-            return false;
-        }
-
-        if (CourtSportId != other.CourtSportId)
-        {
-            return true;
-        }
-
-        return DivisionNumber == other.DivisionNumber;
+        return CourtId == other.CourtId
+            && ClashesWith(other.CourtSportId, other.DivisionNumber);
     }
+
+    /// <summary>
+    /// The same rule for a caller that has already narrowed to this floor and
+    /// holds only ids. Availability reads every booking on a court for a day and
+    /// has no entity to hand for each one.
+    /// </summary>
+    public bool ClashesWith(Guid courtSportId, int divisionNumber) =>
+        CourtSportId != courtSportId || DivisionNumber == divisionNumber;
 
     /// <summary>
     /// Follows the division count when the floor is re-marked. Part one of a

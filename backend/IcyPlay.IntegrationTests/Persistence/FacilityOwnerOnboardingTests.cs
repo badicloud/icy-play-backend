@@ -492,14 +492,9 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
     {
         public List<string> Recipients { get; } = [];
 
-        public Task SendAsync(
-            Guid userId,
-            string recipientEmail,
-            string recipientName,
-            string businessName,
-            CancellationToken ct)
+        public Task SendAsync(InvitationRequest request, CancellationToken ct)
         {
-            Recipients.Add(recipientEmail);
+            Recipients.Add(request.RecipientEmail);
             return Task.CompletedTask;
         }
 
@@ -512,12 +507,7 @@ public sealed class FacilityOwnerOnboardingTests(SqlServerDatabaseFixture databa
 
     private sealed class FailingInvitation : IAccountInvitationService
     {
-        public Task SendAsync(
-            Guid userId,
-            string recipientEmail,
-            string recipientName,
-            string businessName,
-            CancellationToken ct) =>
+        public Task SendAsync(InvitationRequest request, CancellationToken ct) =>
             throw new InvalidOperationException("Mailjet is unavailable.");
 
         public Task<InvitationDetails?> CheckAsync(string rawToken, CancellationToken ct) =>

@@ -249,6 +249,10 @@ public sealed class FacilityOwnerOnboardingService(
                 candidate.BillingEmail,
                 candidate.BillingPhone,
                 candidate.BusinessRegistrationNumber,
+                candidate.GcashNumber,
+                candidate.GcashAccountName,
+                candidate.GcashQrCodeUrl,
+                candidate.PartialBookingExpiryMinutes,
                 candidate.IsActive,
                 candidate.CreatedAt,
                 candidate.UpdatedAt,
@@ -379,6 +383,12 @@ public sealed class FacilityOwnerOnboardingService(
             owner.BillingEmail,
             owner.BillingPhone,
             owner.BusinessRegistrationNumber,
+            owner.GcashNumber,
+            owner.GcashAccountName,
+            owner.GcashQrCodeUrl,
+            owner.PartialBookingExpiryMinutes,
+            !string.IsNullOrWhiteSpace(owner.GcashNumber) ||
+                !string.IsNullOrWhiteSpace(owner.GcashQrCodeUrl),
             owner.IsActive,
             FacilityOwner.DeriveStatus(
                 owner.IsActive,
@@ -448,7 +458,9 @@ public sealed class FacilityOwnerOnboardingService(
             return false;
         }
 
-        await invitations.SendAsync(owner.UserId, owner.Email, owner.FullName, owner.BusinessName, ct);
+        await invitations.SendAsync(
+            new InvitationRequest(owner.UserId, owner.Email, owner.FullName, owner.BusinessName),
+            ct);
 
         audit.RecordEvent(
             actor,
@@ -574,7 +586,9 @@ public sealed class FacilityOwnerOnboardingService(
     {
         try
         {
-            await invitations.SendAsync(user.Id, user.Email, user.FullName, businessName, ct);
+            await invitations.SendAsync(
+                new InvitationRequest(user.Id, user.Email, user.FullName, businessName),
+                ct);
             return true;
         }
         catch (Exception exception)

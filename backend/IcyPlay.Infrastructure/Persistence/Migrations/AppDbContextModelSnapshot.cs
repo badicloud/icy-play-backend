@@ -83,6 +83,139 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.ToTable("AuditLogs", "dbo");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.Bookings.Booking", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("BookableCourtId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTimeOffset?>("CancelledAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("CourtName")
+                        .IsRequired()
+                        .HasMaxLength(250)
+                        .HasColumnType("nvarchar(250)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("CustomerUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateOnly>("EndDate")
+                        .HasColumnType("date");
+
+                    b.Property<string>("FacilityName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTimeOffset>("HoldsUntil")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("Hourly");
+
+                    b.Property<decimal>("PlatformHourlyRate")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<DateTimeOffset?>("ReceiptUploadedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ReceiptUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("SportName")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateOnly>("StartDate")
+                        .HasColumnType("date");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("SubmittedForVerificationAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BookableCourtId");
+
+                    b.HasIndex("CustomerUserId");
+
+                    b.HasIndex("StartDate", "EndDate");
+
+                    b.ToTable("Bookings", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingSlot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<Guid>("BookingId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("CourtId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateOnly>("Date")
+                        .HasColumnType("date");
+
+                    b.Property<TimeOnly>("EndsAt")
+                        .HasColumnType("time");
+
+                    b.Property<decimal>("PlatformFee")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<string>("RateKind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<TimeOnly>("StartsAt")
+                        .HasColumnType("time");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BookingId");
+
+                    b.HasIndex("CourtId", "Date");
+
+                    b.ToTable("BookingSlots", "dbo");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.Email.EmailTemplate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -153,6 +286,46 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             Key = "facility-owner-invitation",
                             Provider = "Mailjet",
                             Subject = "Activate your IcyPlay facility owner account"
+                        },
+                        new
+                        {
+                            Id = new Guid("8c4d7f06-9e13-4a52-bd68-2f9a14e07c35"),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 14, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            ExternalTemplateId = 8347695L,
+                            IsActive = true,
+                            Key = "facility-attendant-invitation",
+                            Provider = "Mailjet",
+                            Subject = "{{var:business_name}} has added you as a court attendant"
+                        },
+                        new
+                        {
+                            Id = new Guid("b3f61c47-5d28-4e0a-9c73-8a1e5b2049df"),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 14, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            ExternalTemplateId = 8347566L,
+                            IsActive = true,
+                            Key = "booking-payment-received",
+                            Provider = "Mailjet",
+                            Subject = "We have your payment — {{var:facility_name}} is checking it"
+                        },
+                        new
+                        {
+                            Id = new Guid("6e94a20d-81cf-4b35-a7e8-3c5d90f61b28"),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 14, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            ExternalTemplateId = 8347573L,
+                            IsActive = true,
+                            Key = "booking-payment-submitted",
+                            Provider = "Mailjet",
+                            Subject = "{{var:customer_name}} has paid for {{var:court_name}} — please confirm"
+                        },
+                        new
+                        {
+                            Id = new Guid("d27b5e93-40a6-4c18-b9f2-71e8c3a56d04"),
+                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 14, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                            ExternalTemplateId = 8347583L,
+                            IsActive = true,
+                            Key = "booking-confirmed",
+                            Provider = "Mailjet",
+                            Subject = "Your court at {{var:facility_name}} is confirmed"
                         });
                 });
 
@@ -702,6 +875,39 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("FacilityAmenities", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.Facilities.FacilityAttendant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("FacilityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(true);
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("FacilityId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("FacilityAttendants", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Facilities.FacilityOperatingHour", b =>
@@ -1500,8 +1706,25 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("GcashAccountName")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("GcashNumber")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<string>("GcashQrCodeUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
+
+                    b.Property<int>("PartialBookingExpiryMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(30);
 
                     b.Property<DateTimeOffset?>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
@@ -1708,6 +1931,28 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.ToTable("UserRoles", "dbo");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.Bookings.Booking", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.Facilities.BookableCourt", "BookableCourt")
+                        .WithMany()
+                        .HasForeignKey("BookableCourtId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("BookableCourt");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingSlot", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.Bookings.Booking", "Booking")
+                        .WithMany("Slots")
+                        .HasForeignKey("BookingId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Booking");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.Facilities.BookableCourt", b =>
                 {
                     b.HasOne("IcyPlay.Domain.Facilities.Court", "Court")
@@ -1796,6 +2041,25 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("Amenity");
 
                     b.Navigation("Facility");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.Facilities.FacilityAttendant", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.Facilities.Facility", "Facility")
+                        .WithMany("Attendants")
+                        .HasForeignKey("FacilityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IcyPlay.Domain.Identity.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Facility");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Facilities.FacilityOperatingHour", b =>
@@ -1955,6 +2219,11 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.Bookings.Booking", b =>
+                {
+                    b.Navigation("Slots");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.Facilities.Court", b =>
                 {
                     b.Navigation("OperatingHours");
@@ -1970,6 +2239,8 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("IcyPlay.Domain.Facilities.Facility", b =>
                 {
                     b.Navigation("Amenities");
+
+                    b.Navigation("Attendants");
 
                     b.Navigation("Courts");
 

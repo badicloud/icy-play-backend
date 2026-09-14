@@ -112,6 +112,52 @@ public sealed class CourtSport : Entity
         _ => StandardHourlyRate
     };
 
+    /// <summary>
+    /// What one hour costs, and under which rate.
+    ///
+    /// The day decides the base -- a holiday, then a weekend, then an ordinary
+    /// day -- and the peak window lifts it, but never lowers it. A venue that
+    /// prices its whole weekend above peak keeps the weekend rate through the
+    /// window; one that leaves the weekend ordinary gets the peak premium on its
+    /// busiest hours.
+    ///
+    /// What this CANNOT express: a cheaper weekend evening. Peak is one absolute
+    /// number for every day it applies to, so a venue that discounts weekends
+    /// still charges peak inside the window. Expressing that would need a peak
+    /// rate per day type, which nothing has asked for yet.
+    ///
+    /// Null when the sport has no standard rate, which is the one thing that
+    /// makes it unsellable.
+    /// </summary>
+    public SlotRate? PriceAt(Court court, DateOnly date, TimeOnly startsAt, bool isHoliday)
+    {
+        ArgumentNullException.ThrowIfNull(court);
+
+        if (StandardHourlyRate is null)
+        {
+            return null;
+        }
+
+        var dayKind = isHoliday
+            ? CourtRateKind.Holiday
+            : Court.IsWeekend(date.DayOfWeek)
+                ? CourtRateKind.Weekend
+                : CourtRateKind.Standard;
+
+        var dayRate = RateFor(dayKind)!.Value;
+
+        if (!court.IsPeakAt(date.DayOfWeek, startsAt))
+        {
+            return new SlotRate(dayKind, dayRate);
+        }
+
+        var peakRate = RateFor(CourtRateKind.Peak)!.Value;
+
+        return peakRate > dayRate
+            ? new SlotRate(CourtRateKind.Peak, peakRate)
+            : new SlotRate(dayKind, dayRate);
+    }
+
     public void SetPricing(
         decimal? standardHourlyRate,
         decimal? peakHourlyRate,
@@ -128,10 +174,12 @@ public sealed class CourtSport : Entity
 }
 
 /// <summary>
-/// Which of a court's rates an hour falls under. The windows that decide
-/// between them -- when peak runs, which dates are holidays -- are not modelled
-/// yet, so only Standard is reachable in practice today.
+/// One hour, priced: what it costs and why. Both halves travel together because
+/// a customer shown "600" without "peak" beside it reads it as a mistake.
 /// </summary>
+public sealed record SlotRate(CourtRateKind Kind, decimal Amount);
+
+/// <summary>Which of a court's rates an hour falls under.</summary>
 public enum CourtRateKind
 {
     Standard,

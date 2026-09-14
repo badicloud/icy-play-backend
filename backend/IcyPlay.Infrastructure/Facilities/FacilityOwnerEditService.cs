@@ -4,6 +4,7 @@ using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Facilities;
+using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -366,6 +367,74 @@ public sealed class FacilityOwnerEditService(
             ["startDate"] = contract.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             ["endDate"] = contract.EndDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             ["notes"] = contract.Notes
+        };
+
+    public async Task<EditResult> UpdatePaymentDetailsAsync(
+        Guid facilityOwnerId,
+        UpdatePaymentDetailsRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var owner = await db.FacilityOwners
+            .SingleOrDefaultAsync(candidate => candidate.Id == facilityOwnerId, ct);
+
+        if (owner is null)
+        {
+            return EditResult.Fail(EditFailure.NotFound);
+        }
+
+        // The QR code is posted by the browser after it uploads, so the link
+        // cannot be taken on trust: without this a venue's payment code could be
+        // pointed at any image on the internet.
+        if (!string.IsNullOrWhiteSpace(request.GcashQrCodeUrl) &&
+            !assets.IsTrustedSecureUrl(request.GcashQrCodeUrl))
+        {
+            return EditResult.Fail(EditFailure.UntrustedAssetUrl);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = PaymentSnapshot(owner);
+
+        owner.SetPaymentDetails(
+            request.GcashNumber,
+            request.GcashAccountName,
+            request.GcashQrCodeUrl,
+            request.PartialBookingExpiryMinutes,
+            now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.FacilityOwnerPaymentDetailsUpdated,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            before,
+            PaymentSnapshot(owner),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Payment details for owner {FacilityOwnerId} were updated by {ActorUserId}.",
+            owner.Id,
+            actor.UserId);
+
+        return EditResult.Success();
+    }
+
+    /// <summary>
+    /// The QR code's link is not recorded: it is long, it changes whenever the
+    /// picture is replaced, and the trail wants to say THAT the code changed
+    /// rather than reprint it.
+    /// </summary>
+    private static Dictionary<string, string?> PaymentSnapshot(FacilityOwner owner) =>
+        new()
+        {
+            ["gcashNumber"] = owner.GcashNumber,
+            ["gcashAccountName"] = owner.GcashAccountName,
+            ["gcashQrCode"] = owner.GcashQrCodeUrl is null ? "none" : "set",
+            ["partialBookingExpiryMinutes"] =
+                owner.PartialBookingExpiryMinutes.ToString(CultureInfo.InvariantCulture)
         };
 
     public async Task<EditResult> UpdateContractRatesAsync(

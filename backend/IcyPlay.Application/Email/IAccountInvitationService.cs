@@ -11,13 +11,12 @@ public interface IAccountInvitationService
     /// <summary>
     /// Issues a fresh invitation and emails it. Any invitation already
     /// outstanding for the user is retired first, so only the newest link works.
+    ///
+    /// The token, the expiry and the activation page are the same whoever is
+    /// being invited; only the letter differs, which is why the template is a
+    /// parameter rather than a second copy of this method.
     /// </summary>
-    Task SendAsync(
-        Guid userId,
-        string recipientEmail,
-        string recipientName,
-        string businessName,
-        CancellationToken cancellationToken);
+    Task SendAsync(InvitationRequest request, CancellationToken cancellationToken);
 
     /// <summary>
     /// What the activation page shows before asking for a password. The token
@@ -36,6 +35,25 @@ public interface IAccountInvitationService
         string password,
         CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Who is being invited, and which letter to send them.
+/// </summary>
+/// <param name="TemplateKey">
+/// One of the invitation templates. Defaults to the facility owner's, which is
+/// the older of the two and what every existing caller means.
+/// </param>
+/// <param name="FacilityName">
+/// The venue an attendant is being put on. Null for an owner, who is not being
+/// invited to any one venue in particular.
+/// </param>
+public sealed record InvitationRequest(
+    Guid UserId,
+    string RecipientEmail,
+    string RecipientName,
+    string BusinessName,
+    string TemplateKey = IcyPlay.Domain.Email.EmailTemplateKey.FacilityOwnerInvitation,
+    string? FacilityName = null);
 
 public sealed record InvitationDetails(
     string FullName,

@@ -277,10 +277,16 @@ Exit criteria:
 
 ## Phase 5: Booking Workflow
 
-> **Carries one rule nothing enforces today.** A court divided for one sport
-> shares its floor with the whole court and with every other sport's divisions.
-> Booking any of them has to take the others with it. `CourtSport.Divisions` is
-> the field that answers it.
+> **Mostly built.** Availability, pricing, booking creation and double-booking
+> protection all exist — see [booking.md](booking.md). The rule this phase was
+> flagged as not enforcing is enforced: one floor hosts one sport at a time, and
+> within that sport its parts run side by side.
+>
+> **What is missing is paying.** A booking is created `PendingPayment` and stays
+> there, and **the hold never expires** — nothing stops one account from holding
+> every hour of every court without paying. The payment due timestamp below is
+> the part that closes it, and it is the first thing to build before the
+> platform is open to the public.
 
 Goal:
 
@@ -323,6 +329,12 @@ Exit criteria:
 Goal:
 
 Support direct customer payment to Facility Owner with manual receipt verification.
+
+**The MVP flow, as decided:** the customer pays by **GCash**, to the facility
+owner's number or QR code. The booking holds the court for a configured number
+of minutes and expires if payment does not arrive. The customer uploads the
+GCash receipt, and a **facility attendant or platform admin verifies it**, which
+confirms the booking. Nothing automated reads the receipt.
 
 Scope:
 

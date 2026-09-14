@@ -1,10 +1,12 @@
 using IcyPlay.Application.Audit;
+using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Identity;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
+using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Identity;
@@ -49,6 +51,8 @@ public static class DependencyInjection
         services.AddScoped<IPasswordResetEmailService, PasswordResetEmailService>();
         services.Configure<AccountInvitationOptions>(
             configuration.GetSection(AccountInvitationOptions.SectionName));
+        services.Configure<BookingNotificationOptions>(
+            configuration.GetSection(BookingNotificationOptions.SectionName));
         services.AddScoped<IAccountInvitationService, AccountInvitationService>();
         services.Configure<CloudinaryOptions>(
             configuration.GetSection(CloudinaryOptions.SectionName));
@@ -67,6 +71,9 @@ public static class DependencyInjection
         // One signal outlives the requests that clear it.
         services.AddSingleton<CatalogCacheSignal>();
         services.AddScoped<IActivityCatalog, ActivityCatalog>();
+        services.AddScoped<IBookingService, BookingService>();
+        services.AddScoped<IFacilityAttendantService, FacilityAttendantService>();
+        services.AddScoped<IBookingNotifier, BookingNotifier>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");

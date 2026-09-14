@@ -1,4 +1,5 @@
 using IcyPlay.Domain.Audit;
+using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
@@ -37,6 +38,9 @@ public sealed class AppDbContext : DbContext
     public DbSet<Court> Courts => Set<Court>();
     public DbSet<CourtSport> CourtSports => Set<CourtSport>();
     public DbSet<BookableCourt> BookableCourts => Set<BookableCourt>();
+    public DbSet<FacilityAttendant> FacilityAttendants => Set<FacilityAttendant>();
+    public DbSet<Booking> Bookings => Set<Booking>();
+    public DbSet<BookingSlot> BookingSlots => Set<BookingSlot>();
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
@@ -80,6 +84,12 @@ public sealed class AppDbContext : DbContext
             entity.HasIndex(x => x.UserId).IsUnique();
             entity.Property(x => x.BusinessName).HasMaxLength(200).IsRequired();
             entity.Property(x => x.BillingEmail).HasMaxLength(256).IsRequired();
+            entity.Property(x => x.GcashNumber).HasMaxLength(30);
+            entity.Property(x => x.GcashAccountName).HasMaxLength(150);
+            entity.Property(x => x.GcashQrCodeUrl).HasMaxLength(1000);
+            entity.Property(x => x.PartialBookingExpiryMinutes)
+                .HasDefaultValue(PaymentHold.DefaultMinutes);
+            entity.Ignore(x => x.CanTakePayment);
             entity.Property(x => x.BillingPhone).HasMaxLength(50);
             entity.HasOne(x => x.User).WithOne().HasForeignKey<FacilityOwner>(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });
@@ -143,6 +153,62 @@ public sealed class AppDbContext : DbContext
                     Subject = "Activate your IcyPlay facility owner account",
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 10, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("8c4d7f06-9e13-4a52-bd68-2f9a14e07c35"),
+                    Key = EmailTemplateKey.FacilityAttendantInvitation,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8347695L,
+                    // Names the venue rather than the platform. An invited
+                    // attendant has never heard of IcyPlay, and a subject line
+                    // carrying only our name reads as spam -- theirs is the one
+                    // they recognise, and it explains why they are being
+                    // written to at all.
+                    Subject = "{{var:business_name}} has added you as a court attendant",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("b3f61c47-5d28-4e0a-9c73-8a1e5b2049df"),
+                    Key = EmailTemplateKey.BookingPaymentReceived,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8347566L,
+                    // Deliberately not "confirmed": this letter goes out the
+                    // moment a receipt is uploaded, and a customer who reads the
+                    // subject line and nothing else must not think they are
+                    // booked.
+                    Subject = "We have your payment \u2014 {{var:facility_name}} is checking it",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("6e94a20d-81cf-4b35-a7e8-3c5d90f61b28"),
+                    Key = EmailTemplateKey.BookingPaymentSubmitted,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8347573L,
+                    // Named in the subject because an attendant gets many of
+                    // these: an inbox of identical lines cannot be worked
+                    // through without opening every one.
+                    Subject = "{{var:customer_name}} has paid for {{var:court_name}} \u2014 please confirm",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("d27b5e93-40a6-4c18-b9f2-71e8c3a56d04"),
+                    Key = EmailTemplateKey.BookingConfirmed,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8347583L,
+                    Subject = "Your court at {{var:facility_name}} is confirmed",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
                 });
         });
@@ -514,6 +580,79 @@ public sealed class AppDbContext : DbContext
                 // paths cascade is a multiple-cascade-path error. The pair above
                 // is the owner; this side only reads.
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<FacilityAttendant>(entity =>
+        {
+            entity.ToTable("FacilityAttendants");
+            entity.HasKey(x => x.Id);
+            // One row per person per venue, whether they are on the desk today
+            // or were taken off it. A retired row is the record of who confirmed
+            // what, and it keeps the address spoken for.
+            entity.HasIndex(x => new { x.FacilityId, x.UserId }).IsUnique();
+            entity.Property(x => x.IsActive).HasDefaultValue(true);
+            entity.HasOne(x => x.Facility)
+                .WithMany(x => x.Attendants)
+                .HasForeignKey(x => x.FacilityId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.User)
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                // A person who has confirmed a booking must not vanish from
+                // under it. Retire them instead.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Booking>(entity =>
+        {
+            entity.ToTable("Bookings");
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => x.CustomerUserId);
+            entity.Property(x => x.Kind)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(BookingKind.Hourly);
+            // What was bought, as it was named and priced then. A rename or a
+            // re-price must not reach backwards into an agreement.
+            entity.Property(x => x.CourtName).HasMaxLength(250).IsRequired();
+            entity.Property(x => x.FacilityName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.SportName).HasMaxLength(150).IsRequired();
+            entity.Property(x => x.PlatformHourlyRate).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.CancellationReason).HasMaxLength(500);
+            entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
+            // What a venue's console asks for: the bookings touching a stretch
+            // of days.
+            entity.HasIndex(x => new { x.StartDate, x.EndDate });
+            entity.Ignore(x => x.BookedHours);
+            entity.Ignore(x => x.RentalTotal);
+            entity.Ignore(x => x.PlatformFeeTotal);
+            entity.Ignore(x => x.Total);
+            entity.HasOne(x => x.BookableCourt)
+                .WithMany()
+                .HasForeignKey(x => x.BookableCourtId)
+                // A bookable court with money against it is retired, never
+                // removed. Restrict says so rather than trusting everyone to
+                // remember.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<BookingSlot>(entity =>
+        {
+            entity.ToTable("BookingSlots");
+            entity.HasKey(x => x.Id);
+            // The one question availability asks: what is held on this floor,
+            // on this date.
+            entity.HasIndex(x => new { x.CourtId, x.Date });
+            entity.Property(x => x.RateKind)
+                .HasMaxLength(20)
+                .HasConversion<string>()
+                .IsRequired();
+            entity.Property(x => x.Amount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
+            entity.HasOne(x => x.Booking)
+                .WithMany(x => x.Slots)
+                .HasForeignKey(x => x.BookingId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<CourtOperatingHour>(entity =>

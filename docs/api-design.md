@@ -2010,6 +2010,86 @@ Role:
 
 ---
 
+## As Built Endpoints
+
+The sections above describe the intended surface. What follows records what the
+booking and attendant work actually shipped, where the two differ.
+
+### Availability
+
+```http
+GET /api/v1/catalog/bookable-courts/{bookableCourtId}/availability?date=2026-09-20
+```
+
+Anonymous. A visitor should see whether Saturday morning is free before being
+asked to make an account; signing in is the price of holding an hour, not of
+looking at one.
+
+Returns the day hour by hour with what each costs and why — `Standard`, `Peak`,
+`Weekend` or `Holiday` — and marks hours already gone. Sent `no-store`: a grid
+a minute stale is a customer picking an hour that has just been taken.
+
+### Bookings
+
+```http
+POST   /api/v1/bookings
+GET    /api/v1/bookings
+GET    /api/v1/bookings/{bookingId}
+POST   /api/v1/bookings/{bookingId}/receipt
+POST   /api/v1/bookings/{bookingId}/submit-payment
+POST   /api/v1/bookings/{bookingId}/cancel
+```
+
+Roles:
+
+* Reading your own — any signed-in account. Authorization attributes add up, so
+  a role over the whole controller cannot be relaxed per action: it sits on the
+  four that write instead. Reading your own record is not the privilege of the
+  role that happens to make most of the records.
+* Creating, attaching a receipt, submitting and cancelling — Customer.
+
+Every read is scoped to the caller, so an account with nothing on it gets an
+empty list rather than a refusal.
+
+`POST /bookings` runs in a serializable transaction. Two people reaching for the
+same hour is the ordinary case, not the rare one.
+
+### Facility attendants
+
+```http
+GET    /api/v1/admin/facility-owners/{id}/facilities/{facilityId}/attendants
+GET    /api/v1/admin/facility-owners/{id}/facilities/{facilityId}/attendants/check?email=
+POST   /api/v1/admin/facility-owners/{id}/facilities/{facilityId}/attendants
+POST   /api/v1/admin/facility-owners/{id}/facilities/{facilityId}/attendants/{attendantId}/resend-invitation
+DELETE /api/v1/admin/facility-owners/{id}/facilities/{facilityId}/attendants/{attendantId}
+```
+
+Role: PlatformAdmin. Scoped to the owner as well as the facility, so another
+owner's venue answers the same as one that does not exist.
+
+`check` answers while the address is being typed: `Available`,
+`AlreadyAttending`, `IsTheOwner` or `AlreadyRegistered`, with `canBeAdded` and
+the name on the account when there is one. Only `Available` may be added — one
+address, one account — and the same refusal is made again on the way in, so a
+console that skipped the question gets the answer anyway.
+
+The roster carries `invitationsSent` and `lastInvitedAt`, counted from the
+invitation tokens: one for the original and one for each resend. Each resend is
+also its own audit line, so how often somebody was chased is answerable later.
+A resend to somebody who has already set their password is refused — a fresh
+link would be an offer to replace a password they are using.
+
+### Payment details
+
+```http
+PUT /api/v1/admin/facility-owners/{id}/payment-details
+```
+
+Role: PlatformAdmin. The GCash number, account name and QR code a customer pays
+into, and how long an unpaid hold survives.
+
+---
+
 ## Cloudinary Upload Flow
 
 The API should not store file blobs in SQL Server.

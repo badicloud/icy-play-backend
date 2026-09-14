@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
 using IcyPlay.Application.Email;
-using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
@@ -22,15 +21,12 @@ public sealed class AccountInvitationService(
 {
     private readonly AccountInvitationOptions invitationOptions = options.Value;
 
-    public async Task SendAsync(
-        Guid userId,
-        string recipientEmail,
-        string recipientName,
-        string businessName,
-        CancellationToken ct)
+    public async Task SendAsync(InvitationRequest request, CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(request);
         ValidateConfiguration();
 
+        var userId = request.UserId;
         var now = timeProvider.GetUtcNow();
 
         // Resending must not leave the previous link working. Two live
@@ -51,13 +47,17 @@ public sealed class AccountInvitationService(
 
         await emailSender.SendAsync(
             new TransactionalEmailMessage(
-                EmailTemplateKey.FacilityOwnerInvitation,
-                recipientEmail,
-                recipientName,
+                request.TemplateKey,
+                request.RecipientEmail,
+                request.RecipientName,
                 new Dictionary<string, object>
                 {
-                    ["recipient_name"] = recipientName,
-                    ["business_name"] = businessName,
+                    ["recipient_name"] = request.RecipientName,
+                    ["business_name"] = request.BusinessName,
+                    // Empty rather than absent for an owner: a variable a
+                    // template asks for and the sender omits renders as the
+                    // literal placeholder in some providers.
+                    ["facility_name"] = request.FacilityName ?? string.Empty,
                     ["activation_url"] = QueryHelpers.AddQueryString(
                         invitationOptions.ActivationUrl,
                         "token",
@@ -68,7 +68,10 @@ public sealed class AccountInvitationService(
                 }),
             ct);
 
-        logger.LogInformation("Facility owner invitation was accepted for sending. UserId: {UserId}", userId);
+        logger.LogInformation(
+            "Invitation {TemplateKey} was accepted for sending. UserId: {UserId}",
+            request.TemplateKey,
+            userId);
     }
 
     public async Task<InvitationDetails?> CheckAsync(string rawToken, CancellationToken ct)

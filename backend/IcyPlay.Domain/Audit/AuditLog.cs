@@ -82,11 +82,15 @@ public static class AuditAction
 {
     public const string FacilityOwnerOnboarded = "FacilityOwnerOnboarded";
     public const string FacilityOwnerBusinessUpdated = "FacilityOwnerBusinessUpdated";
+    public const string FacilityOwnerPaymentDetailsUpdated = "FacilityOwnerPaymentDetailsUpdated";
     public const string FacilityOwnerInvitationSent = "FacilityOwnerInvitationSent";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
     public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
     public const string FacilityHoursUpdated = "FacilityHoursUpdated";
+    public const string FacilityAttendantAdded = "FacilityAttendantAdded";
+    public const string FacilityAttendantRemoved = "FacilityAttendantRemoved";
+    public const string FacilityAttendantInvitationSent = "FacilityAttendantInvitationSent";
     public const string ContractCommenced = "ContractCommenced";
     public const string ContractCancelled = "ContractCancelled";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";

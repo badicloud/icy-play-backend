@@ -1,3 +1,4 @@
+using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Common;
 using IcyPlay.Domain.Facilities;
 
@@ -59,6 +60,61 @@ public sealed class FacilityOwner : Entity
     public string? BusinessRegistrationNumber
     {
         get; private set;
+    }
+
+    /// <summary>
+    /// Where a customer sends the money. The platform never touches it: the
+    /// customer pays the venue directly, and the platform bills the venue its
+    /// fee afterwards.
+    ///
+    /// Either is enough to pay by — a number to type, or a code to scan — so a
+    /// venue that has only one is not blocked from taking bookings.
+    /// </summary>
+    public string? GcashNumber
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// Whose account it is. Sent to the customer with the number, because GCash
+    /// shows the recipient's name before the money moves and a customer who
+    /// cannot check it against anything is being asked to trust a screen.
+    /// </summary>
+    public string? GcashAccountName
+    {
+        get; private set;
+    }
+
+    /// <summary>The QR code image, in Cloudinary. Stored as its secure URL.</summary>
+    public string? GcashQrCodeUrl
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// How long a booking holds its court while waiting to be paid for.
+    ///
+    /// Per owner, because it is their court going unsold: a busy city venue
+    /// wants the hour back in fifteen minutes, a quiet one can afford an hour.
+    /// </summary>
+    public int PartialBookingExpiryMinutes { get; private set; } = PaymentHold.DefaultMinutes;
+
+    /// <summary>Whether this venue can be paid at all yet.</summary>
+    public bool CanTakePayment =>
+        !string.IsNullOrWhiteSpace(GcashNumber) || !string.IsNullOrWhiteSpace(GcashQrCodeUrl);
+
+    public void SetPaymentDetails(
+        string? gcashNumber,
+        string? gcashAccountName,
+        string? gcashQrCodeUrl,
+        int partialBookingExpiryMinutes,
+        DateTimeOffset now)
+    {
+        GcashNumber = string.IsNullOrWhiteSpace(gcashNumber) ? null : gcashNumber.Trim();
+        GcashAccountName = string.IsNullOrWhiteSpace(gcashAccountName) ? null : gcashAccountName.Trim();
+        GcashQrCodeUrl = string.IsNullOrWhiteSpace(gcashQrCodeUrl) ? null : gcashQrCodeUrl.Trim();
+        PartialBookingExpiryMinutes = PaymentHold.Clamp(partialBookingExpiryMinutes);
+        UpdatedAt = now;
     }
     public ICollection<FacilityOwnerDocument> Documents { get; private set; } = [];
     public ICollection<FacilityOwnerContract> Contracts { get; private set; } = [];

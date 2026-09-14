@@ -187,6 +187,7 @@ Booking reports and platform fee billing summaries are updated
 * `business-process.md`
 * `pricing-strategy.md`
 * `courts-and-pricing.md`
+* `booking.md`
 * `web-app.md`
 * `platform-fee-strategy.md`
 * `booking-workflow.md`

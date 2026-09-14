@@ -27,7 +27,9 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         var (sut, mail) = CreateService(context);
 
         // Act
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc Sports Ventures", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc Sports Ventures"),
+            CancellationToken.None);
 
         // Assert
         var stored = await context.AccountInvitationTokens
@@ -54,11 +56,15 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         await using var context = database.CreateContext();
         var user = await AddUserAsync(context);
         var (sut, mail) = CreateService(context);
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc"),
+            CancellationToken.None);
         var firstToken = TokenFrom(mail.LastVariables["activation_url"].ToString()!);
 
         // Act
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc"),
+            CancellationToken.None);
         var secondToken = TokenFrom(mail.LastVariables["activation_url"].ToString()!);
 
         // Assert: two live invitations to one account is one more than anybody
@@ -79,7 +85,9 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         context.FacilityOwners.Add(new FacilityOwner(user.Id, "Abc Sports Ventures", "billing@example.com", null));
         await context.SaveChangesAsync();
         var (sut, mail) = CreateService(context);
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc Sports Ventures", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc Sports Ventures"),
+            CancellationToken.None);
 
         // Act
         var details = await sut.CheckAsync(
@@ -122,7 +130,9 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         var user = await AddUserAsync(context);
         var originalHash = user.PasswordHash;
         var (sut, mail) = CreateService(context);
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc"),
+            CancellationToken.None);
         var rawToken = TokenFrom(mail.LastVariables["activation_url"].ToString()!);
 
         // Act
@@ -147,7 +157,9 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         await using var context = database.CreateContext();
         var user = await AddUserAsync(context);
         var (sut, mail) = CreateService(context);
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc"),
+            CancellationToken.None);
         var rawToken = TokenFrom(mail.LastVariables["activation_url"].ToString()!);
         await sut.AcceptAsync(rawToken, "Str0ng!Passw0rd", CancellationToken.None);
 
@@ -166,7 +178,9 @@ public sealed class AccountInvitationTests(SqlServerDatabaseFixture database)
         await using var context = database.CreateContext();
         var user = await AddUserAsync(context);
         var (sut, mail) = CreateService(context);
-        await sut.SendAsync(user.Id, user.Email, user.FullName, "Abc", CancellationToken.None);
+        await sut.SendAsync(
+            new InvitationRequest(user.Id, user.Email, user.FullName, "Abc"),
+            CancellationToken.None);
         var rawToken = TokenFrom(mail.LastVariables["activation_url"].ToString()!);
 
         // A clock eight days on, one day past the window.

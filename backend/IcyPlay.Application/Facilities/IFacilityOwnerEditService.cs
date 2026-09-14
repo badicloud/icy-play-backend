@@ -9,6 +9,17 @@ namespace IcyPlay.Application.Facilities;
 /// </summary>
 public interface IFacilityOwnerEditService
 {
+    /// <summary>
+    /// Sets where the venue is paid and how long it holds a court unpaid. The
+    /// QR code is already in Cloudinary by the time this is called; only its
+    /// link comes through here, and it is checked.
+    /// </summary>
+    Task<EditResult> UpdatePaymentDetailsAsync(
+        Guid facilityOwnerId,
+        UpdatePaymentDetailsRequest request,
+        AuditActor actor,
+        CancellationToken ct);
+
     Task<EditResult> UpdateBusinessAsync(
         Guid facilityOwnerId,
         UpdateBusinessRequest request,

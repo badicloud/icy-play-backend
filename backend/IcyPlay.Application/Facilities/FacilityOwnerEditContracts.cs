@@ -15,6 +15,44 @@ public sealed record UpdateBusinessRequest(
     string? BusinessRegistrationNumber,
     string? Reason);
 
+/// <summary>
+/// Where a venue takes its money, and how long it will hold a court while
+/// waiting for it.
+///
+/// Both halves of the GCash details are optional on their own — a venue with
+/// only a QR code, or only a number, can still be paid — but a venue with
+/// neither cannot take a booking to the end, which is worth saying on the
+/// screen rather than discovering at checkout.
+/// </summary>
+public sealed record UpdatePaymentDetailsRequest(
+    string? GcashNumber,
+    string? GcashAccountName,
+    string? GcashQrCodeUrl,
+    int PartialBookingExpiryMinutes,
+    string? Reason);
+
+public sealed class UpdatePaymentDetailsRequestValidator
+    : AbstractValidator<UpdatePaymentDetailsRequest>
+{
+    public UpdatePaymentDetailsRequestValidator()
+    {
+        RuleFor(x => x.GcashNumber).MaximumLength(30);
+        RuleFor(x => x.GcashAccountName).MaximumLength(150);
+        RuleFor(x => x.GcashQrCodeUrl).MaximumLength(1000);
+        RuleFor(x => x.PartialBookingExpiryMinutes)
+            .Must(IcyPlay.Domain.Bookings.PaymentHold.IsSupported)
+            .WithMessage(
+                $"A hold has to be between {IcyPlay.Domain.Bookings.PaymentHold.MinimumMinutes} " +
+                $"and {IcyPlay.Domain.Bookings.PaymentHold.MaximumMinutes} minutes.");
+        // A number without a name gives the customer nothing to check the
+        // recipient against before the money moves.
+        RuleFor(x => x.GcashAccountName)
+            .NotEmpty()
+            .When(x => !string.IsNullOrWhiteSpace(x.GcashNumber))
+            .WithMessage("Say whose GCash account the number belongs to.");
+    }
+}
+
 public sealed record UpdateFacilityRequest(
     string Name,
     string? Description,
@@ -85,7 +123,9 @@ public enum EditFailure
     AlreadyCancelled,
     OverlappingContract,
     UntrustedContractDocument,
-    UntrustedPhotoUrl
+    UntrustedPhotoUrl,
+    /// <summary>The GCash QR code is not a secure link on the configured Cloudinary account.</summary>
+    UntrustedAssetUrl
 }
 
 public sealed record EditResult(EditFailure Failure = EditFailure.None)

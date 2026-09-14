@@ -71,6 +71,33 @@ distinction the venue did not make.
 The peak row carries its window in amber. "₱600 at peak" is not something a
 customer can act on without knowing when peak is.
 
+### Booking — `/book/{bookableCourtId}`
+
+```text
+Header
+Booking type          by the hour · whole day · several days
+Day strip             a fortnight ahead
+Hour grid             one tile an hour, with its own price
+Rates panel                                           (sidebar)
+Floating summary      what is picked, what it costs, Continue
+Footer
+```
+
+The route takes a **bookable court**, not a court: the id the catalogue already
+hands out identifies the court, the sport and the part of the floor in one, so
+the page never has to reassemble it from three query parameters.
+
+The tick is the whole interaction, so it is a 30px target with a heavy stroke —
+obvious at arm's length whether it is on, and tapping again takes it off.
+
+**Nothing is priced in the browser.** Each hour arrives from the server with its
+own rate and the platform's fee already worked out; the page adds them up. A
+total the page computed itself is a total that can disagree with the bill.
+
+Whole-day and several-day booking lock the grid and take every open hour. A day
+with an hour already gone cannot be sold whole, and the page says so **before**
+the customer commits rather than letting the server refuse them afterwards.
+
 ### Court detail — `/courts/{courtId}?sport=&division=`
 
 ```text
@@ -172,7 +199,9 @@ court's opening hours. Times are picked on a clock rather than in a native time
 input, which is a different shape in every browser and unusable in some.
 
 **Bookings** — not built, and says so. An admin who finds an empty panel cannot
-tell whether the feature is missing or their court is.
+tell whether the feature is missing or their court is. The customer side of
+booking is built; what is missing here is the venue's view of it, and the
+attendant's queue for verifying payments.
 
 ### Other admin pages
 
@@ -217,8 +246,10 @@ that could change the answer. See
 
 ## Not built
 
-* **Booking.** No availability, no checkout, no confirmation. The customer-side
-  half of [platform-fee-strategy.md](platform-fee-strategy.md) belongs with it.
+* **Paying for a booking.** Hours can be chosen and held; nothing collects
+  money. The MVP flow — GCash to the venue, a hold that expires, a receipt
+  uploaded, an attendant verifying it — is in
+  [booking.md](booking.md#not-built), along with what its absence means today.
 * **The facility owner's own console.** Everything built is the platform admin
   acting on an owner's behalf. The `RoleGuard` and `app/(facility-owner)` route
   group are not built.

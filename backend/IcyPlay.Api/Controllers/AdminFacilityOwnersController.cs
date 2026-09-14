@@ -20,6 +20,7 @@ namespace IcyPlay.Api.Controllers;
 public sealed class AdminFacilityOwnersController(
     IFacilityOwnerOnboardingService onboarding,
     IFacilityOwnerEditService edits,
+    IFacilityAttendantService attendants,
     IValidator<OnboardFacilityOwnerRequest> validator,
     IServiceProvider services,
     ILogger<AdminFacilityOwnersController> logger) : ControllerBase
@@ -191,6 +192,147 @@ public sealed class AdminFacilityOwnersController(
         EditAsync(
             request,
             actor => edits.UpdateContractRatesAsync(id, contractId, request, actor, ct),
+            ct);
+
+    /// <summary>
+    /// Where the venue is paid, and how long it holds a court while waiting.
+    /// Its own endpoint rather than part of the business details: a venue
+    /// changes its GCash account or its hold without anything else about it
+    /// changing, and a screen that saves everything at once puts the business
+    /// name at risk to move a number.
+    /// </summary>
+    /// <summary>
+    /// Who works a venue's desk. The owner is always on the list and has no id:
+    /// they attend their own venues by owning them.
+    /// </summary>
+    [HttpGet("{id:guid}/facilities/{facilityId:guid}/attendants")]
+    public async Task<IActionResult> Attendants(Guid id, Guid facilityId, CancellationToken ct)
+    {
+        var result = await attendants.ListAsync(id, facilityId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<FacilityAttendantDetail>>(result.Value!))
+            : AttendantFailureResult(result.Failure);
+    }
+
+    /// <summary>
+    /// What the console may do with an address, so the admin is told while
+    /// they type rather than after they press save.
+    /// </summary>
+    [HttpGet("{id:guid}/facilities/{facilityId:guid}/attendants/check")]
+    public async Task<IActionResult> CheckAttendantEmail(
+        Guid id,
+        Guid facilityId,
+        [FromQuery] string email,
+        CancellationToken ct)
+    {
+        var result = await attendants.CheckEmailAsync(id, facilityId, email, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<AttendantEmailCheck>(result.Value!))
+            : AttendantFailureResult(result.Failure);
+    }
+
+    [HttpPost("{id:guid}/facilities/{facilityId:guid}/attendants")]
+    public async Task<IActionResult> InviteAttendant(
+        Guid id,
+        Guid facilityId,
+        InviteAttendantRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await attendants.InviteAsync(id, facilityId, request, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<FacilityAttendantDetail>(result.Value!))
+            : AttendantFailureResult(result.Failure);
+    }
+
+    /// <summary>
+    /// Sends an attendant who has not claimed their account another activation
+    /// link. Any link already outstanding stops working.
+    /// </summary>
+    [HttpPost("{id:guid}/facilities/{facilityId:guid}/attendants/{attendantId:guid}/resend-invitation")]
+    public async Task<IActionResult> ResendAttendantInvitation(
+        Guid id,
+        Guid facilityId,
+        Guid attendantId,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await attendants.ResendInvitationAsync(id, facilityId, attendantId, actor, ct);
+
+        return result.Succeeded ? NoContent() : AttendantFailureResult(result.Failure);
+    }
+
+    [HttpDelete("{id:guid}/facilities/{facilityId:guid}/attendants/{attendantId:guid}")]
+    public async Task<IActionResult> RemoveAttendant(
+        Guid id,
+        Guid facilityId,
+        Guid attendantId,
+        [FromQuery] string? reason,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await attendants.RemoveAsync(id, facilityId, attendantId, reason, actor, ct);
+
+        return result.Succeeded ? NoContent() : AttendantFailureResult(result.Failure);
+    }
+
+    private IActionResult AttendantFailureResult(AttendantFailure failure)
+    {
+        var (status, code, message) = failure switch
+        {
+            AttendantFailure.FacilityNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "That facility does not exist, or does not belong to this owner."),
+            AttendantFailure.AttendantNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "That person is not on this venue's desk."),
+            AttendantFailure.AlreadyAttending => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "They already work this venue."),
+            AttendantFailure.IsTheOwner => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The owner attends their own venue already."),
+            AttendantFailure.InvitationAlreadyAccepted => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "They have already set up their account, so there is nothing to resend."),
+            AttendantFailure.EmailAlreadyRegistered => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That address already has an IcyPlay account, so it cannot be used. Try one nobody has signed up with."),
+            _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
+        };
+
+        return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
+    }
+
+    [HttpPut("{id:guid}/payment-details")]
+    public Task<IActionResult> UpdatePaymentDetails(
+        Guid id,
+        UpdatePaymentDetailsRequest request,
+        CancellationToken ct) =>
+        EditAsync(
+            request,
+            actor => edits.UpdatePaymentDetailsAsync(id, request, actor, ct),
             ct);
 
     [HttpPut("{id:guid}/contracts/{contractId:guid}/document")]

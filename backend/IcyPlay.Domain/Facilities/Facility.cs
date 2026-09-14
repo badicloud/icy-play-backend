@@ -114,6 +114,30 @@ public sealed partial class Facility : Entity
     public ICollection<FacilityAmenity> Amenities { get; private set; } = [];
     public ICollection<Court> Courts { get; private set; } = [];
 
+    /// <summary>
+    /// The staff on this venue's desk. The owner is not among them — see
+    /// <see cref="IsAttendedBy"/>.
+    /// </summary>
+    public ICollection<FacilityAttendant> Attendants { get; private set; } = [];
+
+    /// <summary>
+    /// Whether this person may work this venue's desk.
+    ///
+    /// The owner always may, and is deliberately not stored as an attendant of
+    /// their own facility. A row for them would be a second copy of something
+    /// the ownership already says, and the day the two disagree is the day
+    /// somebody who owns the place cannot confirm a booking in it.
+    ///
+    /// Takes the owner's user id rather than reading it off the navigation, so
+    /// this can be asked without loading the owner.
+    /// </summary>
+    public static bool IsAttendedBy(
+        Guid userId,
+        Guid ownerUserId,
+        IEnumerable<FacilityAttendant> attendants) =>
+        userId == ownerUserId ||
+        attendants.Any(attendant => attendant.IsActive && attendant.UserId == userId);
+
     public bool HasCoordinates => Latitude is not null && Longitude is not null;
 
     public void UpdateDetails(

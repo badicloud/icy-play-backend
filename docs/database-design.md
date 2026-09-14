@@ -639,6 +639,93 @@ what was agreed for terms already served.
 See [courts-and-pricing.md](courts-and-pricing.md) for the arithmetic and the
 rules around these.
 
+### FacilityOwners
+
+Payment is taken by the venue, not by the platform, so what a customer is asked
+to pay into lives on the owner.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| GcashNumber | nvarchar(30) | |
+| GcashAccountName | nvarchar(200) | Shown beside the number, so a customer can check the name before sending. |
+| GcashQrCodeUrl | nvarchar(1000) | Cloudinary `secure_url`. |
+| PartialBookingExpiryMinutes | int | How long an unpaid hold survives. Default 30, clamped to 5–240. |
+
+These are on the owner rather than in a `PaymentMethods` table because there is
+one way to pay today. A second method is a table; a first one is four columns.
+
+### Bookings
+
+What was agreed, as it was agreed. See [booking.md](booking.md).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| BookableCourtId | uniqueidentifier | What was booked. |
+| CustomerUserId | uniqueidentifier | |
+| Kind | nvarchar(20) | `Hourly`, `WholeDay` or `MultiDay`. Default `Hourly`. |
+| StartDate / EndDate | date | The same day for everything but a run. |
+| Status | nvarchar(30) | |
+| CourtName / FacilityName / SportName | nvarchar | Copied at the time, never read live. |
+| PlatformHourlyRate | decimal(10,2) | Copied from the contract in force that day. |
+| HoldsUntil | datetimeoffset | Set from the owner's expiry minutes. |
+| ReceiptUrl | nvarchar(1000) | Cloudinary `secure_url`. |
+| ReceiptUploadedAt | datetimeoffset | **The clock stops here**, not at submit. |
+| SubmittedForVerificationAt | datetimeoffset | |
+| CancellationReason | nvarchar(500) | |
+
+Indexed on CustomerUserId and on (StartDate, EndDate) — the stretch of days a
+venue's console asks for.
+
+**The names and the rates are snapshots.** A venue that renames a court or
+re-prices it next month must not reach backwards into an agreement somebody has
+already paid against.
+
+**Lapsing is derived, not stored.** A hold is gone when the moment passes and no
+receipt has arrived; nothing has to run on time for that to be true. A background
+job may later write `Expired` for tidy reporting, and it will be recording what
+was already the case.
+
+### BookingSlots
+
+One row per hour, carrying its own price.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| BookingId | uniqueidentifier | |
+| CourtId | uniqueidentifier | Denormalised, for the availability query. |
+| Date | date | |
+| StartsAt / EndsAt | time | One hour. |
+| Rate | decimal(10,2) | What this hour cost. |
+| RateKind | nvarchar(20) | `Standard`, `Peak`, `Weekend` or `Holiday`. |
+
+An hour priced as a peak hour stays priced that way in the record, so a bill can
+be read back line by line and explained.
+
+`CourtId` is copied for the same reason it is on BookableCourts: the hot query
+asks what else is taken on this floor, and a join in front of every slot of every
+calendar is a join too many.
+
+### FacilityAttendants
+
+Who may confirm a payment at one venue.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| FacilityId | uniqueidentifier | |
+| UserId | uniqueidentifier | |
+| IsActive | bit | False once taken off the desk. |
+
+Unique on (FacilityId, UserId).
+
+**The owner is not a row here.** They attend every venue they own by owning it,
+and a second copy of that fact is one that can disagree with the first.
+
+**Rows are retired, never deleted, and never reinstated.** A booking they
+confirmed still has to carry somebody's name. One address, one account: an
+address that already belongs to somebody is refused, and a retired attendant's
+address belongs to them, so they are not added back through the same door they
+left by.
+
 ---
 
 ## Payment Setup

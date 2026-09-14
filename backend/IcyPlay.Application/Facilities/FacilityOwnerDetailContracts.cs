@@ -13,6 +13,17 @@ public sealed record FacilityOwnerDetail(
     string BillingEmail,
     string? BillingPhone,
     string? BusinessRegistrationNumber,
+    /// <summary>
+    /// Where customers send the money, and how long a court waits for it. The
+    /// platform never touches the payment — it only tells the customer where to
+    /// send it and bills the venue its fee afterwards.
+    /// </summary>
+    string? GcashNumber,
+    string? GcashAccountName,
+    string? GcashQrCodeUrl,
+    int PartialBookingExpiryMinutes,
+    /// <summary>False while the venue has given neither a number nor a QR code.</summary>
+    bool CanTakePayment,
     bool IsActive,
     /// <summary>Derived from the contract dates, never stored.</summary>
     string Status,

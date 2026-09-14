@@ -276,12 +276,7 @@ public sealed class FacilityOwnerDetailTests(SqlServerDatabaseFixture database)
 
     private sealed class SilentInvitation : IAccountInvitationService
     {
-        public Task SendAsync(
-            Guid userId,
-            string recipientEmail,
-            string recipientName,
-            string businessName,
-            CancellationToken ct) => Task.CompletedTask;
+        public Task SendAsync(InvitationRequest request, CancellationToken ct) => Task.CompletedTask;
 
         public Task<InvitationDetails?> CheckAsync(string rawToken, CancellationToken ct) =>
             Task.FromResult<InvitationDetails?>(null);

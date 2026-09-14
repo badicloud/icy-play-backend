@@ -26,7 +26,8 @@ public sealed class AdminAssetsController(ICloudinaryAssetService assets) : Cont
             ["facility-owner-document"] = "icyplay/facility-owners/documents",
             ["facility-photo"] = "icyplay/facilities/photos",
             ["contract-document"] = "icyplay/facility-owners/contracts",
-            ["court-photo"] = "icyplay/courts/photos"
+            ["court-photo"] = "icyplay/courts/photos",
+            ["gcash-qr-code"] = "icyplay/facility-owners/gcash"
         };
 
     [HttpPost("upload-signature")]

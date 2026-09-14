@@ -1,0 +1,725 @@
+using FluentAssertions.Execution;
+using IcyPlay.Application.Audit;
+using IcyPlay.Application.Bookings;
+using IcyPlay.Application.Facilities;
+using IcyPlay.Domain.Bookings;
+using IcyPlay.Domain.Facilities;
+using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.Audit;
+using IcyPlay.Infrastructure.Bookings;
+using IcyPlay.Infrastructure.Facilities;
+using IcyPlay.Infrastructure.Persistence;
+using IcyPlay.Infrastructure.Storage;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+
+namespace IcyPlay.IntegrationTests.Persistence;
+
+[Collection(DatabaseCollection.Name)]
+public sealed class BookingTests(SqlServerDatabaseFixture database)
+{
+    // A Monday. The venue opens 6am to 10pm every day, so a date is 16 hours.
+    private static readonly DateTimeOffset Now =
+        new(2026, 9, 14, 9, 0, 0, TimeSpan.Zero);
+
+    /// <summary>The venue's today. 09:00 UTC is 5pm in Manila, so most of it has gone.</summary>
+    private static readonly DateOnly Today = new(2026, 9, 14);
+
+    private static readonly DateOnly Tuesday = new(2026, 9, 15);
+    private static readonly DateOnly Wednesday = new(2026, 9, 16);
+    private static readonly DateOnly Saturday = new(2026, 9, 19);
+
+    private static readonly TimeOnly SevenAm = new(7, 0);
+    private static readonly TimeOnly EightAm = new(8, 0);
+    private static readonly TimeOnly SixPm = new(18, 0);
+
+    [Fact]
+    public async Task Availability_ShouldPriceEveryHourOfTheDayItIsAskedAbout()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Rates Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        // Assert: sixteen hours, the three peak ones dearer, and the platform's
+        // per-hour fee alongside each so the page does not have to work it out.
+        var slots = day.Value!.Slots;
+
+        using (new AssertionScope())
+        {
+            day.Value.CourtName.Should().Be("Che court 1 · Pickleball 1");
+            slots.Should().HaveCount(16);
+            slots.Should().OnlyContain(slot => slot.IsOpen);
+            slots.Count(slot => slot.RateKind == "Peak").Should().Be(3);
+            slots.Single(slot => slot.StartsAt == SevenAm).Rate.Should().Be(500m);
+            slots.Single(slot => slot.StartsAt == SixPm).Rate.Should().Be(600m);
+            slots.Should().OnlyContain(slot => slot.PlatformFee == 15m);
+        }
+    }
+
+    [Fact]
+    public async Task Availability_ShouldChargeTheWeekendRateOnASaturday()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Weekend Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Saturday, CancellationToken.None);
+
+        // Assert: the morning is the weekend rate; the evening is peak, because
+        // this venue said peak runs at weekends too and peak is the dearer of
+        // the two.
+        var slots = day.Value!.Slots;
+
+        using (new AssertionScope())
+        {
+            slots.Single(slot => slot.StartsAt == SevenAm).RateKind.Should().Be("Weekend");
+            slots.Single(slot => slot.StartsAt == SevenAm).Rate.Should().Be(550m);
+            slots.Single(slot => slot.StartsAt == SixPm).RateKind.Should().Be("Peak");
+            slots.Single(slot => slot.StartsAt == SixPm).Rate.Should().Be(600m);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldBillTheHoursItTookAtTheRatesItQuoted()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Bill Courts");
+        var sut = CreateService(context);
+
+        // Act: two standard hours and one peak one.
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.Hourly,
+                [
+                    new BookingSlotInput(Tuesday, SevenAm),
+                    new BookingSlotInput(Tuesday, EightAm),
+                    new BookingSlotInput(Tuesday, SixPm)
+                ]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: 500 + 500 + 600 for the court, 3 x 15 on top for the
+        // platform. The fee is shown to the customer and billed to the venue --
+        // see docs/platform-fee-strategy.md.
+        var detail = booking.Value!;
+
+        using (new AssertionScope())
+        {
+            detail.BookedHours.Should().Be(3);
+            detail.RentalTotal.Should().Be(1600m);
+            detail.PlatformFeeTotal.Should().Be(45m);
+            detail.Total.Should().Be(1645m);
+            detail.Status.Should().Be(nameof(BookingStatus.PendingPayment));
+            detail.Slots.Select(slot => slot.RateKind)
+                .Should().Equal("Standard", "Standard", "Peak");
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldTakeTheHoursOffTheGrid()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Taken Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+            day.Value.Slots.Single(slot => slot.StartsAt == EightAm).IsOpen.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldCloseEveryOtherSportOnTheFloor()
+    {
+        // Arrange: basketball is played across the whole floor.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Whole Floor Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Basketball, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var pickleball = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+        var volleyball = await sut.AvailabilityAsync(floor.Volleyball, Tuesday, CancellationToken.None);
+
+        // Assert: a basketball game is played over all of that paint. Selling
+        // pickleball alongside it puts two games in one gym.
+        using (new AssertionScope())
+        {
+            pickleball.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+            volleyball.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+            pickleball.Value.Slots.Single(slot => slot.StartsAt == EightAm).IsOpen.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldLeaveTheOtherPartsOfTheFloorOnSale()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Siblings Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var second = await sut.AvailabilityAsync(floor.Pickleball2, Tuesday, CancellationToken.None);
+        var third = await sut.AvailabilityAsync(floor.Pickleball3, Tuesday, CancellationToken.None);
+        var basketball = await sut.AvailabilityAsync(floor.Basketball, Tuesday, CancellationToken.None);
+
+        // Assert: three pickleball games at once is the entire point of marking
+        // the floor out -- but nobody is playing basketball around the nets.
+        using (new AssertionScope())
+        {
+            second.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+            third.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+            basketball.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseAnHourSomebodyElseHolds()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Clash Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act: a second customer tries for the same hour.
+        var second = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        // Assert
+        second.Failure.Should().Be(BookingFailure.SlotTaken);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldSellAWholeDayAsEveryHourTheCourtIsOpen()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Whole Day Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.WholeDay,
+                [.. AllHours(Tuesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: thirteen hours at 500 and three at 600, plus the fee on all
+        // sixteen.
+        using (new AssertionScope())
+        {
+            booking.Value!.BookedHours.Should().Be(16);
+            booking.Value.RentalTotal.Should().Be(8300m);
+            booking.Value.PlatformFeeTotal.Should().Be(240m);
+            booking.Value.Kind.Should().Be(BookingKind.WholeDay);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseAWholeDayWithAnHourAlreadyGone()
+    {
+        // Arrange: one hour of the day is taken, by pickleball or by anything
+        // else on the same floor.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Holed Day Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Basketball, Tuesday, SevenAm),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        // Act
+        var whole = await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Tuesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a whole day means the whole day. Quietly handing over one
+        // with a hole in it is worse than saying no.
+        whole.Failure.Should().Be(BookingFailure.DayNotWhollyAvailable);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseDaysThatDoNotRunOneAfterAnother()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Gap Days Courts");
+        var sut = CreateService(context);
+
+        // Act: Tuesday and Saturday, with the rest of the week in between.
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Tuesday), .. AllHours(Saturday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert
+        booking.Failure.Should().Be(BookingFailure.DatesNotConsecutive);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldSellARunOfWholeDays()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Run Of Days Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Tuesday), .. AllHours(Wednesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            booking.Value!.BookedHours.Should().Be(32);
+            booking.Value.RentalTotal.Should().Be(16600m);
+            booking.Value.Slots.Select(slot => slot.Date).Distinct()
+                .Should().BeEquivalentTo([Tuesday, Wednesday]);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseAnHourThatHasAlreadyGone()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Past Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, new DateOnly(2026, 9, 1), SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert
+        booking.Failure.Should().Be(BookingFailure.DateInThePast);
+    }
+
+    [Fact]
+    public async Task CancelAsync_ShouldPutTheHoursBackOnSale()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Released Courts");
+        var sut = CreateService(context);
+
+        var booking = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        await sut.CancelAsync(booking.Value!.Id, floor.Customer, "Changed our minds", CancellationToken.None);
+
+        // Assert: the hour is free again, and the booking stays on the record
+        // rather than being deleted out of the history.
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+            (await context.Bookings.CountAsync(candidate => candidate.Id == booking.Value.Id))
+                .Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task Availability_ShouldCloseEveryHourWhileTheCourtIsUnderMaintenance()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Closed Courts");
+        var courts = CreateCourtService(context);
+        var sut = CreateService(context);
+
+        await courts.SetCourtMaintenanceAsync(
+            floor.CourtId,
+            new SetMaintenanceRequest(Now, Now.AddDays(7), "Resurfacing"),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+        var booking = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a closed court shows its hours -- a customer still wants to
+        // know what it costs -- but none of them are on sale.
+        using (new AssertionScope())
+        {
+            day.Value!.IsUnderMaintenance.Should().BeTrue();
+            day.Value.Slots.Should().HaveCount(16);
+            day.Value.Slots.Should().OnlyContain(slot => !slot.IsOpen);
+            booking.Failure.Should().Be(BookingFailure.UnderMaintenance);
+        }
+    }
+
+    [Fact]
+    public async Task GetAsync_ShouldNotHandOverSomebodyElsesBooking()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Private Courts");
+        var sut = CreateService(context);
+
+        var booking = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var stranger = await sut.GetAsync(booking.Value!.Id, Guid.NewGuid(), CancellationToken.None);
+
+        // Assert: answered the same as a booking that does not exist, so an id
+        // cannot be probed for whether it belongs to somebody.
+        stranger.Failure.Should().Be(BookingFailure.CourtNotFound);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseADateFurtherAheadThanThePlatformTakes()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Far Ahead Courts");
+        var sut = CreateService(context);
+
+        // Act: a day past the window, which the booking page's strip does not
+        // even offer.
+        var booking = await sut.CreateAsync(
+            Hourly(
+                floor.Pickleball1,
+                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DaysAhead + 1),
+                SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a hold costs nothing to make and does not expire yet, so
+        // without a ceiling one account could sit on a court for a year.
+        booking.Failure.Should().Be(BookingFailure.TooFarAhead);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldTakeTheLastDayOfTheWindow()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Edge Of Window Courts");
+        var sut = CreateService(context);
+
+        // Act: the thirtieth day itself, which the strip does offer.
+        var booking = await sut.CreateAsync(
+            Hourly(
+                floor.Pickleball1,
+                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DaysAhead),
+                SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: the boundary is inclusive, so what the page shows and what the
+        // server takes are the same set of days.
+        booking.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Availability_ShouldCloseTodaysHoursThatHaveAlreadyBegun()
+    {
+        // Arrange: the clock is 09:00 UTC, which is 5pm where the venue is.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Today Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var day = await sut.AvailabilityAsync(floor.Pickleball1, Today, CancellationToken.None);
+
+        // Assert: 6am to 5pm has gone; 6pm to 10pm is still sellable. Times are
+        // read on the venue's wall clock -- in Manila a UTC clock is eight hours
+        // behind, and reading "now" off the server would leave this morning on
+        // sale until the middle of the evening.
+        var slots = day.Value!.Slots;
+
+        using (new AssertionScope())
+        {
+            slots.Should().HaveCount(16);
+            slots.Where(slot => slot.StartsAt <= new TimeOnly(17, 0))
+                .Should().OnlyContain(slot => slot.HasPassed && !slot.IsOpen);
+            slots.Where(slot => slot.StartsAt > new TimeOnly(17, 0))
+                .Should().OnlyContain(slot => !slot.HasPassed && slot.IsOpen);
+            slots.Count(slot => slot.IsOpen).Should().Be(4);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseAnHourOfTodayThatHasAlreadyStarted()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking This Morning Courts");
+        var sut = CreateService(context);
+
+        // Act: this morning, asked for this evening.
+        var booking = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Today, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: the date check alone let this through -- today is not before
+        // today -- and an hour that has been and gone was sellable all day.
+        booking.Failure.Should().Be(BookingFailure.SlotTaken);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseTodayAsAWholeDay()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Today Whole Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Today)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a day sold open to close has to still have its opening in it.
+        // The booking page greys today out for the same reason.
+        booking.Failure.Should().Be(BookingFailure.DayNotWhollyAvailable);
+    }
+
+    // ------------------------------------------------------------- the set-up
+
+    private static CreateBookingRequest Hourly(Guid bookableCourtId, DateOnly date, TimeOnly startsAt) =>
+        new(bookableCourtId, BookingKind.Hourly, [new BookingSlotInput(date, startsAt)]);
+
+    /// <summary>Every hour the venue is open: 6am to 10pm.</summary>
+    private static IEnumerable<BookingSlotInput> AllHours(DateOnly date) =>
+        Enumerable.Range(6, 16).Select(hour => new BookingSlotInput(date, new TimeOnly(hour, 0)));
+
+    /// <summary>
+    /// One floor sold five ways, priced: basketball and volleyball whole,
+    /// pickleball three across, 500 standard / 600 peak 5-8pm / 550 weekend.
+    /// </summary>
+    private static async Task<Floor> FloorAsync(AppDbContext context, string facilityName)
+    {
+        var courts = CreateCourtService(context);
+        var basketball = await SportIdAsync(context, "basketball");
+        var volleyball = await SportIdAsync(context, "volleyball");
+        var pickleball = await SportIdAsync(context, "pickleball");
+
+        var user = new User($"booker-{Guid.NewGuid():N}@example.com", "Court Owner", null);
+        user.SetPasswordHash("hash");
+        context.Users.Add(user);
+        var owner = new FacilityOwner(user.Id, "Court Ventures", "billing@example.com", null);
+        context.FacilityOwners.Add(owner);
+
+        var today = DateOnly.FromDateTime(Now.UtcDateTime);
+        context.FacilityOwnerContracts.Add(new FacilityOwnerContract(
+            owner.Id,
+            today.AddMonths(-1),
+            today.AddMonths(11),
+            Guid.NewGuid(),
+            null,
+            Now));
+        await context.SaveChangesAsync();
+
+        var created = await courts.CreateAsync(
+            new CreateCourtRequest(
+                owner.Id,
+                null,
+                NewFacility(facilityName),
+                new CourtInput(
+                    "Che court 1",
+                    10,
+                    "The near court.",
+                    [
+                        new CourtSportInput(basketball, 1),
+                        new CourtSportInput(volleyball, 1),
+                        new CourtSportInput(pickleball, 3)
+                    ],
+                    basketball,
+                    CourtVenueType.Covered,
+                    CourtSurface.Concrete,
+                    true,
+                    "Full court",
+                    12,
+                    "Net provided",
+                    60,
+                    60,
+                    0,
+                    true,
+                    [],
+                    [])),
+            Admin(),
+            CancellationToken.None);
+
+        await courts.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [
+                    new SportPricingInput(basketball, 500m, 600m, 550m, 700m),
+                    new SportPricingInput(volleyball, 500m, 600m, 550m, 700m),
+                    new SportPricingInput(pickleball, 500m, 600m, 550m, 700m)
+                ],
+                new PeakWindowInput(new TimeOnly(17, 0), new TimeOnly(20, 0), true, true),
+                "Opening rates"),
+            Admin(),
+            CancellationToken.None);
+
+        var units = await context.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.CourtId == created.Value.CourtId)
+            .Select(unit => new { unit.Id, unit.CourtSport.SportId, unit.DivisionNumber })
+            .ToListAsync();
+
+        Guid Unit(Guid sportId, int number) => units
+            .Single(unit => unit.SportId == sportId && unit.DivisionNumber == number).Id;
+
+        return new Floor(
+            created.Value.CourtId,
+            Unit(basketball, 1),
+            Unit(volleyball, 1),
+            Unit(pickleball, 1),
+            Unit(pickleball, 2),
+            Unit(pickleball, 3),
+            Guid.NewGuid());
+    }
+
+    private sealed record Floor(
+        Guid CourtId,
+        Guid Basketball,
+        Guid Volleyball,
+        Guid Pickleball1,
+        Guid Pickleball2,
+        Guid Pickleball3,
+        Guid Customer);
+
+    private static BookingService CreateService(AppDbContext context) => new(
+        context,
+        Assets(),
+        new SilentNotifier(),
+        new FixedTimeProvider(Now),
+        NullLogger<BookingService>.Instance);
+
+    private static CloudinaryAssetService Assets() => new(
+        Options.Create(new CloudinaryOptions
+        {
+            CloudName = "icyplay-test",
+            ApiKey = "123456789012345",
+            ApiSecret = "test-api-secret"
+        }),
+        new FixedTimeProvider(Now));
+
+    /// <summary>
+    /// Letters are not what these tests are about, and a real sender here would
+    /// make them depend on a mail provider being reachable.
+    /// </summary>
+    private sealed class SilentNotifier : IBookingNotifier
+    {
+        public Task PaymentSubmittedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
+
+        public Task BookingConfirmedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
+    }
+
+    private static CourtService CreateCourtService(AppDbContext context) => new(
+        context,
+        new ActivityCatalog(
+            context,
+            new MemoryCache(new MemoryCacheOptions()),
+            new CatalogCacheSignal(),
+            new FixedTimeProvider(Now),
+            NullLogger<ActivityCatalog>.Instance),
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        Assets(),
+        new FixedTimeProvider(Now),
+        NullLogger<CourtService>.Instance);
+
+    private static AuditActor Admin() => new(Guid.NewGuid(), UserRoleName.PlatformAdmin);
+
+    private static async Task<Guid> SportIdAsync(AppDbContext context, string key) =>
+        await context.Sports.Where(sport => sport.Key == key).Select(sport => sport.Id).SingleAsync();
+
+    private static NewFacilityInput NewFacility(string name) => new(
+        new FacilityInput(
+            name,
+            "Six covered courts.",
+            "123 Main Street",
+            null,
+            "Cebu City",
+            "Cebu",
+            "6000",
+            "Philippines",
+            null,
+            null,
+            "Asia/Manila",
+            "+639171234567",
+            "hello@example.com",
+            "First aid kit on site.",
+            "No street shoes on the court.",
+            [],
+            []),
+        [
+            .. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
+                day,
+                new TimeOnly(6, 0),
+                new TimeOnly(22, 0)))
+        ],
+        []);
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+}
