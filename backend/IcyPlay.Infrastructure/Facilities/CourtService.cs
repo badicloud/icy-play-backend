@@ -115,15 +115,25 @@ public sealed class CourtService(
         court.SetUsesFacilityHours(request.Court.UsesFacilityHours, now);
         db.Courts.Add(court);
 
+        var links = new List<CourtSport>();
+
         foreach (var sport in courtSports)
         {
-            db.CourtSports.Add(new CourtSport(
+            var link = new CourtSport(
                 court.Id,
                 sport.SportId,
                 sport.SportId == request.Court.PrimarySportId,
                 sport.Divisions,
-                now));
+                now);
+            db.CourtSports.Add(link);
+            links.Add(link);
         }
+
+        // What the court actually sells, written in the same transaction as the
+        // court. A court that exists without its bookable courts is invisible to
+        // customers, and the gap would be measured in however long it took
+        // somebody to notice.
+        BookableCourtRoster.Reconcile(db, court.Id, links, now);
 
         // Written only when the court has opted out. An empty set then means
         // "follows the facility", not "nobody filled it in".
@@ -372,7 +382,11 @@ public sealed class CourtService(
                     .ToList(),
                 // A court marked out three ways for one sport is three things to
                 // book, and saying "one court" would undersell the venue.
-                BookableUnits = court.Sports.Sum(link => link.Divisions),
+                // Read rather than counted, so the number here, the number on the
+                // court page and the number of cards a customer sees are one
+                // number with one source.
+                BookableUnits = court.Sports
+                    .Sum(link => link.BookableCourts.Count(unit => unit.IsActive)),
                 Closure = db.MaintenancePeriods
                     .Where(period =>
                         period.LiftedAt == null &&
@@ -446,6 +460,7 @@ public sealed class CourtService(
     {
         var court = await db.Courts
             .Include(candidate => candidate.Sports)
+                .ThenInclude(link => link.BookableCourts)
             .Include(candidate => candidate.OperatingHours)
             .SingleOrDefaultAsync(candidate => candidate.Id == courtId, ct);
 
@@ -547,6 +562,8 @@ public sealed class CourtService(
             HoursSnapshot(court),
             request.Reason);
 
+        BookableCourtRoster.Reconcile(db, court.Id, court.Sports, now);
+
         var photosBefore = await PhotoSnapshotAsync(court.Id, ct);
         await PhotoGallery.ReplaceAsync(db, court.FacilityId, court.Id, input.Photos, now, ct);
         audit.RecordChange(
@@ -572,6 +589,7 @@ public sealed class CourtService(
     {
         var court = await db.Courts
             .Include(candidate => candidate.Sports)
+                .ThenInclude(link => link.BookableCourts)
             .SingleOrDefaultAsync(candidate => candidate.Id == courtId, ct);
 
         if (court is null)
@@ -595,6 +613,8 @@ public sealed class CourtService(
                 .Single(candidate => candidate.SportId == input.SportId)
                 .SetDivisions(input.Divisions, now);
         }
+
+        BookableCourtRoster.Reconcile(db, court.Id, court.Sports, now);
 
         audit.RecordChange(
             actor,
@@ -994,6 +1014,21 @@ public sealed class CourtService(
                         (int)hour.DayOfWeek,
                         hour.OpensAt,
                         hour.ClosesAt))
+                    .ToList(),
+                // Read rather than counted out, so the console and the public
+                // listing are looking at the same rows.
+                BookableCourts = court.Sports
+                    .SelectMany(link => link.BookableCourts
+                        .Where(unit => unit.IsActive)
+                        .Select(unit => new
+                        {
+                            unit.Id,
+                            link.SportId,
+                            SportName = link.Sport.Name,
+                            unit.DivisionNumber,
+                            unit.Kind,
+                            link.Divisions
+                        }))
                     .ToList()
             })
             .ToListAsync(ct);
@@ -1068,6 +1103,22 @@ public sealed class CourtService(
                     court.PeakOnWeekdays,
                     court.PeakOnWeekends,
                     court.Sports,
+                    [
+                        .. court.BookableCourts
+                            .OrderBy(unit => unit.SportName, StringComparer.Ordinal)
+                            .ThenBy(unit => unit.DivisionNumber)
+                            .Select(unit => new BookableCourtItem(
+                                unit.Id,
+                                unit.SportId,
+                                unit.SportName,
+                                unit.DivisionNumber,
+                                Court.DivisionName(
+                                    court.Name,
+                                    unit.SportName,
+                                    unit.DivisionNumber,
+                                    unit.Divisions),
+                                unit.Kind))
+                    ],
                     court.Photos,
                     court.UsesFacilityHours ? facilityHours : court.OwnHours,
                     closure is null

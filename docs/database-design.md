@@ -543,6 +543,35 @@ Division names are derived from the court name, the sport and the number
 (`Court 1 · Pickleball 2`), never stored — a stored name would survive a rename
 and lie.
 
+### BookableCourts
+
+One row per thing a customer can book. A floor taking basketball, volleyball and
+pickleball three across is five rows.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| CourtSportId | uniqueidentifier | The pair this belongs to. Carries the rates and the division count. |
+| CourtId | uniqueidentifier | The physical floor. Denormalised off the pair. |
+| DivisionNumber | int | Which part. One when the court is played whole. |
+| Kind | nvarchar(20) | `Whole` or `Divided`. |
+| IsActive | bit | False once the floor is re-marked into fewer parts. |
+
+Unique on (CourtSportId, DivisionNumber); indexed on CourtId.
+
+**`CourtId` is the one copy kept.** It earns its place: every availability check
+asks what else is booked on this floor, which is the most repeated question in
+the booking engine, and reaching it through the pair would put a join in front of
+every slot of every calendar. Only the roster writes this table, and it writes
+both columns from one read, which is what keeps the copy honest.
+
+**Rows are retired, never deleted.** A booking taken against part three still has
+to resolve after the floor is re-marked into two, and a receipt for a court that
+no longer exists is still a receipt. Marked out again, the same row comes back.
+
+Why this is stored when everything else here is derived, and the rule for which
+of these can be played at once, are in
+[courts-and-pricing.md](courts-and-pricing.md#bookable-courts).
+
 ### Courts
 
 | Column | Type | Notes |

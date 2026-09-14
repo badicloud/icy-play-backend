@@ -23,6 +23,13 @@ public sealed record CatalogActivity(
 /// separate games can run on it at once and each is booked on its own.
 /// </summary>
 public sealed record CatalogCourt(
+    /// <summary>
+    /// What a booking is taken against: this court, for this sport, this part
+    /// of the floor. Stable across a rename and across the floor being marked
+    /// out differently, which is why a booking points here and not at a court
+    /// plus a number worked out on the way past.
+    /// </summary>
+    Guid BookableCourtId,
     Guid CourtId,
     /// <summary>Which sport or event this offering is for. A court set up for three appears three times.</summary>
     string SportKey,

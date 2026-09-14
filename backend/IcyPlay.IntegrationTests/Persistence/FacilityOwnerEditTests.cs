@@ -720,7 +720,8 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
                 context,
                 new MemoryCache(new MemoryCacheOptions()),
                 new CatalogCacheSignal(),
-                new FixedTimeProvider(Now)),
+                new FixedTimeProvider(Now),
+                NullLogger<ActivityCatalog>.Instance),
             Assets(),
             new FixedTimeProvider(Now),
             NullLogger<FacilityOwnerEditService>.Instance);

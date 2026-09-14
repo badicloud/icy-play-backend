@@ -55,6 +55,13 @@ public sealed class CourtSport : Entity
 
     public bool IsDivided => Divisions > 1;
 
+    /// <summary>
+    /// What this pair actually sells: one row per playable part, kept in step
+    /// with <see cref="Divisions"/> by the roster. Retired parts stay in the
+    /// collection, so read it filtered on <c>IsActive</c>.
+    /// </summary>
+    public ICollection<BookableCourt> BookableCourts { get; private set; } = [];
+
     public void SetPrimary(bool isPrimary, DateTimeOffset now)
     {
         IsPrimary = isPrimary;

@@ -3,6 +3,7 @@ using IcyPlay.Domain.Facilities;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 
 namespace IcyPlay.Infrastructure.Facilities;
@@ -21,7 +22,8 @@ public sealed class ActivityCatalog(
     AppDbContext db,
     IMemoryCache cache,
     CatalogCacheSignal signal,
-    TimeProvider timeProvider) : IActivityCatalog
+    TimeProvider timeProvider,
+    ILogger<ActivityCatalog> logger) : IActivityCatalog
 {
     private const string ActivitiesKey = "public:activity-catalog";
 
@@ -270,6 +272,15 @@ public sealed class ActivityCatalog(
                 SportKey = link.Sport.Key,
                 SportName = link.Sport.Name,
                 link.Divisions,
+                // Ordered here so the parts come back 1, 2, 3 the way counting
+                // them out did. Left to the database the order is whatever the
+                // index felt like, and a listing that reshuffles between two
+                // page loads reads as a broken site.
+                Units = link.BookableCourts
+                    .Where(unit => unit.IsActive)
+                    .OrderBy(unit => unit.DivisionNumber)
+                    .Select(unit => new { unit.Id, unit.DivisionNumber })
+                    .ToList(),
                 link.StandardHourlyRate,
                 link.PeakHourlyRate,
                 link.WeekendRate,
@@ -307,6 +318,18 @@ public sealed class ActivityCatalog(
             })
             .ToListAsync(ct);
 
+        // Counting the parts could never come back empty; reading them can. A
+        // court configured and priced but missing its roster would drop out of
+        // the listing in silence, which is the one way this change can be worse
+        // than the arithmetic it replaces. Say so where somebody will see it.
+        foreach (var orphan in rows.Where(row => row.Units.Count == 0))
+        {
+            logger.LogWarning(
+                "Court {CourtId} is set up for {SportKey} but has no bookable courts, so it is missing from the public listing.",
+                orphan.CourtId,
+                orphan.SportKey);
+        }
+
         return
         [
             .. rows
@@ -314,14 +337,18 @@ public sealed class ActivityCatalog(
                 .ThenBy(row => row.SportName, StringComparer.Ordinal)
                 .ThenBy(row => row.DisplayOrder)
                 .ThenBy(row => row.CourtName, StringComparer.Ordinal)
-                .SelectMany(row => Enumerable
-                    .Range(1, row.Divisions)
-                    .Select(number => new CatalogCourt(
+                .SelectMany(row => row.Units
+                    .Select(unit => new CatalogCourt(
+                        unit.Id,
                         row.CourtId,
                         row.SportKey,
                         row.SportName,
-                        number,
-                        Court.DivisionName(row.CourtName, row.SportName, number, row.Divisions),
+                        unit.DivisionNumber,
+                        Court.DivisionName(
+                            row.CourtName,
+                            row.SportName,
+                            unit.DivisionNumber,
+                            row.Divisions),
                         row.FacilityId,
                         row.FacilityName,
                         row.AddressLine1,
@@ -389,7 +416,7 @@ public sealed class ActivityCatalog(
                 group.Key.Kind,
                 group.Key.DisplayOrder,
                 // A court marked out into three is three courts to book.
-                CourtCount = group.Sum(link => link.Divisions),
+                CourtCount = group.Sum(link => link.BookableCourts.Count(unit => unit.IsActive)),
                 FacilityCount = group.Select(link => link.Court.FacilityId).Distinct().Count()
             })
             .ToListAsync(ct);

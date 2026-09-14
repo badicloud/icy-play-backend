@@ -1089,9 +1089,15 @@ carrying the sport it is for. A court set up for three sports appears three
 times at three prices, so the sport has to be on the row or the rows read as
 duplicates.
 
-Each row carries the court and division name, the venue and its address and
+Each row carries `bookableCourtId` — what a booking will be taken against —
+along with the court and division name, the venue and its address and
 coordinates, the cover photo, the four rates, the peak window, and whether it is
 under maintenance at either level.
+
+The rows come from the `BookableCourts` table rather than being counted out from
+division numbers, so the listing, the admin console and the booking engine
+cannot disagree about how many courts a venue has. See
+[courts-and-pricing.md](courts-and-pricing.md#bookable-courts).
 
 ### Read one court
 

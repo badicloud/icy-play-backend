@@ -151,10 +151,15 @@ Saying "one court" for a floor marked out three ways would undersell the venue.
 
 Three tabs.
 
-**Details** — the space, booking rules, opening hours, and a panel for dividing
-the court. That panel saves through its own endpoint: re-marking a floor is a
-small, frequent change, and routing it through the whole court would put every
-other field at risk to move one number.
+**Details** — the space, booking rules, opening hours, a panel for dividing the
+court, and below it the bookable courts themselves. The dividing panel saves
+through its own endpoint: re-marking a floor is a small, frequent change, and
+routing it through the whole court would put every other field at risk to move
+one number.
+
+The two panels are kept apart on purpose. The dividing panel says what a save
+**will** do; the list below says what is **true now**, read from the server.
+Folded together, an unsaved dropdown would read as a court somebody can book.
 
 **Pricing** — four rates per sport, each sport collapsible and independent so
 two can be compared side by side. A bulk panel fills every sport at once, and
@@ -194,6 +199,11 @@ and labelled; the Bookings tab explains itself.
 **Names are derived, not stored.** Court division names come from the court's
 name, the sport and the number. Renaming the court renames them; a stored name
 would survive the rename and lie.
+
+**Counts are read, not recomputed.** How many courts a venue has is answered
+once, by the `BookableCourts` table, and the filter chips, the listing, the
+inventory and the court page all read it. Two screens counting the same thing
+two different ways is how one of them comes to be wrong.
 
 **One read per page.** The court detail page is a single call. A page assembled
 from several shows several different moments.

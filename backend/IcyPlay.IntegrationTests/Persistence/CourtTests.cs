@@ -468,6 +468,9 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         return owner.Id;
     }
 
+    private static async Task<Guid> SportIdAsync(AppDbContext context, string key) =>
+        await context.Sports.Where(sport => sport.Key == key).Select(sport => sport.Id).SingleAsync();
+
     private static async Task<Guid[]> SportIdsAsync(AppDbContext context, int count) =>
         await context.Sports
             .Where(sport => sport.IsActive)
@@ -1833,12 +1836,368 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         }
     }
 
+    [Fact]
+    public async Task Catalog_ShouldListOneCourtSetUpThreeWaysAsFiveBookableCourts()
+    {
+        // Arrange: one floor, sold three ways -- basketball, volleyball, and
+        // pickleball marked out three across.
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+        var sut = CreateService(context, catalog);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+
+        var basketball = await SportIdAsync(context, "basketball");
+        var volleyball = await SportIdAsync(context, "volleyball");
+        var pickleball = await SportIdAsync(context, "pickleball");
+
+        var created = await sut.CreateAsync(
+            Request(
+                owner,
+                newFacility: NewFacility("Five Unit Courts"),
+                sportIds: [basketball, volleyball, pickleball]) with
+            {
+                Court = Court([basketball, volleyball, pickleball]) with
+                {
+                    Name = "Che court 1",
+                    Sports =
+                    [
+                        new CourtSportInput(basketball, 1),
+                        new CourtSportInput(volleyball, 1),
+                        new CourtSportInput(pickleball, 3)
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var listed = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var mine = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
+
+        // Assert: five things a customer can book, in a fixed order.
+        //
+        // Pinned exactly rather than counted, because the listing is about to
+        // stop deriving these rows and start reading them from a table. A count
+        // would still pass if the names or the order moved, and the order is
+        // what a visitor sees.
+        using (new AssertionScope())
+        {
+            mine.Select(court => court.Name).Should().Equal(
+                "Che court 1",
+                "Che court 1 \u00b7 Pickleball 1",
+                "Che court 1 \u00b7 Pickleball 2",
+                "Che court 1 \u00b7 Pickleball 3",
+                "Che court 1");
+            mine.Select(court => court.SportName).Should().Equal(
+                "Basketball",
+                "Pickleball",
+                "Pickleball",
+                "Pickleball",
+                "Volleyball");
+            mine.Select(court => court.DivisionNumber).Should().Equal(1, 1, 2, 3, 1);
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldSellOneFloorAsFiveCourtsWhenItIsSetUpThreeWays()
+    {
+        // Arrange, Act
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Five Courts");
+
+        // Assert: basketball whole, volleyball whole, pickleball three across.
+        // What the venue can sell at once, which is not the same as how many
+        // floors it has.
+        var units = await UnitsAsync(context, court.CourtId);
+
+        using (new AssertionScope())
+        {
+            units.Should().HaveCount(5);
+            units.Count(unit => unit.Kind == BookableCourtKind.Whole).Should().Be(2);
+            units.Count(unit => unit.Kind == BookableCourtKind.Divided).Should().Be(3);
+            units.Should().OnlyContain(unit => unit.IsActive);
+            units.Where(unit => unit.CourtSportId == court.PickleballLinkId)
+                .Select(unit => unit.DivisionNumber)
+                .Should().BeEquivalentTo([1, 2, 3]);
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldKeepTheExistingPartsWhenTheFloorIsMarkedIntoMore()
+    {
+        // Arrange: three pickleball courts, and a note of which rows they are.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Widening Courts");
+        var before = (await PartsAsync(context, court.PickleballLinkId))
+            .ToDictionary(unit => unit.DivisionNumber, unit => unit.Id);
+
+        // Act
+        await sut.UpdateDivisionsAsync(
+            court.CourtId,
+            new UpdateCourtDivisionsRequest(
+                [new CourtSportInput(court.Pickleball, 5)],
+                "Re-marked wider"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: parts one to three are the same rows they were. Renumbering
+        // them would move every booking already taken on this floor.
+        var after = await PartsAsync(context, court.PickleballLinkId);
+
+        using (new AssertionScope())
+        {
+            after.Should().HaveCount(5);
+            after.Select(unit => unit.DivisionNumber).Should().BeEquivalentTo([1, 2, 3, 4, 5]);
+
+            foreach (var (number, id) in before)
+            {
+                after.Single(unit => unit.DivisionNumber == number).Id.Should().Be(id);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldRetireAPartRatherThanDeleteItWhenTheFloorIsNarrowed()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Narrowing Courts");
+
+        // Act: three pickleball courts become two.
+        await sut.UpdateDivisionsAsync(
+            court.CourtId,
+            new UpdateCourtDivisionsRequest(
+                [new CourtSportInput(court.Pickleball, 2)],
+                "Re-marked narrower"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: part three stops being sold and stays on the record. A
+        // booking taken against it still has to resolve to something, and a
+        // receipt for a court that no longer exists is still a receipt.
+        var parts = await PartsAsync(context, court.PickleballLinkId);
+
+        using (new AssertionScope())
+        {
+            parts.Should().HaveCount(3);
+            parts.Single(unit => unit.DivisionNumber == 3).IsActive.Should().BeFalse();
+            parts.Count(unit => unit.IsActive).Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldBringBackTheSamePartWhenTheFloorIsMarkedOutAgain()
+    {
+        // Arrange: narrowed to two, a month before somebody changes their mind.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Restored Courts");
+        var third = (await PartsAsync(context, court.PickleballLinkId))
+            .Single(unit => unit.DivisionNumber == 3);
+
+        await sut.UpdateDivisionsAsync(
+            court.CourtId,
+            new UpdateCourtDivisionsRequest([new CourtSportInput(court.Pickleball, 2)], "Narrowed"),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        await sut.UpdateDivisionsAsync(
+            court.CourtId,
+            new UpdateCourtDivisionsRequest([new CourtSportInput(court.Pickleball, 3)], "Widened again"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: the same row, not a replacement wearing its number. This is
+        // the reason these are stored rather than counted out on the way past.
+        var restored = (await PartsAsync(context, court.PickleballLinkId))
+            .Single(unit => unit.DivisionNumber == 3);
+
+        using (new AssertionScope())
+        {
+            restored.Id.Should().Be(third.Id);
+            restored.IsActive.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldCallAWholeCourtDividedOnceTheFloorIsMarkedOut()
+    {
+        // Arrange: volleyball is played across the whole floor.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Redescribed Courts");
+        var whole = (await PartsAsync(context, court.VolleyballLinkId)).Single();
+
+        // Act
+        await sut.UpdateDivisionsAsync(
+            court.CourtId,
+            new UpdateCourtDivisionsRequest(
+                [new CourtSportInput(court.Volleyball, 2)],
+                "Two courts across"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: part one of two is the row that used to be the whole court.
+        // Nothing else on it could say which -- both carry number one.
+        var updated = (await PartsAsync(context, court.VolleyballLinkId))
+            .Single(unit => unit.DivisionNumber == 1);
+
+        using (new AssertionScope())
+        {
+            updated.Id.Should().Be(whole.Id);
+            updated.Kind.Should().Be(BookableCourtKind.Divided);
+        }
+    }
+
+    [Fact]
+    public async Task Roster_ShouldAgreeWithTheDivisionCountOnEverySportInTheDatabase()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+
+        // Act: whatever wrote these rows -- the roster on a court edit, or the
+        // migration's backfill over the courts that were already here -- the
+        // answer has to be the same one. Asserting the shared invariant rather
+        // than one implementation is what lets the backfill be checked at all
+        // without copying its SQL into the test and proving only that the copy
+        // agrees with itself.
+        var disagreements = await context.CourtSports
+            .AsNoTracking()
+            .Select(link => new
+            {
+                link.Id,
+                link.Divisions,
+                Parts = link.BookableCourts.Count(unit => unit.IsActive),
+                Highest = link.BookableCourts
+                    .Where(unit => unit.IsActive)
+                    .Max(unit => (int?)unit.DivisionNumber)
+            })
+            .Where(row => row.Parts != row.Divisions || row.Highest != row.Divisions)
+            .ToListAsync();
+
+        // Assert: one part per division, numbered from one without gaps. A gap
+        // is a court a customer is offered and the booking engine cannot find.
+        disagreements.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ListAsync_ShouldTellTheConsoleWhatTheCourtActuallySells()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var court = await ThreeWayCourtAsync(context, sut, "Roster Console Courts");
+
+        // Act
+        var listed = await sut.ListAsync(
+            await context.Courts
+                .Where(candidate => candidate.Id == court.CourtId)
+                .Select(candidate => candidate.FacilityId)
+                .SingleAsync(),
+            CancellationToken.None);
+
+        // Assert: the same five names the public listing shows, named by the
+        // same rule. An admin reading a different count from the customer is
+        // an admin who cannot answer the phone call about it.
+        var units = listed.Single(candidate => candidate.Id == court.CourtId).BookableCourts;
+
+        using (new AssertionScope())
+        {
+            units.Select(unit => unit.Name).Should().Equal(
+                "Che court 1",
+                "Che court 1 \u00b7 Pickleball 1",
+                "Che court 1 \u00b7 Pickleball 2",
+                "Che court 1 \u00b7 Pickleball 3",
+                "Che court 1");
+            units.Select(unit => unit.Kind).Should().Equal(
+                BookableCourtKind.Whole,
+                BookableCourtKind.Divided,
+                BookableCourtKind.Divided,
+                BookableCourtKind.Divided,
+                BookableCourtKind.Whole);
+        }
+    }
+
+    /// <summary>
+    /// One floor sold three ways, which is the shape every rule here exists
+    /// for: basketball and volleyball played whole, pickleball three across.
+    /// </summary>
+    private static async Task<ThreeWayCourt> ThreeWayCourtAsync(
+        AppDbContext context,
+        CourtService sut,
+        string facilityName)
+    {
+        var basketball = await SportIdAsync(context, "basketball");
+        var volleyball = await SportIdAsync(context, "volleyball");
+        var pickleball = await SportIdAsync(context, "pickleball");
+        var owner = await AddOwnerAsync(context);
+
+        var created = await sut.CreateAsync(
+            Request(
+                owner,
+                newFacility: NewFacility(facilityName),
+                sportIds: [basketball, volleyball, pickleball]) with
+            {
+                Court = Court([basketball, volleyball, pickleball]) with
+                {
+                    Name = "Che court 1",
+                    Sports =
+                    [
+                        new CourtSportInput(basketball, 1),
+                        new CourtSportInput(volleyball, 1),
+                        new CourtSportInput(pickleball, 3)
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        var links = await context.CourtSports
+            .AsNoTracking()
+            .Where(link => link.CourtId == created.Value!.CourtId)
+            .ToDictionaryAsync(link => link.SportId, link => link.Id);
+
+        return new ThreeWayCourt(
+            created.Value!.CourtId,
+            volleyball,
+            pickleball,
+            links[volleyball],
+            links[pickleball]);
+    }
+
+    private sealed record ThreeWayCourt(
+        Guid CourtId,
+        Guid Volleyball,
+        Guid Pickleball,
+        Guid VolleyballLinkId,
+        Guid PickleballLinkId);
+
+    private static async Task<BookableCourt[]> UnitsAsync(AppDbContext context, Guid courtId) =>
+        await context.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.CourtId == courtId)
+            .OrderBy(unit => unit.DivisionNumber)
+            .ToArrayAsync();
+
+    private static async Task<BookableCourt[]> PartsAsync(AppDbContext context, Guid courtSportId) =>
+        await context.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.CourtSportId == courtSportId)
+            .OrderBy(unit => unit.DivisionNumber)
+            .ToArrayAsync();
+
     private static ActivityCatalog CreateCatalog(AppDbContext context) =>
         new(
             context,
             new MemoryCache(new MemoryCacheOptions()),
             new CatalogCacheSignal(),
-            new FixedTimeProvider(Now));
+            new FixedTimeProvider(Now),
+            NullLogger<ActivityCatalog>.Instance);
 
     /// <summary>
     /// A term covering today. The public catalogue only offers owners who are

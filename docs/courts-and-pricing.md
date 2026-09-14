@@ -211,6 +211,87 @@ and the arithmetic exist; the bookings to count do not.
 
 ---
 
+## Bookable courts
+
+A court is not the thing a customer books. **One floor, sold five ways** is the
+ordinary case:
+
+| Bookable court | Kind |
+| --- | --- |
+| Che court 1 | Whole — basketball |
+| Che court 1 | Whole — volleyball |
+| Che court 1 · Pickleball 1 | Divided |
+| Che court 1 · Pickleball 2 | Divided |
+| Che court 1 · Pickleball 3 | Divided |
+
+`BookableCourts` holds one row each: the court-and-sport pair it belongs to, the
+floor it is on, which part it is, and whether it is whole or divided.
+
+### Why it is stored
+
+Everything else here is derived — division names, owner status, maintenance,
+rate fallbacks. This is not, and the reason is the booking.
+
+A booking needs something that **cannot be recalculated out from under it**. Once
+part three is sold, re-marking the floor into two has to be a conversation
+rather than a subtraction. Nothing here deletes: a part that is no longer marked
+out is retired, and marked out again it comes back as **the same row**, so a
+booking that outlived the gap still resolves.
+
+`Kind` is stored for a smaller reason that is easy to miss: **part one of three
+and a court played whole both carry number one**. Once the count changes, or the
+row is retired and the count moves on without it, nothing left on the row can
+tell the two apart.
+
+### One floor, one sport at a time
+
+The five are five ways of selling one slab of concrete, not five resources.
+
+| | Clashes? |
+| --- | --- |
+| Different floors | No |
+| Same floor, different sport | **Yes** — a basketball game and a pickleball game cannot share the markings |
+| Same floor, same sport, different part | No — three games at once is the point |
+| Same floor, same sport, same part | **Yes** |
+
+`BookableCourt.ConflictsWith` is four lines and is the only place this is
+written down.
+
+Which parts of a floor physically overlap is deliberately **not** modelled.
+Three pickleball courts and two badminton courts marked on one basketball floor
+do not line up, and a model claiming to know how would be wrong in a way nobody
+could see until two games were sold the same paint.
+
+### Who writes it
+
+`BookableCourtRoster` — called from creating a court, editing one, and
+re-marking the floor, in the caller's own `SaveChanges` so a court and what it
+sells go in together or not at all. It writes only what differs, so every caller
+calls it unconditionally rather than working out whether it needs to.
+
+The `AddBookableCourts` migration backfills every court that already existed.
+That SQL repeats in the database what the roster does in C#, which is the one
+duplicate of the rule: deliberate, because a migration is frozen the moment it
+runs and cannot drift forward, and an integration test holds every
+court-and-sport pair in the database to the same invariant — one active part per
+division, numbered from one without gaps.
+
+### Where it is read
+
+The public listing and the admin court page both read this table rather than
+counting divisions. Counting could never come back empty; reading can, so a
+court configured but missing its roster is **logged as a warning** rather than
+quietly vanishing from the listing.
+
+### Not built
+
+Removing a sport from a court still deletes its bookable courts through the
+foreign key. That is correct while no bookings exist and **must become a
+refusal** when they do — the same conversation as narrowing a floor that has
+bookings on its last part.
+
+---
+
 ## The public catalogue
 
 Two anonymous endpoints back the landing page.

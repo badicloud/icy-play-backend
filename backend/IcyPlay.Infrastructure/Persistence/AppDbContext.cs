@@ -36,6 +36,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<Sport> Sports => Set<Sport>();
     public DbSet<Court> Courts => Set<Court>();
     public DbSet<CourtSport> CourtSports => Set<CourtSport>();
+    public DbSet<BookableCourt> BookableCourts => Set<BookableCourt>();
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
@@ -485,6 +486,34 @@ public sealed class AppDbContext : DbContext
                 // A sport in use must not vanish from under the courts that
                 // list it. Retire it instead.
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<BookableCourt>(entity =>
+        {
+            entity.ToTable("BookableCourts");
+            entity.HasKey(x => x.Id);
+            // One part per number per pair, and the database says so rather
+            // than the roster remembering to.
+            entity.HasIndex(x => new { x.CourtSportId, x.DivisionNumber }).IsUnique();
+            // What every availability check asks: what else is on this floor.
+            entity.HasIndex(x => x.CourtId);
+            entity.Property(x => x.Kind)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(BookableCourtKind.Whole);
+            entity.Property(x => x.IsActive).HasDefaultValue(true);
+            entity.Ignore(x => x.IsDivided);
+            entity.HasOne(x => x.CourtSport)
+                .WithMany(x => x.BookableCourts)
+                .HasForeignKey(x => x.CourtSportId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Court)
+                .WithMany()
+                .HasForeignKey(x => x.CourtId)
+                // The court reaches these through its sports, and letting both
+                // paths cascade is a multiple-cascade-path error. The pair above
+                // is the owner; this side only reads.
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<CourtOperatingHour>(entity =>

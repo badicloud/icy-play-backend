@@ -118,11 +118,34 @@ public sealed record CourtListItem(
     bool PeakOnWeekdays,
     bool PeakOnWeekends,
     IReadOnlyCollection<CourtSportItem> Sports,
+    /// <summary>
+    /// What this court actually sells, one row per playable part. Sent
+    /// alongside the sports rather than worked out from their division counts,
+    /// so the console shows the same five things the booking engine knows
+    /// about rather than its own arithmetic.
+    /// </summary>
+    IReadOnlyCollection<BookableCourtItem> BookableCourts,
     IReadOnlyCollection<PhotoItem> Photos,
     IReadOnlyCollection<FacilityOperatingHourDetail> OperatingHours,
     /// <summary>Null when nothing is closed. Carries which level closed it.</summary>
     MaintenanceStatus? Maintenance,
     DateTimeOffset CreatedAt);
+
+/// <summary>
+/// One thing a customer can book. Retired parts are left out: this answers what
+/// is on sale, and a part the floor no longer has is only of interest to the
+/// bookings already taken against it.
+/// </summary>
+public sealed record BookableCourtItem(
+    Guid Id,
+    Guid SportId,
+    string SportName,
+    /// <summary>Which part this is. One when the court is played whole.</summary>
+    int DivisionNumber,
+    /// <summary>What a customer sees, derived the same way the listing derives it.</summary>
+    string Name,
+    /// <summary>"Whole" or "Divided".</summary>
+    string Kind);
 
 public sealed record CourtSportItem(
     Guid SportId,
