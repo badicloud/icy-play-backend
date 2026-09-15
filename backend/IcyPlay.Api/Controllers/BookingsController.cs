@@ -47,6 +47,25 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             : Failure(result.Failure);
     }
 
+    /// <summary>
+    /// Every date in the booking window, counted rather than priced, so the day
+    /// picker can grey out what cannot be taken whole.
+    /// </summary>
+    [HttpGet("/api/v1/catalog/bookable-courts/{bookableCourtId:guid}/day-outlook")]
+    [AllowAnonymous]
+    public async Task<IActionResult> DayOutlook(Guid bookableCourtId, CancellationToken ct)
+    {
+        // Same reason as the grid: a picker a minute stale offers a day that
+        // has just been taken.
+        Response.Headers.CacheControl = "no-store";
+
+        var result = await bookings.OutlookAsync(bookableCourtId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<Application.Bookings.DayOutlook>>(result.Value!))
+            : Failure(result.Failure);
+    }
+
     [HttpPost]
     [Authorize(Roles = UserRoleName.Customer)]
     public async Task<IActionResult> Create(CreateBookingRequest request, CancellationToken ct)
@@ -223,7 +242,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             BookingFailure.DatesNotConsecutive => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
-                "The days in a multi-day booking have to run one after another."),
+                "The days in a multi-day booking have to run one after another, apart from days the venue is closed."),
             BookingFailure.KindDoesNotMatchSlots => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

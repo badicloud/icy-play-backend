@@ -41,6 +41,56 @@ public sealed class BookingService(
         return BookingResult<AvailabilityDay>.Success(Day(offering, date, holiday, taken));
     }
 
+    public async Task<BookingResult<IReadOnlyCollection<DayOutlook>>> OutlookAsync(
+        Guid bookableCourtId,
+        CancellationToken ct)
+    {
+        var now = timeProvider.GetUtcNow();
+
+        // Loaded against today, which is where the window starts; the offering
+        // carries the hours and the closures, so every other date in it is
+        // answered from the same read.
+        var offering = await LoadAsync(bookableCourtId, DateOnly.FromDateTime(now.UtcDateTime), ct);
+
+        if (offering is null)
+        {
+            return BookingResult<IReadOnlyCollection<DayOutlook>>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        // The venue's today, not the server's: in Manila a UTC clock is eight
+        // hours behind, and a window starting on the wrong day greys out a day
+        // that is still on sale.
+        var today = offering.Today(now);
+        var dates = Enumerable
+            .Range(0, BookingWindow.DaysAhead + 1)
+            .Select(today.AddDays)
+            .ToArray();
+
+        var holidays = await db.Holidays
+            .AsNoTracking()
+            .Where(holiday => holiday.IsActive)
+            .ToArrayAsync(ct);
+
+        // One read for the whole window rather than one per day.
+        var taken = await TakenAsync(offering, dates, ct);
+
+        return BookingResult<IReadOnlyCollection<DayOutlook>>.Success(
+        [
+            .. dates.Select(date =>
+            {
+                var day = Day(offering, date, holidays.Any(holiday => holiday.Covers(date)), taken);
+
+                return new DayOutlook(
+                    date,
+                    day.IsClosed,
+                    day.IsHoliday,
+                    day.IsUnderMaintenance,
+                    day.Slots.Count(slot => slot.IsOpen),
+                    day.Slots.Count);
+            })
+        ]);
+    }
+
     public async Task<BookingResult<BookingDetail>> CreateAsync(
         CreateBookingRequest request,
         Guid customerUserId,
@@ -90,15 +140,29 @@ public sealed class BookingService(
         // exactly how one court gets sold twice.
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
 
+        // Every date the booking spans, not only the ones being bought: a run
+        // is allowed to pass over a day it cannot have, and whether it could
+        // have had it is a question about that day.
+        var spanned = Enumerable
+            .Range(0, dates[^1].DayNumber - dates[0].DayNumber + 1)
+            .Select(dates[0].AddDays)
+            .ToArray();
+
         var holidays = new Dictionary<DateOnly, bool>();
 
-        foreach (var date in dates)
+        foreach (var date in spanned)
         {
             holidays[date] = await IsHolidayAsync(date, ct);
         }
 
-        var taken = await TakenAsync(offering, dates, ct);
-        var days = dates.ToDictionary(date => date, date => Day(offering, date, holidays[date], taken));
+        var taken = await TakenAsync(offering, spanned, ct);
+        var window = spanned.ToDictionary(date => date, date => Day(offering, date, holidays[date], taken));
+        var days = dates.ToDictionary(date => date, date => window[date]);
+
+        if (request.Kind == BookingKind.MultiDay && !RunIsUnbroken(window, dates))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.DatesNotConsecutive);
+        }
 
         var failure = CheckSlots(request, days);
 
@@ -775,7 +839,11 @@ public sealed class BookingService(
 
     // -------------------------------------------------------------- the rules
 
-    /// <summary>Whether the dates match the kind of booking claimed.</summary>
+    /// <summary>
+    /// Whether the count of dates matches the kind of booking claimed. Whether
+    /// a run of them is unbroken is a separate question, and one this cannot
+    /// answer: see <see cref="RunIsUnbroken"/>.
+    /// </summary>
     private static BookingFailure CheckShape(string kind, IReadOnlyList<DateOnly> dates) => kind switch
     {
         BookingKind.Hourly => dates.Count == 1
@@ -785,19 +853,38 @@ public sealed class BookingService(
             ? BookingFailure.None
             : BookingFailure.KindDoesNotMatchSlots,
         BookingKind.MultiDay when dates.Count < 2 => BookingFailure.KindDoesNotMatchSlots,
-        BookingKind.MultiDay => Consecutive(dates)
-            ? BookingFailure.None
-            : BookingFailure.DatesNotConsecutive,
+        BookingKind.MultiDay => BookingFailure.None,
         _ => BookingFailure.KindDoesNotMatchSlots
     };
 
-    private static bool Consecutive(IReadOnlyList<DateOnly> dates)
+    /// <summary>
+    /// Whether a run of days is one run: everything between its ends, less the
+    /// days that had nothing left on them.
+    ///
+    /// A day inside the run may be passed over only when there was no hour of
+    /// it to be had — the venue is shut, the court is closed for work, or every
+    /// hour is already somebody else's. A venue closing one day a week could
+    /// otherwise never sell a run longer than six days.
+    ///
+    /// A day with hours still free may not be skipped. Leaving one out is not a
+    /// run with a hole in it; it is two bookings wearing one name, priced and
+    /// moved as though they were one.
+    ///
+    /// Asked inside the transaction, because whether an hour was free is only
+    /// true at a moment.
+    /// </summary>
+    private static bool RunIsUnbroken(
+        IReadOnlyDictionary<DateOnly, AvailabilityDay> window,
+        IReadOnlyList<DateOnly> dates)
     {
         for (var i = 1; i < dates.Count; i++)
         {
-            if (dates[i] != dates[i - 1].AddDays(1))
+            for (var skipped = dates[i - 1].AddDays(1); skipped < dates[i]; skipped = skipped.AddDays(1))
             {
-                return false;
+                if (window[skipped].Slots.Any(slot => slot.IsOpen))
+                {
+                    return false;
+                }
             }
         }
 
@@ -844,16 +931,34 @@ public sealed class BookingService(
             }
         }
 
-        // A whole day is every hour the court is open that day. One hour gone
-        // and there is no whole day left to sell -- and "book by the hour
-        // instead" is something the customer can act on.
-        if (BookingKind.TakesWholeDays(request.Kind))
+        // A single day sold open to close is every hour the court is open that
+        // day. One hour gone and there is no whole day left to sell -- and
+        // "book by the hour instead" is something the customer can act on.
+        if (request.Kind == BookingKind.WholeDay)
         {
             foreach (var day in days.Values)
             {
                 var wantedOnDay = request.Slots.Count(slot => slot.Date == day.Date);
 
                 if (wantedOnDay != day.Slots.Count || day.Slots.Any(slot => !slot.IsOpen))
+                {
+                    return BookingFailure.DayNotWhollyAvailable;
+                }
+            }
+        }
+
+        // A run takes each of its days for whatever is still free on it. A
+        // single booked hour on the Wednesday of a tournament week should not
+        // cost the customer the other fifteen, nor split their week into two
+        // bookings -- but neither may they cherry-pick the mornings: a day in
+        // a run is all of what it has left.
+        if (request.Kind == BookingKind.MultiDay)
+        {
+            foreach (var day in days.Values)
+            {
+                var wantedOnDay = request.Slots.Count(slot => slot.Date == day.Date);
+
+                if (wantedOnDay != day.Slots.Count(slot => slot.IsOpen))
                 {
                     return BookingFailure.DayNotWhollyAvailable;
                 }

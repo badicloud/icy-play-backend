@@ -13,6 +13,15 @@ public interface IBookingService
         CancellationToken ct);
 
     /// <summary>
+    /// Every date in the booking window, counted rather than priced, so a day
+    /// picker can grey out the days that cannot be taken whole before anybody
+    /// clicks one.
+    /// </summary>
+    Task<BookingResult<IReadOnlyCollection<DayOutlook>>> OutlookAsync(
+        Guid bookableCourtId,
+        CancellationToken ct);
+
+    /// <summary>
     /// Takes the hours, or says why it could not. Prices every hour on the
     /// server: what the customer was shown is a quote, and the only number that
     /// binds anyone is the one written here.

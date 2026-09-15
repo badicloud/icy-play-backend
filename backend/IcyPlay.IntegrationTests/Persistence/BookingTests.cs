@@ -32,6 +32,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     private static readonly DateOnly Saturday = new(2026, 9, 19);
     private static readonly DateOnly Thursday = new(2026, 9, 17);
     private static readonly DateOnly NextSaturday = new(2026, 9, 26);
+    private static readonly DateOnly Friday = new(2026, 9, 18);
+    /// <summary>The day the Sunday-closed fixture below sells nothing at all.</summary>
+    private static readonly DateOnly Sunday = new(2026, 9, 20);
+    private static readonly DateOnly Monday = new(2026, 9, 21);
 
     private static readonly TimeOnly SevenAm = new(7, 0);
     private static readonly TimeOnly EightAm = new(8, 0);
@@ -62,6 +66,66 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             slots.Single(slot => slot.StartsAt == SixPm).Rate.Should().Be(600m);
             slots.Should().OnlyContain(slot => slot.PlatformFee == 15m);
         }
+    }
+
+    [Fact]
+    public async Task Outlook_ShouldCloseADayToWholeHireAsSoonAsOneHourOfItIsGone()
+    {
+        // Arrange: one hour of Wednesday taken, everything else free.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Outlook Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var outlook = await sut.OutlookAsync(floor.Pickleball1, CancellationToken.None);
+
+        // Assert: the day picker greys Wednesday out rather than letting the
+        // customer choose it and be told afterwards. One hour is enough — a day
+        // sold open to close has to be whole.
+        var window = outlook.Value!;
+        var wednesday = window.Single(day => day.Date == Wednesday);
+        var tuesday = window.Single(day => day.Date == Tuesday);
+
+        using (new AssertionScope())
+        {
+            outlook.Succeeded.Should().BeTrue();
+            window.Should().HaveCount(BookingWindow.DaysAhead + 1);
+            window.First().Date.Should().Be(Today);
+
+            wednesday.OpenHours.Should().Be(15);
+            wednesday.TotalHours.Should().Be(16);
+            wednesday.CanBeHiredWhole.Should().BeFalse();
+
+            tuesday.OpenHours.Should().Be(16);
+            tuesday.CanBeHiredWhole.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Outlook_ShouldBlockTheOtherPartsOfAFloorTakenWhole()
+    {
+        // Arrange: the whole floor hired for basketball on Thursday. The three
+        // pickleball courts marked out on it are that same floor.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Outlook Floor Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Basketball, Thursday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var outlook = await sut.OutlookAsync(floor.Pickleball1, CancellationToken.None);
+
+        // Assert: a picker that only looked at this bookable court would offer
+        // Thursday whole, and the booking would then be refused.
+        outlook.Value!.Single(day => day.Date == Thursday).CanBeHiredWhole.Should().BeFalse();
     }
 
     [Fact]
@@ -300,6 +364,153 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Assert
+        booking.Failure.Should().Be(BookingFailure.DatesNotConsecutive);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldCarryARunOverADayWithNothingLeftOnIt()
+    {
+        // Arrange: every hour of the Thursday sold.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Full Day Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Thursday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Wednesday), .. AllHours(Friday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: nothing on the Thursday to be had, so nothing for the run to
+        // be broken by.
+        using (new AssertionScope())
+        {
+            booking.Succeeded.Should().BeTrue();
+            booking.Value!.BookedHours.Should().Be(32);
+            booking.Value.Slots.Select(slot => slot.Date).Should().NotContain(Thursday);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldCarryARunOverADayTheVenueIsShut()
+    {
+        // Arrange: a venue closed on Sundays.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Sunday Off Courts", DayOfWeek.Sunday);
+        var sut = CreateService(context);
+
+        // Act: Friday, Saturday and Monday. Sunday is not in it because there
+        // is nothing on Sunday to buy.
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Friday), .. AllHours(Saturday), .. AllHours(Monday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a venue shut one day a week could otherwise never take a run
+        // longer than six days, and never a weekend-to-Monday booking at all.
+        using (new AssertionScope())
+        {
+            booking.Succeeded.Should().BeTrue();
+            booking.Value!.BookedHours.Should().Be(48);
+            booking.Value.Slots.Select(slot => slot.Date).Should().NotContain(Sunday);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldStillRefuseARunThatJumpsADayItCouldHaveHad()
+    {
+        // Arrange: the venue is open every day and nothing is taken, so the
+        // Thursday being left out was there for the asking.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Jumped Day Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Wednesday), .. AllHours(Friday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: leaving out a free day is not a run with a hole in it — it is
+        // two bookings wearing one name, priced and moved as though they were
+        // one.
+        booking.Failure.Should().Be(BookingFailure.DatesNotConsecutive);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldTakeWhatIsLeftOfADaySomebodyElseHasStarted()
+    {
+        // Arrange: somebody takes 7am on the Thursday.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Taken Day Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Thursday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act: Wednesday to Friday, taking the fifteen hours Thursday has left.
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [
+                    .. AllHours(Wednesday),
+                    .. AllHours(Thursday).Where(slot => slot.StartsAt != SevenAm),
+                    .. AllHours(Friday)
+                ]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: 16 + 15 + 16. One booked hour on the Thursday should not cost
+        // the customer the other fifteen, nor split their week in two.
+        using (new AssertionScope())
+        {
+            booking.Succeeded.Should().BeTrue();
+            booking.Value!.BookedHours.Should().Be(47);
+            booking.Value.Slots.Count(slot => slot.Date == Thursday).Should().Be(15);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseARunThatLeavesHoursItCouldHaveHad()
+    {
+        // Arrange: 7am on the Thursday is gone, and the rest of it is not.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Cherry Picked Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Thursday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act: Wednesday to Friday with the whole Thursday left out.
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Wednesday), .. AllHours(Friday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: a day in a run is all of what it has left. Dropping the
+        // fifteen free hours makes this two bookings wearing one name.
         booking.Failure.Should().Be(BookingFailure.DatesNotConsecutive);
     }
 
@@ -781,7 +992,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     /// One floor sold five ways, priced: basketball and volleyball whole,
     /// pickleball three across, 500 standard / 600 peak 5-8pm / 550 weekend.
     /// </summary>
-    private static async Task<Floor> FloorAsync(AppDbContext context, string facilityName)
+    private static async Task<Floor> FloorAsync(
+        AppDbContext context,
+        string facilityName,
+        DayOfWeek? shutOn = null)
     {
         var courts = CreateCourtService(context);
         var basketball = await SportIdAsync(context, "basketball");
@@ -808,7 +1022,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new CreateCourtRequest(
                 owner.Id,
                 null,
-                NewFacility(facilityName),
+                NewFacility(facilityName, shutOn),
                 new CourtInput(
                     "Che court 1",
                     10,
@@ -920,7 +1134,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     private static async Task<Guid> SportIdAsync(AppDbContext context, string key) =>
         await context.Sports.Where(sport => sport.Key == key).Select(sport => sport.Id).SingleAsync();
 
-    private static NewFacilityInput NewFacility(string name) => new(
+    private static NewFacilityInput NewFacility(string name, DayOfWeek? shutOn = null) => new(
         new FacilityInput(
             name,
             "Six covered courts.",
@@ -940,10 +1154,14 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             [],
             []),
         [
-            .. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
-                day,
-                new TimeOnly(6, 0),
-                new TimeOnly(22, 0)))
+            // A day with no hours is a day the venue is shut: that is how a
+            // closure is said here, and what the availability reads back.
+            .. Enum.GetValues<DayOfWeek>()
+                .Where(day => day != shutOn)
+                .Select(day => new OperatingHourInput(
+                    day,
+                    new TimeOnly(6, 0),
+                    new TimeOnly(22, 0)))
         ],
         []);
 

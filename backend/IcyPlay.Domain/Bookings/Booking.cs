@@ -302,15 +302,19 @@ public static class BookingKind
     /// <summary>Every hour the court is open on one date.</summary>
     public const string WholeDay = "WholeDay";
 
-    /// <summary>Every hour the court is open across a run of consecutive dates.</summary>
+    /// <summary>
+    /// A span of dates, each taken for whatever is still free on it. Days with
+    /// nothing left — the venue shut, or every hour already sold — are passed
+    /// over rather than breaking the run in two.
+    /// </summary>
     public const string MultiDay = "MultiDay";
 
     public static readonly IReadOnlyCollection<string> All = [Hourly, WholeDay, MultiDay];
 
     public static bool IsSupported(string value) => All.Contains(value);
 
-    /// <summary>Whole days are sold entire, so a single taken hour blocks them.</summary>
-    public static bool TakesWholeDays(string value) => value is WholeDay or MultiDay;
+    /// <summary>Neither kind lets a customer pick hours; both are sold by the day.</summary>
+    public static bool SoldByTheDay(string value) => value is WholeDay or MultiDay;
 }
 
 /// <summary>

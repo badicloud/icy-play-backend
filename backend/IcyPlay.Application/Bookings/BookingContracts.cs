@@ -3,6 +3,36 @@ using FluentValidation;
 namespace IcyPlay.Application.Bookings;
 
 /// <summary>
+/// One date in the booking window, in the least detail a day picker needs.
+///
+/// The hour grid answers one date at a time, which is right for the grid and
+/// useless for the strip of days above it: a customer choosing a whole day
+/// should not be able to pick a day that cannot be sold whole and be told so
+/// afterwards. Pricing thirty grids to find that out would be thirty times the
+/// work to show a number nobody reads, so this counts hours instead.
+/// </summary>
+public sealed record DayOutlook(
+    DateOnly Date,
+    /// <summary>The venue is shut that day. No hours at all.</summary>
+    bool IsClosed,
+    bool IsHoliday,
+    /// <summary>The court, or its whole venue, is closed for work that day.</summary>
+    bool IsUnderMaintenance,
+    /// <summary>Hours still free.</summary>
+    int OpenHours,
+    /// <summary>Hours the court is open, taken or not.</summary>
+    int TotalHours)
+{
+    /// <summary>
+    /// A day sold open to close needs every hour of it free: one hour gone and
+    /// the day is no longer whole. The same rule the booking itself applies, so
+    /// the picker and the server cannot disagree about which days are on offer.
+    /// </summary>
+    public bool CanBeHiredWhole =>
+        !IsClosed && !IsUnderMaintenance && TotalHours > 0 && OpenHours == TotalHours;
+}
+
+/// <summary>
 /// What a customer can book on one court on one date, hour by hour.
 ///
 /// Answered for a whole day at once rather than per hour, because the grid is
