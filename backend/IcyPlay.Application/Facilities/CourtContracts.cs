@@ -83,7 +83,13 @@ public sealed record PhotoInput(
     string SecureUrl,
     string? Caption,
     int DisplayOrder,
-    bool IsCover);
+    bool IsCover,
+    /// <summary>
+    /// The sport this shows the court marked out for, when it shows one in
+    /// particular. Null — the ordinary case — is a picture of the floor that
+    /// suits whatever is played on it. Must be a sport the court offers.
+    /// </summary>
+    Guid? SportId = null);
 
 public sealed record PhotoItem(
     Guid Id,
@@ -91,7 +97,8 @@ public sealed record PhotoItem(
     string SecureUrl,
     string? Caption,
     int DisplayOrder,
-    bool IsCover);
+    bool IsCover,
+    Guid? SportId = null);
 
 public sealed record CourtListItem(
     Guid Id,
@@ -284,19 +291,27 @@ public sealed record SportListItem(
     int DisplayOrder,
     bool IsActive,
     /// <summary>How many courts list it, so retiring one is a decision with a number attached.</summary>
-    int CourtCount);
+    int CourtCount,
+    /// <summary>The stock picture, shown when a court has none of its own.</summary>
+    string? ImagePublicId = null,
+    string? ImageSecureUrl = null);
 
 public sealed record CreateSportRequest(
     string Name,
     string Category,
     int DisplayOrder,
-    string Kind);
+    string Kind,
+    /// <summary>Optional stock picture. Both parts, or neither.</summary>
+    string? ImagePublicId = null,
+    string? ImageSecureUrl = null);
 
 public sealed record UpdateSportRequest(
     string Name,
     string Category,
     int DisplayOrder,
-    string Kind);
+    string Kind,
+    string? ImagePublicId = null,
+    string? ImageSecureUrl = null);
 
 public enum CourtFailure
 {
@@ -315,6 +330,7 @@ public enum CourtFailure
     MaintenanceNotFound,
     UntrustedPhotoUrl,
     TooManyCovers,
+    PhotoSportNotOnCourt,
     DuplicateHoliday,
     HolidayNotFound,
     PeakWindowOutsideHours,
@@ -582,6 +598,8 @@ public sealed class CreateSportRequestValidator : AbstractValidator<CreateSportR
             .NotEmpty()
             .Must(ActivityKind.IsSupported)
             .WithMessage("An entry is either a Sport or an Event.");
+        RuleFor(x => x.ImagePublicId).MaximumLength(300);
+        RuleFor(x => x.ImageSecureUrl).MaximumLength(1000);
     }
 }
 
@@ -599,5 +617,7 @@ public sealed class UpdateSportRequestValidator : AbstractValidator<UpdateSportR
             .NotEmpty()
             .Must(ActivityKind.IsSupported)
             .WithMessage("An entry is either a Sport or an Event.");
+        RuleFor(x => x.ImagePublicId).MaximumLength(300);
+        RuleFor(x => x.ImageSecureUrl).MaximumLength(1000);
     }
 }

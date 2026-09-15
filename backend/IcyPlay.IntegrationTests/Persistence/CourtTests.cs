@@ -486,6 +486,184 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         order,
         isCover);
 
+    private static async Task<string[]> SportKeysAsync(AppDbContext context, IReadOnlyCollection<Guid> ids) =>
+        await context.Sports
+            .Where(sport => ids.Contains(sport.Id))
+            .OrderBy(sport => sport.Key)
+            .Select(sport => sport.Key)
+            .ToArrayAsync();
+
+    [Fact]
+    public async Task Catalog_ShouldShowThePhotoTakenOfTheSportBeingBrowsed()
+    {
+        // Arrange: one floor, two sports, and a picture of it marked out for
+        // the second. The same hall looks nothing alike set up each way.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 2);
+        var keys = await SportKeysAsync(context, sports);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Tagged Photo Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Photos =
+                    [
+                        Photo("the-bare-floor", 0, isCover: true),
+                        Photo("marked-out-for-the-second", 1, isCover: false) with
+                        {
+                            SportId = sports[1]
+                        }
+                    ]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var browsingTheSecond = await catalog.ListCourtsAsync(keys[1], CancellationToken.None);
+        var browsingTheFirst = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+
+        // Assert: the tag wins for the sport it was taken of, and every other
+        // sport falls back to the cover — which is what every court showed
+        // before any of them was tagged.
+        using (new AssertionScope())
+        {
+            created.Succeeded.Should().BeTrue();
+            browsingTheSecond
+                .Single(row => row.CourtId == created.Value!.CourtId)
+                .CoverPhotoUrl.Should().Contain("marked-out-for-the-second");
+            browsingTheFirst
+                .Single(row => row.CourtId == created.Value!.CourtId)
+                .CoverPhotoUrl.Should().Contain("the-bare-floor");
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldSayWhetherAnOfferingIsPlayedOrHired()
+    {
+        // Arrange: the same floor, offered for a game and for an occasion.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+
+        var game = await context.Sports
+            .Where(sport => sport.Key == "volleyball")
+            .Select(sport => sport.Id)
+            .SingleAsync();
+        var occasion = await context.Sports
+            .Where(sport => sport.Key == "birthday-party")
+            .Select(sport => sport.Id)
+            .SingleAsync();
+        var both = new[] { game, occasion };
+        var gameKey = await context.Sports
+            .Where(sport => sport.Id == game)
+            .Select(sport => sport.Key)
+            .SingleAsync();
+        var occasionKey = await context.Sports
+            .Where(sport => sport.Id == occasion)
+            .Select(sport => sport.Key)
+            .SingleAsync();
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Hired And Played Courts"), sportIds: both),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        var offerings = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var mine = offerings.Where(row => row.CourtId == created.Value!.CourtId).ToArray();
+
+        // Assert: the card is priced by the hour or quoted, and it cannot tell
+        // which without being told. Two rows, same floor, different kind.
+        using (new AssertionScope())
+        {
+            created.Succeeded.Should().BeTrue();
+            mine.Should().HaveCount(2);
+            mine.Single(row => row.SportKey == gameKey).Kind.Should().Be(ActivityKind.Sport);
+            mine.Single(row => row.SportKey == occasionKey).Kind.Should().Be(ActivityKind.Event);
+            // And the game comes first, the way the tiles above the list do,
+            // though "Birthday party" beats "Volleyball" to the alphabet.
+            mine[0].Kind.Should().Be(ActivityKind.Sport);
+            mine[1].Kind.Should().Be(ActivityKind.Event);
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldFallBackToTheSportsOwnPictureForACourtWithNoPhotos()
+    {
+        // Arrange: a court on its opening day, before anybody has photographed
+        // it. A card with no picture at all reads as a broken listing.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var keys = await SportKeysAsync(context, sports);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Unphotographed Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        var sport = await context.Sports.SingleAsync(candidate => candidate.Id == sports[0]);
+        sport.Illustrate(
+            "icyplay/sports/stock",
+            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/icyplay/sports/stock.jpg",
+            Now);
+        await context.SaveChangesAsync();
+
+        // Act
+        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+
+        // Assert: last in the order, and only reached because the venue has
+        // neither a photo of this sport nor a cover.
+        using (new AssertionScope())
+        {
+            created.Succeeded.Should().BeTrue();
+            browsing
+                .Single(row => row.CourtId == created.Value!.CourtId)
+                .CoverPhotoUrl.Should().Contain("icyplay/sports/stock");
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldRefuseAPhotoTaggedWithASportTheCourtDoesNotPlay()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var owner = await AddOwnerAsync(context);
+        var sports = await SportIdsAsync(context, 1);
+        var elsewhere = await context.Sports
+            .Where(sport => sport.IsActive && !sports.Contains(sport.Id))
+            .Select(sport => sport.Id)
+            .FirstAsync();
+
+        // Act
+        var result = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Mistagged Courts"), sportIds: sports) with
+            {
+                Court = Court(sports) with
+                {
+                    Photos = [Photo("someone-elses-sport", 0, isCover: true) with { SportId = elsewhere }]
+                }
+            },
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: otherwise a basketball court could be tagged pickleball and
+        // shown to every customer browsing a sport it never hosts.
+        result.Failure.Should().Be(CourtFailure.PhotoSportNotOnCourt);
+    }
+
     [Fact]
     public async Task GetAsync_ShouldReadOneCourtTheSameWayTheListDoes()
     {
@@ -917,6 +1095,59 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         {
             link.Divisions.Should().Be(3);
             link.StandardHourlyRate.Should().Be(500m);
+        }
+    }
+
+    [Fact]
+    public async Task UpdatePricingAsync_ShouldShowTheNewRateOnTheListingAtOnce()
+    {
+        // Arrange: one catalogue for both reads, so the second one meets the
+        // cache the first one filled. A fresh instance would pass whatever the
+        // service does.
+        await using var context = database.CreateContext();
+        var catalog = CreateCatalog(context);
+        var sut = CreateService(context, catalog);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Re-priced Courts"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        async Task<decimal?> ListedRateAsync() =>
+            (await catalog.ListCourtsAsync(null, CancellationToken.None))
+                .First(row => row.CourtId == created.Value!.CourtId)
+                .StandardHourlyRate;
+
+        await sut.UpdatePricingAsync(
+            created.Value!.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 500m, null, null, null)],
+                null,
+                "Opening rate"),
+            Admin(),
+            CancellationToken.None);
+
+        var asFirstSeen = await ListedRateAsync();
+
+        // Act: the venue changes its mind.
+        await sut.UpdatePricingAsync(
+            created.Value.CourtId,
+            new UpdateCourtPricingRequest(
+                [new SportPricingInput(sports[0], 650m, null, null, null)],
+                null,
+                "Put the rate up"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: a venue that sets a price and then looks at its own card must
+        // see the price it just set. The listing caches for ten minutes, so
+        // pricing has to clear it the way every other write to a court does.
+        using (new AssertionScope())
+        {
+            asFirstSeen.Should().Be(500m);
+            (await ListedRateAsync()).Should().Be(650m);
         }
     }
 

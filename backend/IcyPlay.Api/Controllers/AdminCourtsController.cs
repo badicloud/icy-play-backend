@@ -294,6 +294,10 @@ public sealed class AdminCourtsController(
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.UntrustedAssetUrl,
                 "A photo URL is not a secure link on the configured Cloudinary account."),
+            CourtFailure.PhotoSportNotOnCourt => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "A photo is tagged with a sport this court is not set up for."),
             CourtFailure.AlreadyUnderMaintenance => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,

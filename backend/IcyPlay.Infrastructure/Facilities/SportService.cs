@@ -1,5 +1,6 @@
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Facilities;
+using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Infrastructure.Persistence;
@@ -11,6 +12,7 @@ public sealed class SportService(
     AppDbContext db,
     IAuditLogger audit,
     IActivityCatalog catalog,
+    ICloudinaryAssetService assets,
     TimeProvider timeProvider) : ISportService
 {
     public async Task<IReadOnlyCollection<SportListItem>> ListAsync(
@@ -32,7 +34,9 @@ public sealed class SportService(
                 sport.IsActive,
                 // Retiring one is a decision with a number attached, so the
                 // console can say how many courts it would affect.
-                db.CourtSports.Count(link => link.SportId == sport.Id)))
+                db.CourtSports.Count(link => link.SportId == sport.Id),
+                sport.ImagePublicId,
+                sport.ImageSecureUrl))
             .ToArrayAsync(ct);
 
     public async Task<CourtResult<Guid>> CreateAsync(
@@ -54,6 +58,14 @@ public sealed class SportService(
             return CourtResult<Guid>.Fail(CourtFailure.DuplicateSportKey);
         }
 
+        // Posted by the browser, so never taken on trust: an http URL, or one
+        // on somebody else's cloud, would be rendered to every customer
+        // browsing this sport.
+        if (request.ImageSecureUrl is not null && !assets.IsTrustedSecureUrl(request.ImageSecureUrl))
+        {
+            return CourtResult<Guid>.Fail(CourtFailure.UntrustedPhotoUrl);
+        }
+
         var now = timeProvider.GetUtcNow();
         var sport = new Sport(
             key,
@@ -62,6 +74,7 @@ public sealed class SportService(
             request.DisplayOrder,
             now,
             request.Kind);
+        sport.Illustrate(request.ImagePublicId, request.ImageSecureUrl, now);
         db.Sports.Add(sport);
 
         audit.RecordEvent(
@@ -94,7 +107,13 @@ public sealed class SportService(
             return CourtResult<bool>.Fail(CourtFailure.UnknownSport);
         }
 
+        if (request.ImageSecureUrl is not null && !assets.IsTrustedSecureUrl(request.ImageSecureUrl))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.UntrustedPhotoUrl);
+        }
+
         var before = Snapshot(sport);
+        var now = timeProvider.GetUtcNow();
 
         // The key is deliberately left alone. Renaming "Table tennis" to "Ping
         // pong" should not move the address customers filter on.
@@ -102,8 +121,9 @@ public sealed class SportService(
             request.Name,
             request.Category,
             request.DisplayOrder,
-            timeProvider.GetUtcNow(),
+            now,
             request.Kind);
+        sport.Illustrate(request.ImagePublicId, request.ImageSecureUrl, now);
 
         audit.RecordChange(
             actor,
@@ -159,6 +179,7 @@ public sealed class SportService(
         {
             ["name"] = sport.Name,
             ["category"] = sport.Category,
-            ["displayOrder"] = sport.DisplayOrder.ToString()
+            ["displayOrder"] = sport.DisplayOrder.ToString(),
+            ["image"] = sport.ImagePublicId
         };
 }

@@ -20,6 +20,7 @@ public sealed class Photo : Entity
     public Photo(
         Guid facilityId,
         Guid? courtId,
+        Guid? sportId,
         string publicId,
         string secureUrl,
         string? caption,
@@ -29,6 +30,7 @@ public sealed class Photo : Entity
     {
         FacilityId = facilityId;
         CourtId = courtId;
+        SportId = sportId;
         PublicId = publicId.Trim();
         SecureUrl = secureUrl.Trim();
         Caption = string.IsNullOrWhiteSpace(caption) ? null : caption.Trim();
@@ -49,6 +51,30 @@ public sealed class Photo : Entity
         get; private set;
     }
     public Court? Court
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// The sport this picture shows the court set up for, when it shows one in
+    /// particular. Null is the ordinary case: a picture of the floor, good for
+    /// whatever is played on it.
+    ///
+    /// A hall marked out for basketball looks nothing like the same hall marked
+    /// out three ways for pickleball, and a customer browsing pickleball should
+    /// see the pickleball markings. Only a court photo carries this — the
+    /// entrance and the car park belong to no sport.
+    ///
+    /// A tag outlives the sport leaving the court. The listing only ever asks
+    /// for a sport the court still offers, so a stale tag shows nobody
+    /// anything, and clearing it would throw away a picture that comes back
+    /// into use the moment the sport does.
+    /// </summary>
+    public Guid? SportId
+    {
+        get; private set;
+    }
+    public Sport? Sport
     {
         get; private set;
     }
@@ -92,6 +118,12 @@ public sealed class Photo : Entity
     {
         Caption = string.IsNullOrWhiteSpace(caption) ? null : caption.Trim();
         DisplayOrder = displayOrder;
+        UpdatedAt = now;
+    }
+
+    public void ShowsSport(Guid? sportId, DateTimeOffset now)
+    {
+        SportId = sportId;
         UpdatedAt = now;
     }
 }

@@ -41,6 +41,7 @@ internal static class PhotoGallery
             db.Photos.Add(new Photo(
                 facilityId,
                 courtId,
+                courtId is null ? null : photo.SportId,
                 photo.PublicId,
                 photo.SecureUrl,
                 photo.Caption,
@@ -88,6 +89,7 @@ internal static class PhotoGallery
                 db.Photos.Add(new Photo(
                     facilityId,
                     courtId,
+                    courtId is null ? null : photo.SportId,
                     photo.PublicId,
                     photo.SecureUrl,
                     photo.Caption,
@@ -99,6 +101,7 @@ internal static class PhotoGallery
             {
                 match.Describe(photo.Caption, photo.DisplayOrder, now);
                 match.SetCover(photo.PublicId == coverPublicId, now);
+                match.ShowsSport(courtId is null ? null : photo.SportId, now);
             }
         }
     }

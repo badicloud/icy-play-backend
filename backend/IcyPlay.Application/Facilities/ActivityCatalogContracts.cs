@@ -34,6 +34,11 @@ public sealed record CatalogCourt(
     /// <summary>Which sport or event this offering is for. A court set up for three appears three times.</summary>
     string SportKey,
     string SportName,
+    /// <summary>
+    /// "Sport" or "Event". A game is sold by the hour at a published rate; an
+    /// occasion is quoted, so the card shows it no price list.
+    /// </summary>
+    string Kind,
     /// <summary>1 when the court is played whole, otherwise which part this is.</summary>
     int DivisionNumber,
     /// <summary>What a customer sees. Derived from the court, the sport and the number.</summary>
@@ -47,6 +52,12 @@ public sealed record CatalogCourt(
     /// <summary>Null until the venue has pinned itself. The map link needs both.</summary>
     decimal? Latitude,
     decimal? Longitude,
+    /// <summary>
+    /// The one picture the listing shows for this offering, in order of how
+    /// much it says about this particular court: the venue's photo of the floor
+    /// marked out for this sport, then the court's cover, then the platform's
+    /// stock picture of the sport. Null only when none of the three exists.
+    /// </summary>
     string? CoverPhotoUrl,
     string VenueType,
     string? Surface,

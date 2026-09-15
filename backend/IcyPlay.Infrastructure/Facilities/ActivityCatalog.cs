@@ -103,6 +103,11 @@ public sealed class ActivityCatalog(
 
     private async Task<CatalogCourtDetail> QueryDetailAsync(CatalogCourt court, CancellationToken ct)
     {
+        // The page is a court seen through one sport, so its gallery leads with
+        // the pictures of the floor marked out for that sport. The rest follow:
+        // a customer still wants to see the hall, the lighting and the seats.
+        var sportKey = court.SportKey;
+
         var row = await db.Courts
             .AsNoTracking()
             .Where(candidate => candidate.Id == court.CourtId)
@@ -115,7 +120,8 @@ public sealed class ActivityCatalog(
                 candidate.BufferMinutes,
                 CourtPhotos = db.Photos
                     .Where(photo => photo.CourtId == candidate.Id)
-                    .OrderByDescending(photo => photo.IsCover)
+                    .OrderByDescending(photo => photo.Sport != null && photo.Sport.Key == sportKey)
+                    .ThenByDescending(photo => photo.IsCover)
                     .ThenBy(photo => photo.DisplayOrder)
                     .Select(photo => new PhotoItem(
                         photo.Id,
@@ -123,7 +129,8 @@ public sealed class ActivityCatalog(
                         photo.SecureUrl,
                         photo.Caption,
                         photo.DisplayOrder,
-                        photo.IsCover))
+                        photo.IsCover,
+                        photo.SportId))
                     .ToList(),
                 Venue = new
                 {
@@ -271,6 +278,7 @@ public sealed class ActivityCatalog(
                 link.Court.MinimumDurationMinutes,
                 SportKey = link.Sport.Key,
                 SportName = link.Sport.Name,
+                SportKind = link.Sport.Kind,
                 link.Divisions,
                 // Ordered here so the parts come back 1, 2, 3 the way counting
                 // them out did. Left to the database the order is whatever the
@@ -297,10 +305,17 @@ public sealed class ActivityCatalog(
                 link.Court.Facility.PostalCode,
                 link.Court.Facility.Latitude,
                 link.Court.Facility.Longitude,
+                SportPhotoUrl = db.Photos
+                    .Where(photo => photo.CourtId == link.CourtId && photo.SportId == link.SportId)
+                    .OrderByDescending(photo => photo.IsCover)
+                    .ThenBy(photo => photo.DisplayOrder)
+                    .Select(photo => photo.SecureUrl)
+                    .FirstOrDefault(),
                 CoverPhotoUrl = db.Photos
                     .Where(photo => photo.CourtId == link.CourtId && photo.IsCover)
                     .Select(photo => photo.SecureUrl)
                     .FirstOrDefault(),
+                SportImageUrl = link.Sport.ImageSecureUrl,
                 // Either level closes it: a facility shut for the week takes
                 // every court in it down.
                 Closure = db.MaintenancePeriods
@@ -333,7 +348,12 @@ public sealed class ActivityCatalog(
         return
         [
             .. rows
-                .OrderBy(row => row.FacilityName, StringComparer.Ordinal)
+                // Games first, then the floor for hire — the same order the
+                // tiles above the list are in. Sorted by name alone, an event
+                // lands in the middle of the sports alphabetically and the two
+                // kinds read as one muddled list.
+                .OrderBy(row => row.SportKind == ActivityKind.Event ? 1 : 0)
+                .ThenBy(row => row.FacilityName, StringComparer.Ordinal)
                 .ThenBy(row => row.SportName, StringComparer.Ordinal)
                 .ThenBy(row => row.DisplayOrder)
                 .ThenBy(row => row.CourtName, StringComparer.Ordinal)
@@ -343,6 +363,7 @@ public sealed class ActivityCatalog(
                         row.CourtId,
                         row.SportKey,
                         row.SportName,
+                        row.SportKind,
                         unit.DivisionNumber,
                         Court.DivisionName(
                             row.CourtName,
@@ -357,7 +378,7 @@ public sealed class ActivityCatalog(
                         row.PostalCode,
                         row.Latitude,
                         row.Longitude,
-                        row.CoverPhotoUrl,
+                        row.SportPhotoUrl ?? row.CoverPhotoUrl ?? row.SportImageUrl,
                         row.VenueType,
                         row.Surface,
                         row.HasLighting,

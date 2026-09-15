@@ -27,6 +27,8 @@ public sealed class AdminAssetsController(ICloudinaryAssetService assets) : Cont
             ["facility-photo"] = "icyplay/facilities/photos",
             ["contract-document"] = "icyplay/facility-owners/contracts",
             ["court-photo"] = "icyplay/courts/photos",
+            // The platform's own stock picture of a sport, not any venue's.
+            ["sport-image"] = "icyplay/sports",
             ["gcash-qr-code"] = "icyplay/facility-owners/gcash"
         };
 

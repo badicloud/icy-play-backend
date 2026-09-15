@@ -54,6 +54,24 @@ public sealed class Sport : Entity
 
     public bool IsEvent => Kind == ActivityKind.Event;
 
+    /// <summary>
+    /// A stock picture of the sport, kept by the platform rather than by any
+    /// venue. It is the last thing the booking list falls back to: a venue's
+    /// own photo of the sport first, then the court's cover, then this.
+    ///
+    /// A card with no picture at all reads as a broken listing, and a new venue
+    /// has none on the day it opens. The public id is the source of truth; the
+    /// URL is stored beside it so a listing does not have to build one.
+    /// </summary>
+    public string? ImagePublicId
+    {
+        get; private set;
+    }
+    public string? ImageSecureUrl
+    {
+        get; private set;
+    }
+
     public void Rename(
         string name,
         string category,
@@ -65,6 +83,22 @@ public sealed class Sport : Entity
         Category = category.Trim();
         DisplayOrder = displayOrder;
         Kind = (kind ?? Kind).Trim();
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Sets or clears the stock picture. Both parts move together: a URL
+    /// without its public id cannot be re-derived at another size, and a public
+    /// id without a URL shows nothing.
+    /// </summary>
+    public void Illustrate(string? publicId, string? secureUrl, DateTimeOffset now)
+    {
+        var id = string.IsNullOrWhiteSpace(publicId) ? null : publicId.Trim();
+        var url = string.IsNullOrWhiteSpace(secureUrl) ? null : secureUrl.Trim();
+        var complete = id is not null && url is not null;
+
+        ImagePublicId = complete ? id : null;
+        ImageSecureUrl = complete ? url : null;
         UpdatedAt = now;
     }
 

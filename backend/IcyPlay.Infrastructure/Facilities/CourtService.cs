@@ -65,6 +65,15 @@ public sealed class CourtService(
             return CourtResult<CreatedCourtResponse>.Fail(CourtFailure.UntrustedPhotoUrl);
         }
 
+        // A picture can only be of a sport the court is set up for. Otherwise a
+        // basketball photo could be tagged pickleball and shown to every
+        // customer browsing a sport this floor never hosts.
+        if (request.Court.Photos.Any(photo =>
+            photo.SportId is Guid tagged && !sportIds.Contains(tagged)))
+        {
+            return CourtResult<CreatedCourtResponse>.Fail(CourtFailure.PhotoSportNotOnCourt);
+        }
+
         var now = timeProvider.GetUtcNow();
         await using var transaction = await db.Database.BeginTransactionAsync(ct);
 
@@ -499,6 +508,15 @@ public sealed class CourtService(
             return CourtResult<bool>.Fail(CourtFailure.TooManyCovers);
         }
 
+        // Editing can drop a sport from the court in the same submit that tags
+        // a photo with it, so this reads the sports being saved rather than the
+        // ones the court had.
+        if (input.Photos.Any(photo =>
+            photo.SportId is Guid tagged && !sportIds.Contains(tagged)))
+        {
+            return CourtResult<bool>.Fail(CourtFailure.PhotoSportNotOnCourt);
+        }
+
         var now = timeProvider.GetUtcNow();
         var before = CourtSnapshot(court);
 
@@ -703,6 +721,11 @@ public sealed class CourtService(
             request.Reason);
 
         await db.SaveChangesAsync(ct);
+        // The listing caches what a court costs for ten minutes. Of everything
+        // that writes a court, this is the one whose whole purpose is changing
+        // what that listing shows — so leaving it out meant a venue set a price,
+        // looked at its own card, and saw the old one.
+        catalog.Invalidate();
         logger.LogInformation(
             "Pricing on court {CourtId} was updated by {ActorUserId}.",
             court.Id,
@@ -989,7 +1012,11 @@ public sealed class CourtService(
                         photo.SecureUrl,
                         photo.Caption,
                         photo.DisplayOrder,
-                        photo.IsCover))
+                        photo.IsCover,
+                        // Read back so editing a court keeps the tags it has.
+                        // Without it, saving any other field would untag every
+                        // picture on the court.
+                        photo.SportId))
                     .ToList(),
                 Sports = court.Sports
                     .OrderByDescending(link => link.IsPrimary)

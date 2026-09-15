@@ -249,6 +249,8 @@ public sealed class AppDbContext : DbContext
                 .HasMaxLength(20)
                 .IsRequired()
                 .HasDefaultValue(ActivityKind.Sport);
+            entity.Property(x => x.ImagePublicId).HasMaxLength(300);
+            entity.Property(x => x.ImageSecureUrl).HasMaxLength(1000);
             entity.Ignore(x => x.IsEvent);
             entity.HasIndex(x => x.Key).IsUnique();
 
@@ -677,6 +679,9 @@ public sealed class AppDbContext : DbContext
             entity.Ignore(x => x.BelongsToWholeFacility);
             // The gallery is always read for one subject, in display order.
             entity.HasIndex(x => new { x.FacilityId, x.CourtId, x.DisplayOrder });
+            // The booking list asks a narrower question of the same table: what
+            // this court looks like set up for this one sport.
+            entity.HasIndex(x => new { x.CourtId, x.SportId });
             entity.HasOne(x => x.Facility)
                 .WithMany()
                 .HasForeignKey(x => x.FacilityId)
@@ -687,6 +692,13 @@ public sealed class AppDbContext : DbContext
                 // The facility cascade already reaches these rows; a second
                 // cascade path is one more than SQL Server allows.
                 .OnDelete(DeleteBehavior.NoAction);
+            entity.HasOne(x => x.Sport)
+                .WithMany()
+                .HasForeignKey(x => x.SportId)
+                // Sports are a catalog the platform keeps, not something a
+                // venue deletes. Restricting says so out loud rather than
+                // quietly unpicking galleries if one ever were removed.
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<MaintenancePeriod>(entity =>
