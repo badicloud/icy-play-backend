@@ -13,6 +13,11 @@ public sealed record DeskBooking(
     Guid Id,
     Guid FacilityId,
     string FacilityName,
+    /// <summary>The floor it was sold on, for grouping a venue's own diary.</summary>
+    Guid CourtId,
+    /// <summary>The part of that floor. What a second booking at the same hour is not.</summary>
+    Guid BookableCourtId,
+    int DivisionNumber,
     string CourtName,
     string SportName,
     /// <summary>The sport's stable key, for artwork.</summary>
@@ -40,6 +45,68 @@ public sealed record DeskBooking(
 
 /// <summary>A venue the signed-in person may confirm bookings for.</summary>
 public sealed record DeskVenue(Guid Id, string Name);
+
+/// <summary>
+/// A court as the venue registered it, with the parts it is sold in.
+///
+/// The desk's diary is kept per court rather than per part: the court is the
+/// thing somebody walks onto and unlocks, and a floor marked out three ways for
+/// pickleball is still one floor to the person standing at it.
+/// </summary>
+public sealed record DeskCourt(
+    Guid Id,
+    Guid FacilityId,
+    string FacilityName,
+    string Name,
+    IReadOnlyCollection<DeskCourtUnit> Units);
+
+/// <summary>One thing that can be booked on a court: a sport, and which part.</summary>
+public sealed record DeskCourtUnit(
+    Guid BookableCourtId,
+    string SportName,
+    string SportKey,
+    int DivisionNumber,
+    /// <summary>
+    /// What to call it on screen: "Basketball" for a whole floor, "Pickleball 2"
+    /// for one of three. Derived rather than stored, like every other name for
+    /// a division.
+    /// </summary>
+    string Label);
+
+/// <summary>
+/// One booked hour, as the diary shows it.
+///
+/// Deliberately thin. A month of one court is some five hundred hours, and
+/// sending each one a customer's address, a receipt and a list of rates would
+/// be sending far more than the page can show. The rest arrives when somebody
+/// clicks an hour.
+/// </summary>
+public sealed record ScheduleEntry(
+    Guid BookingId,
+    Guid CourtId,
+    Guid BookableCourtId,
+    string UnitLabel,
+    string SportKey,
+    string Status,
+    string CustomerName,
+    DateOnly Date,
+    TimeOnly StartsAt,
+    TimeOnly EndsAt);
+
+/// <summary>
+/// What the diary is being asked for.
+///
+/// <paramref name="Status"/> is null for everything still standing — held, paid
+/// and waiting, or confirmed. A named status is for the list, which is where a
+/// venue goes looking for what fell through.
+/// </summary>
+public sealed record CourtBookingQuery(
+    Guid CourtId,
+    DateOnly? From = null,
+    DateOnly? To = null,
+    string? Status = null,
+    int Page = 1,
+    int PageSize = 10);
 
 /// <summary>
 /// Which pile the desk is looking at.
@@ -80,7 +147,11 @@ public enum DeskFailure
     NotWaiting,
     /// <summary>Nothing to look at, so nothing to confirm.</summary>
     NoReceipt,
-    UnknownTab
+    UnknownTab,
+    /// <summary>Not a status anybody can ask for.</summary>
+    UnknownStatus,
+    /// <summary>More days than a diary will answer for in one go.</summary>
+    WindowTooWide
 }
 
 public sealed record DeskResult<T>(T? Value, DeskFailure Failure = DeskFailure.None)

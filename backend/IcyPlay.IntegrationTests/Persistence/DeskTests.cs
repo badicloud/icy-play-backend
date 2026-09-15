@@ -312,6 +312,233 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         venues.Should().ContainSingle().Which.Name.Should().Be("Alpha Desk Courts");
     }
 
+    [Fact]
+    public async Task CourtsAsync_ShouldNameEveryPartTheFloorIsSoldIn()
+    {
+        // Arrange: one floor, basketball whole and pickleball three across.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Diary Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var courts = await sut.CourtsAsync(venue.OwnerUserId, CancellationToken.None);
+
+        // Assert
+        var court = courts.Single(candidate => candidate.Id == venue.CourtId);
+
+        using (new AssertionScope())
+        {
+            court.Name.Should().Be("Desk court 1");
+            // A whole floor is called by its sport; a divided one carries the
+            // number, because "Pickleball" three times over names nothing.
+            court.Units.Select(unit => unit.Label)
+                .Should().BeEquivalentTo(
+                    ["Basketball", "Pickleball 1", "Pickleball 2", "Pickleball 3"]);
+        }
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldDrawEveryHourThatStillHoldsTheCourt()
+    {
+        // Arrange: one waiting on the desk, one confirmed.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Drawn Courts");
+        await SubmittedAsync(context, venue, SevenAm);
+        var confirmed = await SubmittedAsync(context, venue, EightAm);
+        var sut = CreateService(context);
+        await sut.ConfirmAsync(venue.OwnerUserId, confirmed, Desk(venue.OwnerUserId), CancellationToken.None);
+
+        // Act
+        var diary = await sut.ScheduleAsync(
+            venue.OwnerUserId,
+            venue.CourtId,
+            Tuesday,
+            Tuesday,
+            CancellationToken.None);
+
+        // Assert
+        var hours = diary.Value!;
+
+        using (new AssertionScope())
+        {
+            hours.Should().HaveCount(2);
+            hours.Select(hour => hour.StartsAt).Should().Equal(SevenAm, EightAm);
+            hours.Select(hour => hour.Status)
+                .Should().BeEquivalentTo(
+                    [nameof(BookingStatus.PendingVerification), nameof(BookingStatus.Confirmed)]);
+            // Enough to draw a square and name it, and no more.
+            hours.First().CustomerName.Should().Be("Booking Bianca");
+            hours.First().UnitLabel.Should().Be("Basketball");
+        }
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldLeaveOutAHoldWhoseClockRanOut()
+    {
+        // Arrange: booked and never paid for.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Lapsed Diary Courts");
+        // Taken two hours ago, on a thirty-minute hold, and never paid for.
+        var bookings = CreateBookingService(context, Now.AddHours(-2));
+        var held = await bookings.CreateAsync(
+            new CreateBookingRequest(
+                venue.BookableCourtId,
+                BookingKind.Hourly,
+                [new BookingSlotInput(Tuesday, SevenAm)]),
+            venue.CustomerUserId,
+            CancellationToken.None);
+
+        var sut = CreateService(context);
+
+        // Act
+        var diary = await sut.ScheduleAsync(
+            venue.OwnerUserId,
+            venue.CourtId,
+            Tuesday,
+            Tuesday,
+            CancellationToken.None);
+
+        // Assert: it holds nothing, and an hour drawn as taken that anybody can
+        // book sends the desk away from an hour it could have sold.
+        var stored = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == held.Value!.Id);
+
+        using (new AssertionScope())
+        {
+            stored.HoldsUntil.Should().BeBefore(Now);
+            stored.HasLapsedAt(Now).Should().BeTrue();
+            diary.Value!.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldRefuseACourtAtSomebodyElsesVenue()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var mine = await VenueAsync(context, "Mine Diary Courts");
+        var theirs = await VenueAsync(context, "Theirs Diary Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var diary = await sut.ScheduleAsync(
+            mine.OwnerUserId,
+            theirs.CourtId,
+            Tuesday,
+            Tuesday,
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            diary.Succeeded.Should().BeFalse();
+            diary.Failure.Should().Be(DeskFailure.NotAttended);
+        }
+    }
+
+    [Fact]
+    public async Task ScheduleAsync_ShouldRefuseAStretchWiderThanADiaryDraws()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Wide Diary Courts");
+        var sut = CreateService(context);
+
+        // Act: a year, one hour per row.
+        var diary = await sut.ScheduleAsync(
+            venue.OwnerUserId,
+            venue.CourtId,
+            Tuesday,
+            Tuesday.AddYears(1),
+            CancellationToken.None);
+
+        // Assert: that is a report, and a report should not arrive as a diary.
+        diary.Failure.Should().Be(DeskFailure.WindowTooWide);
+    }
+
+    [Fact]
+    public async Task CourtBookingsAsync_ShouldAnswerForWhatFellThroughAsWellAsWhatStands()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Fell Through Courts");
+        var standing = await SubmittedAsync(context, venue, SevenAm);
+        var turnedDown = await SubmittedAsync(context, venue, EightAm);
+        var sut = CreateService(context);
+        await sut.RejectAsync(
+            venue.OwnerUserId,
+            turnedDown,
+            "Wrong amount",
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+
+        // Act
+        var everything = await sut.CourtBookingsAsync(
+            venue.OwnerUserId,
+            new CourtBookingQuery(venue.CourtId),
+            CancellationToken.None);
+
+        var rejected = await sut.CourtBookingsAsync(
+            venue.OwnerUserId,
+            new CourtBookingQuery(venue.CourtId, Status: nameof(BookingStatus.Rejected)),
+            CancellationToken.None);
+
+        // Assert: the diary draws what holds the court; the list is where a
+        // venue goes looking for what did not.
+        using (new AssertionScope())
+        {
+            everything.Value!.TotalItems.Should().Be(2);
+            everything.Value!.Items.Select(booking => booking.Id)
+                .Should().BeEquivalentTo([standing, turnedDown]);
+            rejected.Value!.Items.Should().ContainSingle()
+                .Which.DecisionReason.Should().Be("Wrong amount");
+            // Grouped by the part of the floor it was sold on, so the console
+            // can file it under "Basketball" without asking again.
+            everything.Value!.Items.Should().AllSatisfy(booking =>
+                booking.BookableCourtId.Should().Be(venue.BookableCourtId));
+        }
+    }
+
+    [Fact]
+    public async Task CourtBookingsAsync_ShouldRefuseAStatusThatIsNotOne()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Bad Status Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var result = await sut.CourtBookingsAsync(
+            venue.OwnerUserId,
+            new CourtBookingQuery(venue.CourtId, Status: "Slightly Booked"),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(DeskFailure.UnknownStatus);
+    }
+
+    [Fact]
+    public async Task BookingAsync_ShouldRefuseOneAtSomebodyElsesVenue()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var mine = await VenueAsync(context, "My Click Courts");
+        var theirs = await VenueAsync(context, "Their Click Courts");
+        var booking = await SubmittedAsync(context, theirs, SevenAm);
+        var sut = CreateService(context);
+
+        // Act
+        var mineResult = await sut.BookingAsync(mine.OwnerUserId, booking, CancellationToken.None);
+        var theirsResult = await sut.BookingAsync(theirs.OwnerUserId, booking, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            mineResult.Failure.Should().Be(DeskFailure.BookingNotFound);
+            theirsResult.Succeeded.Should().BeTrue();
+            theirsResult.Value!.CourtId.Should().Be(theirs.CourtId);
+        }
+    }
+
     // ------------------------------------------------------------- the set-up
 
     /// <summary>A booking that has been paid for and handed to the venue.</summary>
@@ -380,6 +607,11 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             .Select(sport => sport.Id)
             .SingleAsync();
 
+        var pickleball = await context.Sports
+            .Where(sport => sport.Key == "pickleball")
+            .Select(sport => sport.Id)
+            .SingleAsync();
+
         var ownerUser = new User($"desk-owner-{Guid.NewGuid():N}@example.com", "Desk Owner", null);
         ownerUser.SetPasswordHash("hash");
         context.Users.Add(ownerUser);
@@ -412,7 +644,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
                     "Desk court 1",
                     10,
                     "The near court.",
-                    [new CourtSportInput(basketball, 1)],
+                    [new CourtSportInput(basketball, 1), new CourtSportInput(pickleball, 3)],
                     basketball,
                     CourtVenueType.Covered,
                     CourtSurface.Concrete,
@@ -432,7 +664,10 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         await courts.UpdatePricingAsync(
             created.Value!.CourtId,
             new UpdateCourtPricingRequest(
-                [new SportPricingInput(basketball, 500m, 600m, 550m, 700m)],
+                [
+                    new SportPricingInput(basketball, 500m, 600m, 550m, 700m),
+                    new SportPricingInput(pickleball, 500m, 600m, 550m, 700m)
+                ],
                 new PeakWindowInput(new TimeOnly(17, 0), new TimeOnly(20, 0), true, true),
                 "Opening rates"),
             Admin(),
@@ -440,7 +675,8 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
 
         var unit = await context.BookableCourts
             .AsNoTracking()
-            .Where(candidate => candidate.CourtId == created.Value.CourtId)
+            .Where(candidate => candidate.CourtId == created.Value.CourtId
+                && candidate.CourtSport.SportId == basketball)
             .Select(candidate => candidate.Id)
             .SingleAsync();
 
@@ -450,11 +686,12 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             .Select(court => court.FacilityId)
             .SingleAsync();
 
-        return new Venue(facilityId, unit, ownerUser.Id, customer.Id);
+        return new Venue(facilityId, created.Value.CourtId, unit, ownerUser.Id, customer.Id);
     }
 
     private sealed record Venue(
         Guid FacilityId,
+        Guid CourtId,
         Guid BookableCourtId,
         Guid OwnerUserId,
         Guid CustomerUserId);
@@ -468,11 +705,13 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         new FixedTimeProvider(Now),
         NullLogger<DeskService>.Instance);
 
-    private static BookingService CreateBookingService(AppDbContext context) => new(
+    private static BookingService CreateBookingService(
+        AppDbContext context,
+        DateTimeOffset? now = null) => new(
         context,
         Assets(),
         new RecordingNotifier(),
-        new FixedTimeProvider(Now),
+        new FixedTimeProvider(now ?? Now),
         NullLogger<BookingService>.Instance);
 
     private static CourtService CreateCourtService(AppDbContext context) => new(

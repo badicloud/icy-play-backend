@@ -2127,6 +2127,46 @@ that did not add up read differently in a venue's history. **No letter goes
 out** — a rejection needs somewhere for the customer to answer from, and that is
 the message thread, which is not built.
 
+### The court diary
+
+```http
+GET /api/v1/desk/courts
+GET /api/v1/desk/courts/{courtId}/schedule?from=&to=
+GET /api/v1/desk/courts/{courtId}/bookings?from=&to=&status=&page=&pageSize=
+GET /api/v1/desk/bookings/{bookingId}
+```
+
+Roles: FacilityOwner, FacilityAttendant. Every one of these is scoped the same
+way as the rest of the desk — a court at a venue the caller does not work
+answers as though it were not there.
+
+`courts` lists courts **as the venue registered them**, each with the parts it
+is sold in: a floor taking basketball whole and pickleball three across is one
+court with four parts. The diary is organised by the court because that is what
+somebody walks onto and unlocks. Part labels are derived — the sport alone on a
+whole floor, the sport and the number on a divided one — never stored, because a
+stored name outlives the marking out that made it true.
+
+`schedule` is deliberately thin: one row per booked hour, carrying the status,
+the part, and who booked it. A month of one court is some five hundred hours,
+and sending each one a customer's address and a receipt would be sending far
+more than a calendar can draw. The rest arrives from `bookings/{id}` when
+somebody clicks an hour.
+
+It answers only for what **still holds** the hour — a hold whose clock ran out
+without a receipt has let go, and an hour drawn as taken that anybody can book
+sends a desk away from an hour it could have sold. What fell through is in the
+list instead.
+
+The stretch is capped at **six weeks**, not a month: a calendar's month view
+reaches into the weeks either side of it, and anything wider than that is a
+report rather than a diary.
+
+`bookings` is the list, and unlike the diary it will answer for rejected,
+cancelled and expired, which is what a venue comes to a list to find. Its date
+filter is an **overlap**, not a start: a run of days that began before the
+window is still on the court during it.
+
 ---
 
 ## Cloudinary Upload Flow

@@ -26,6 +26,12 @@ public sealed class DeskService(
 {
     private const int LargestPage = 50;
 
+    /// <summary>
+    /// A month and a day, so a calendar can ask for the whole of a month it is
+    /// showing plus the edges of the weeks either side of it.
+    /// </summary>
+    private const int WidestWindowInDays = 42;
+
     public async Task<IReadOnlyCollection<DeskVenue>> VenuesAsync(Guid userId, CancellationToken ct) =>
         await VenueQuery(userId)
             .AsNoTracking()
@@ -88,6 +94,8 @@ public sealed class DeskService(
             .Select(booking => new Row(
                 booking,
                 booking.BookableCourt.Court.FacilityId,
+                booking.BookableCourt.CourtId,
+                booking.BookableCourt.DivisionNumber,
                 booking.BookableCourt.CourtSport.Sport.Key,
                 db.Users
                     .Where(user => user.Id == booking.CustomerUserId)
@@ -98,6 +106,225 @@ public sealed class DeskService(
 
         return DeskResult<PagedResult<DeskBooking>>.Success(
             new PagedResult<DeskBooking>([.. items.Select(Detail)], page, pageSize, total));
+    }
+
+    public async Task<IReadOnlyCollection<DeskCourt>> CourtsAsync(Guid userId, CancellationToken ct)
+    {
+        var venueIds = await VenueQuery(userId)
+            .AsNoTracking()
+            .Select(facility => facility.Id)
+            .ToListAsync(ct);
+
+        var rows = await db.Courts
+            .AsNoTracking()
+            .Where(court => court.IsActive && venueIds.Contains(court.FacilityId))
+            .OrderBy(court => court.Facility.Name)
+            .ThenBy(court => court.DisplayOrder)
+            .ThenBy(court => court.Name)
+            .Select(court => new
+            {
+                court.Id,
+                court.FacilityId,
+                FacilityName = court.Facility.Name,
+                court.Name,
+                // A court sport is live by existing; only the parts it is
+                // marked out into are retired and brought back.
+                Units = court.Sports
+                    .SelectMany(pair => pair.BookableCourts
+                        .Where(unit => unit.IsActive)
+                        .Select(unit => new
+                        {
+                            BookableCourtId = unit.Id,
+                            SportName = pair.Sport.Name,
+                            SportKey = pair.Sport.Key,
+                            unit.DivisionNumber,
+                            pair.Divisions
+                        }))
+                    .ToList()
+            })
+            .ToListAsync(ct);
+
+        return
+        [
+            .. rows.Select(court => new DeskCourt(
+                court.Id,
+                court.FacilityId,
+                court.FacilityName,
+                court.Name,
+                [
+                    .. court.Units
+                        .OrderBy(unit => unit.SportName)
+                        .ThenBy(unit => unit.DivisionNumber)
+                        .Select(unit => new DeskCourtUnit(
+                            unit.BookableCourtId,
+                            unit.SportName,
+                            unit.SportKey,
+                            unit.DivisionNumber,
+                            UnitLabel(unit.SportName, unit.DivisionNumber, unit.Divisions)))
+                ]))
+        ];
+    }
+
+    public async Task<DeskResult<IReadOnlyCollection<ScheduleEntry>>> ScheduleAsync(
+        Guid userId,
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct)
+    {
+        if (!await WorksThisCourtAsync(userId, courtId, ct))
+        {
+            return DeskResult<IReadOnlyCollection<ScheduleEntry>>.Fail(DeskFailure.NotAttended);
+        }
+
+        if (to < from || to.DayNumber - from.DayNumber > WidestWindowInDays)
+        {
+            // A diary is drawn a month at a time. Anything wider is a report,
+            // and a report should not arrive one hour per row.
+            return DeskResult<IReadOnlyCollection<ScheduleEntry>>.Fail(DeskFailure.WindowTooWide);
+        }
+
+        var now = timeProvider.GetUtcNow();
+
+        var rows = await db.BookingSlots
+            .AsNoTracking()
+            .Where(slot => slot.CourtId == courtId && slot.Date >= from && slot.Date <= to)
+            .Select(slot => new
+            {
+                slot.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                slot.Booking.Id,
+                slot.Booking.Status,
+                slot.Booking.HoldsUntil,
+                slot.Booking.ReceiptUrl,
+                slot.Booking.BookableCourtId,
+                slot.Booking.BookableCourt.DivisionNumber,
+                SportName = slot.Booking.BookableCourt.CourtSport.Sport.Name,
+                SportKey = slot.Booking.BookableCourt.CourtSport.Sport.Key,
+                slot.Booking.BookableCourt.CourtSport.Divisions,
+                CustomerName = db.Users
+                    .Where(user => user.Id == slot.Booking.CustomerUserId)
+                    .Select(user => user.FullName)
+                    .FirstOrDefault()
+            })
+            .ToListAsync(ct);
+
+        return DeskResult<IReadOnlyCollection<ScheduleEntry>>.Success(
+        [
+            .. rows
+                // Only what still holds the hour. A hold whose clock ran out
+                // without a receipt has let go, and drawing it as taken would
+                // send somebody away from an hour they could have sold.
+                .Where(row => BookingStatuses.IsLive(row.Status)
+                    && !(row.Status == BookingStatus.PendingPayment
+                        && row.ReceiptUrl == null
+                        && now >= row.HoldsUntil))
+                .OrderBy(row => row.Date)
+                .ThenBy(row => row.StartsAt)
+                .Select(row => new ScheduleEntry(
+                    row.Id,
+                    courtId,
+                    row.BookableCourtId,
+                    UnitLabel(row.SportName, row.DivisionNumber, row.Divisions),
+                    row.SportKey,
+                    row.Status.ToString(),
+                    row.CustomerName ?? "Unknown customer",
+                    row.Date,
+                    row.StartsAt,
+                    row.EndsAt))
+        ]);
+    }
+
+    public async Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsAsync(
+        Guid userId,
+        CourtBookingQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (!await WorksThisCourtAsync(userId, query.CourtId, ct))
+        {
+            return DeskResult<PagedResult<DeskBooking>>.Fail(DeskFailure.NotAttended);
+        }
+
+        BookingStatus? wanted = null;
+
+        if (query.Status is not null)
+        {
+            if (!Enum.TryParse<BookingStatus>(query.Status, ignoreCase: true, out var parsed))
+            {
+                return DeskResult<PagedResult<DeskBooking>>.Fail(DeskFailure.UnknownStatus);
+            }
+
+            wanted = parsed;
+        }
+
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, LargestPage);
+
+        var rows = db.Bookings
+            .AsNoTracking()
+            .Where(booking => booking.BookableCourt.CourtId == query.CourtId);
+
+        if (wanted is BookingStatus status)
+        {
+            rows = rows.Where(booking => booking.Status == status);
+        }
+
+        if (query.From is DateOnly from)
+        {
+            // Overlapping, not starting within: a run of days that began before
+            // the window is still on the court during it.
+            rows = rows.Where(booking => booking.EndDate >= from);
+        }
+
+        if (query.To is DateOnly to)
+        {
+            rows = rows.Where(booking => booking.StartDate <= to);
+        }
+
+        var total = await rows.CountAsync(ct);
+
+        var items = await rows
+            .OrderByDescending(booking => booking.StartDate)
+            .ThenByDescending(booking => booking.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(booking => new Row(
+                booking,
+                booking.BookableCourt.Court.FacilityId,
+                booking.BookableCourt.CourtId,
+                booking.BookableCourt.DivisionNumber,
+                booking.BookableCourt.CourtSport.Sport.Key,
+                db.Users
+                    .Where(user => user.Id == booking.CustomerUserId)
+                    .Select(user => new Person(user.FullName, user.Email, user.PhoneNumber))
+                    .FirstOrDefault(),
+                booking.Slots.ToList()))
+            .ToListAsync(ct);
+
+        return DeskResult<PagedResult<DeskBooking>>.Success(
+            new PagedResult<DeskBooking>([.. items.Select(Detail)], page, pageSize, total));
+    }
+
+    public async Task<DeskResult<DeskBooking>> BookingAsync(
+        Guid userId,
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        var venueIds = VenueQuery(userId).Select(facility => facility.Id);
+
+        var here = await db.Bookings
+            .AsNoTracking()
+            .AnyAsync(
+                booking => booking.Id == bookingId
+                    && venueIds.Contains(booking.BookableCourt.Court.FacilityId),
+                ct);
+
+        return here
+            ? DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct))
+            : DeskResult<DeskBooking>.Fail(DeskFailure.BookingNotFound);
     }
 
     public async Task<DeskResult<DeskBooking>> ConfirmAsync(
@@ -170,6 +397,27 @@ public sealed class DeskService(
     }
 
     /// <summary>
+    /// Whether this court sits in a venue they work. Asked before every read of
+    /// one court, so a court id from elsewhere answers the same as a made-up one.
+    /// </summary>
+    private async Task<bool> WorksThisCourtAsync(Guid userId, Guid courtId, CancellationToken ct)
+    {
+        var venueIds = VenueQuery(userId).Select(facility => facility.Id);
+
+        return await db.Courts
+            .AsNoTracking()
+            .AnyAsync(court => court.Id == courtId && venueIds.Contains(court.FacilityId), ct);
+    }
+
+    /// <summary>
+    /// What one part of a court is called: the sport on a whole floor, the sport
+    /// and the number on a divided one. Derived, never stored — a stored name
+    /// would outlive the marking out that made it true.
+    /// </summary>
+    private static string UnitLabel(string sportName, int divisionNumber, int divisions) =>
+        divisions <= 1 ? sportName : $"{sportName} {divisionNumber}";
+
+    /// <summary>
     /// The venues this person works: the ones they own, and the ones they are
     /// on the desk of today.
     /// </summary>
@@ -204,6 +452,8 @@ public sealed class DeskService(
             .Select(booking => new Row(
                 booking,
                 booking.BookableCourt.Court.FacilityId,
+                booking.BookableCourt.CourtId,
+                booking.BookableCourt.DivisionNumber,
                 booking.BookableCourt.CourtSport.Sport.Key,
                 db.Users
                     .Where(user => user.Id == booking.CustomerUserId)
@@ -255,6 +505,9 @@ public sealed class DeskService(
         row.Booking.Id,
         row.FacilityId,
         row.Booking.FacilityName,
+        row.CourtId,
+        row.Booking.BookableCourtId,
+        row.DivisionNumber,
         row.Booking.CourtName,
         row.Booking.SportName,
         row.SportKey,
@@ -295,6 +548,8 @@ public sealed class DeskService(
     private sealed record Row(
         Booking Booking,
         Guid FacilityId,
+        Guid CourtId,
+        int DivisionNumber,
         string SportKey,
         /// <summary>Null when the account behind the booking has gone.</summary>
         Person? Customer,

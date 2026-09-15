@@ -69,6 +69,97 @@ public sealed class DeskController(IDeskService desk) : ControllerBase
     }
 
     /// <summary>
+    /// The courts these venues have registered, each with the parts it is sold
+    /// in. The diary is organised by these.
+    /// </summary>
+    [HttpGet("courts")]
+    public async Task<IActionResult> Courts(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        return Ok(new ApiEnvelope<IReadOnlyCollection<DeskCourt>>(
+            await desk.CourtsAsync(userId, ct)));
+    }
+
+    /// <summary>
+    /// Every booked hour on one court between two dates. Thin: what a calendar
+    /// needs to draw a square, and no more.
+    /// </summary>
+    [HttpGet("courts/{courtId:guid}/schedule")]
+    public async Task<IActionResult> Schedule(
+        Guid courtId,
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.ScheduleAsync(userId, courtId, from, to, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<ScheduleEntry>>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// One court's bookings as a list. Answers for what fell through as well as
+    /// what stands, which is what a list is for.
+    /// </summary>
+    [HttpGet("courts/{courtId:guid}/bookings")]
+    public async Task<IActionResult> CourtBookings(
+        Guid courtId,
+        [FromQuery] DateOnly? from = null,
+        [FromQuery] DateOnly? to = null,
+        [FromQuery] string? status = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.CourtBookingsAsync(
+            userId,
+            new CourtBookingQuery(courtId, from, to, status, page, pageSize),
+            ct);
+
+        if (!result.Succeeded)
+        {
+            return Failure(result.Failure);
+        }
+
+        var paged = result.Value!;
+
+        return Ok(new ApiListEnvelope<DeskBooking>(
+            paged.Items,
+            new PaginationMeta(paged.Page, paged.PageSize, paged.TotalItems, paged.TotalPages)));
+    }
+
+    /// <summary>One booking in full, for an hour somebody has clicked.</summary>
+    [HttpGet("bookings/{bookingId:guid}")]
+    public async Task<IActionResult> Booking(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.BookingAsync(userId, bookingId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskBooking>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// Says the payment is good. The customer is emailed their confirmation.
     /// </summary>
     [HttpPost("bookings/{bookingId:guid}/confirm")]
@@ -155,6 +246,14 @@ public sealed class DeskController(IDeskService desk) : ControllerBase
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for either the waiting bookings or the confirmed ones."),
+            DeskFailure.UnknownStatus => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "That is not a booking status."),
+            DeskFailure.WindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for a stretch of six weeks or less."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 

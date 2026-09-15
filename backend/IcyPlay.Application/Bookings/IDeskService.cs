@@ -25,6 +25,41 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// The courts this person's venues have registered, each with the parts it
+    /// is sold in. What the diary is organised by.
+    /// </summary>
+    Task<IReadOnlyCollection<DeskCourt>> CourtsAsync(Guid userId, CancellationToken ct);
+
+    /// <summary>
+    /// Every booked hour on one court between two dates, thin enough to draw a
+    /// month of. Only what still stands: a lapsed hold and a rejected payment
+    /// hold nothing, and an hour drawn as taken that anybody can book is worse
+    /// than an empty square.
+    /// </summary>
+    Task<DeskResult<IReadOnlyCollection<ScheduleEntry>>> ScheduleAsync(
+        Guid userId,
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct);
+
+    /// <summary>
+    /// One court's bookings as a list, a page at a time. Unlike the diary this
+    /// will answer for what fell through, because that is what a venue comes to
+    /// a list to find.
+    /// </summary>
+    Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsAsync(
+        Guid userId,
+        CourtBookingQuery query,
+        CancellationToken ct);
+
+    /// <summary>One booking in full, for an hour somebody has clicked.</summary>
+    Task<DeskResult<DeskBooking>> BookingAsync(
+        Guid userId,
+        Guid bookingId,
+        CancellationToken ct);
+
+    /// <summary>
     /// Says the payment is good. The customer is told; it is the one letter
     /// they get that reads as a confirmation.
     /// </summary>
