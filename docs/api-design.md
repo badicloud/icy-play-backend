@@ -2088,6 +2088,45 @@ PUT /api/v1/admin/facility-owners/{id}/payment-details
 Role: PlatformAdmin. The GCash number, account name and QR code a customer pays
 into, and how long an unpaid hold survives.
 
+### Moving a booking
+
+```http
+POST /api/v1/bookings/{bookingId}/move   { "startDate": "2026-09-25" }
+```
+
+Role: Customer, and only their own booking.
+
+**One date is the whole request.** The hours of the day, the number of days and
+the court do not change — which is what keeps the total identical, which is what
+lets a move happen at all when the money is already with the venue. There is no
+cancellation and no refund anywhere in this platform, because nothing ever holds
+the customer's money; moving is what is offered instead.
+
+The rules, all of them in `BookingMove` on the domain because they are the deal
+rather than an implementation detail:
+
+* **Three times.** A booking that can be carried forward for ever is an option
+  on a venue's calendar rather than a booking, and the venue is the one turning
+  other people away to keep holding it.
+* **More than 24 hours** before it starts, counted on the venue's clock. Inside
+  the last day the hour stays where it is.
+* **Same kind of day** — weekday for weekday, weekend for weekend, and not onto
+  a holiday. Those are priced differently.
+* Only `PendingVerification` or `Confirmed`. An unpaid hold needs no moving:
+  let it lapse and book the other date.
+
+Runs in a serializable transaction for the same reason taking a booking does,
+and its own hours are excluded from what counts as taken — otherwise a move that
+overlaps the dates it is leaving would refuse on the strength of the very
+booking being moved. The recomputed total is compared against the original and
+the move refused if they differ; the rules above should make that impossible,
+and it is checked anyway.
+
+`BookingDetail` carries `movesLeft` and `canBeMoved` so a page can offer the
+button or explain its absence without working the rules out again. `canBeMoved`
+is answered on the server because the 24-hour rule is measured on the venue's
+clock, not the reader's.
+
 ### The venue's desk
 
 ```http

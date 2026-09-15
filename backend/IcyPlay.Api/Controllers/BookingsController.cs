@@ -105,6 +105,28 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
+    /// Carries a booking to another date, keeping its hours and its price.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/move")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> Move(
+        Guid bookingId,
+        MoveBookingRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.MoveAsync(bookingId, userId, request, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// Records the receipt the browser has just put in Cloudinary. The file
     /// never passes through here — only the link to it, which is checked.
     /// </summary>
@@ -210,6 +232,26 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "That date has already gone."),
+            BookingFailure.NotMovable => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Only a booking the venue is holding or has confirmed can be moved."),
+            BookingFailure.MoveLimitReached => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking has already been moved three times, which is the limit."),
+            BookingFailure.TooLateToMove => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "A booking can only be moved more than 24 hours before it starts."),
+            BookingFailure.DifferentKindOfDay => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Move a weekday booking to a weekday and a weekend one to a weekend, and not onto a holiday. Those days are priced differently."),
+            BookingFailure.PriceWouldChange => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Those hours come to a different total on that date, so the booking cannot simply be moved."),
             BookingFailure.TooFarAhead => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

@@ -131,6 +131,19 @@ public sealed class Booking : Entity
 
     public ICollection<BookingSlot> Slots { get; private set; } = [];
 
+    /// <summary>
+    /// How many times these hours have been carried to another date.
+    /// </summary>
+    public int MoveCount
+    {
+        get; private set;
+    }
+
+    public DateTimeOffset? MovedAt
+    {
+        get; private set;
+    }
+
     public DateTimeOffset? ConfirmedAt
     {
         get; private set;
@@ -237,6 +250,37 @@ public sealed class Booking : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Carries the whole booking to another date, keeping its hours.
+    /// </summary>
+    /// <remarks>
+    /// The caller has already priced the new hours and checked they are free.
+    /// What this does is swap the slots and remember that it happened, because
+    /// the count is the only thing standing between a booking and an indefinite
+    /// option on somebody else's calendar.
+    /// </remarks>
+    public void MoveTo(
+        DateOnly startDate,
+        DateOnly endDate,
+        IReadOnlyCollection<BookingSlot> slots,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+
+        StartDate = startDate;
+        EndDate = endDate;
+        Slots.Clear();
+
+        foreach (var slot in slots)
+        {
+            Slots.Add(slot);
+        }
+
+        MoveCount += 1;
+        MovedAt = now;
+        UpdatedAt = now;
+    }
+
     public void Cancel(string? reason, DateTimeOffset now)
     {
         Status = BookingStatus.Cancelled;
@@ -274,6 +318,39 @@ public static class BookingKind
 /// the one question the rest of the system asks about them, so "is this hour
 /// free" is answered the same way everywhere it is asked.
 /// </summary>
+/// <summary>
+/// What a booking may still have done to it, and when.
+///
+/// The limits are here rather than in the service because they are the deal, not
+/// an implementation detail: three moves, nothing inside the last day, and only
+/// onto the same kind of day so the price cannot change underneath anybody.
+/// </summary>
+public static class BookingMove
+{
+    /// <summary>
+    /// Three, then no more. A booking that can be carried forward for ever is
+    /// an option on a venue's calendar rather than a booking, and the venue is
+    /// the one turning other people away to keep holding it.
+    /// </summary>
+    public const int Limit = 3;
+
+    /// <summary>
+    /// A venue that has kept an hour free needs more notice than an afternoon.
+    /// Counted to the start of the booking as it stands, on the venue's clock.
+    /// </summary>
+    public const int NoticeInHours = 24;
+
+    /// <summary>
+    /// Saturdays and Sundays are their own kind of day, and so are holidays: a
+    /// court is priced differently on each. Moving within a kind is what keeps
+    /// the total identical, which is what lets a move happen with no second
+    /// payment and no refund.
+    /// </summary>
+    public static bool SameKindOfDay(DateOnly from, DateOnly to, bool fromIsHoliday, bool toIsHoliday) =>
+        fromIsHoliday == toIsHoliday
+        && Court.IsWeekend(from.DayOfWeek) == Court.IsWeekend(to.DayOfWeek);
+}
+
 public static class BookingStatuses
 {
     public static readonly IReadOnlyCollection<BookingStatus> Live =

@@ -118,6 +118,17 @@ public sealed record BookingDetail(
     string? GcashAccountName,
     string? GcashQrCodeUrl,
     IReadOnlyCollection<BookedSlot> Slots,
+    /// <summary>
+    /// How many moves are left of the three. Zero once it is settled.
+    /// </summary>
+    int MovesLeft,
+    /// <summary>
+    /// Whether it can be moved right now — which is more than having moves
+    /// left, because the last day before it starts closes the door. Answered
+    /// here rather than worked out in the browser, so the rule lives in one
+    /// place and the reader's clock cannot disagree with the venue's.
+    /// </summary>
+    bool CanBeMoved,
     DateTimeOffset CreatedAt);
 
 public sealed record BookedSlot(
@@ -158,6 +169,20 @@ public enum BookingFailure
     HoldExpired,
     /// <summary>The receipt is not a secure link on the configured Cloudinary account.</summary>
     UntrustedReceiptUrl,
+    /// <summary>Only a booking that still stands and has not started can be moved.</summary>
+    NotMovable,
+    /// <summary>Three moves is the limit, and it has been reached.</summary>
+    MoveLimitReached,
+    /// <summary>Inside the last day before it starts. The venue has kept the hour free.</summary>
+    TooLateToMove,
+    /// <summary>
+    /// A weekday for a weekend, or an ordinary day for a holiday. Those are
+    /// priced differently, and a move that changes the price is a second
+    /// payment rather than a move.
+    /// </summary>
+    DifferentKindOfDay,
+    /// <summary>The same hours came to a different total on the new dates.</summary>
+    PriceWouldChange,
     /// <summary>The receipt has to be a picture. A PDF or a video is not one.</summary>
     ReceiptNotAnImage,
     /// <summary>Nothing to submit: no receipt has been uploaded.</summary>
@@ -188,6 +213,15 @@ public sealed record BookingResult<T>(T? Value, BookingFailure Failure = Booking
 
 /// <summary>The receipt, as the browser reports it after uploading to Cloudinary.</summary>
 public sealed record AttachReceiptRequest(string ReceiptUrl);
+
+/// <summary>
+/// Where a booking is going.
+///
+/// One date, because nothing else may change: the hours of the day, the number
+/// of days and the court all stay as they were. That is what keeps the price
+/// identical, which is what lets a move happen without a second payment.
+/// </summary>
+public sealed record MoveBookingRequest(DateOnly StartDate);
 
 public sealed class AttachReceiptRequestValidator : AbstractValidator<AttachReceiptRequest>
 {

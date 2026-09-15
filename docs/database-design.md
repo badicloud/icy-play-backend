@@ -672,6 +672,8 @@ What was agreed, as it was agreed. See [booking.md](booking.md).
 | ReceiptUploadedAt | datetimeoffset | **The clock stops here**, not at submit. |
 | SubmittedForVerificationAt | datetimeoffset | |
 | CancellationReason | nvarchar(500) | |
+| MoveCount | int | How many times these hours have been carried to another date. Capped at three. |
+| MovedAt | datetimeoffset | When the last of those happened. |
 
 Indexed on CustomerUserId and on (StartDate, EndDate) — the stretch of days a
 venue's console asks for.

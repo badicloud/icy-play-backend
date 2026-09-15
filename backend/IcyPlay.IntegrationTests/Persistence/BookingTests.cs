@@ -30,6 +30,8 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     private static readonly DateOnly Tuesday = new(2026, 9, 15);
     private static readonly DateOnly Wednesday = new(2026, 9, 16);
     private static readonly DateOnly Saturday = new(2026, 9, 19);
+    private static readonly DateOnly Thursday = new(2026, 9, 17);
+    private static readonly DateOnly NextSaturday = new(2026, 9, 26);
 
     private static readonly TimeOnly SevenAm = new(7, 0);
     private static readonly TimeOnly EightAm = new(8, 0);
@@ -537,6 +539,233 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         // Assert: a day sold open to close has to still have its opening in it.
         // The booking page greys today out for the same reason.
         booking.Failure.Should().Be(BookingFailure.DayNotWhollyAvailable);
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldCarryTheHoursToAnotherDateAtTheSamePrice()
+    {
+        // Arrange: Wednesday, confirmed, two days out.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Moving Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+        var was = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        // Assert
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeTrue();
+            stored.StartDate.Should().Be(Thursday);
+            stored.EndDate.Should().Be(Thursday);
+            // The hours of the day are what does not change.
+            stored.Slots.Should().ContainSingle().Which.StartsAt.Should().Be(SevenAm);
+            // Nor does the money, which is already with the venue.
+            stored.Total.Should().Be(was.Total);
+            stored.MoveCount.Should().Be(1);
+            stored.Status.Should().Be(BookingStatus.Confirmed);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldPutTheHoursItLeftBackOnSale()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Vacated Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        // Act: somebody else takes the hour it used to be on.
+        var somebodyElse = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        // Assert: a moved booking holds nothing where it was.
+        somebodyElse.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseAFourthMove()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Thrice Moved Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        foreach (var date in new[] { Thursday, Wednesday, Thursday })
+        {
+            var each = await sut.MoveAsync(
+                booking,
+                floor.Customer,
+                new MoveBookingRequest(date),
+                CancellationToken.None);
+
+            each.Succeeded.Should().BeTrue();
+        }
+
+        // Act
+        var fourth = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Wednesday),
+            CancellationToken.None);
+
+        // Assert: a booking that can be carried forward for ever is an option on
+        // the venue's calendar rather than a booking.
+        using (new AssertionScope())
+        {
+            fourth.Failure.Should().Be(BookingFailure.MoveLimitReached);
+            (await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking))
+                .MoveCount.Should().Be(3);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseInsideTheLastDayBeforeItStarts()
+    {
+        // Arrange: tomorrow at seven, which on the venue's clock is fourteen
+        // hours away.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Tomorrow Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Tuesday, SevenAm);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        // Assert: the venue has kept that hour free and turned others away.
+        moved.Failure.Should().Be(BookingFailure.TooLateToMove);
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseAWeekendBookingMovedToAWeekday()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Weekend Moved Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Saturday, SevenAm);
+
+        // Act
+        var toAWeekday = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        var toAWeekend = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(NextSaturday),
+            CancellationToken.None);
+
+        // Assert: a weekend hour is priced differently, and a move that changes
+        // the price is a second payment rather than a move.
+        using (new AssertionScope())
+        {
+            toAWeekday.Failure.Should().Be(BookingFailure.DifferentKindOfDay);
+            toAWeekend.Succeeded.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseAnHourSomebodyElseHolds()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Contested Move Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Thursday, SevenAm),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        // Assert
+        moved.Failure.Should().Be(BookingFailure.SlotTaken);
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseAHoldNobodyHasPaidFor()
+    {
+        // Arrange: taken and not paid for.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Unpaid Move Courts");
+        var sut = CreateService(context);
+        var held = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            held.Value!.Id,
+            floor.Customer,
+            new MoveBookingRequest(Thursday),
+            CancellationToken.None);
+
+        // Assert: there is nothing to carry. Let the hold lapse and book the
+        // other date.
+        moved.Failure.Should().Be(BookingFailure.NotMovable);
+    }
+
+    /// <summary>A booking the venue has checked and confirmed.</summary>
+    private static async Task<Guid> ConfirmedAsync(
+        AppDbContext context,
+        BookingService bookings,
+        Floor floor,
+        DateOnly date,
+        TimeOnly hour)
+    {
+        var created = await bookings.CreateAsync(
+            Hourly(floor.Pickleball1, date, hour),
+            floor.Customer,
+            CancellationToken.None);
+
+        var booking = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        booking.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        booking.SubmitForVerification(Now);
+        booking.Confirm(Now);
+        await context.SaveChangesAsync();
+
+        return booking.Id;
     }
 
     // ------------------------------------------------------------- the set-up

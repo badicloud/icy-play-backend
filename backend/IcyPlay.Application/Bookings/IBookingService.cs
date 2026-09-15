@@ -34,6 +34,23 @@ public interface IBookingService
         CancellationToken ct);
 
     /// <summary>
+    /// Carries a booking to another date, keeping its hours, its court and its
+    /// price.
+    ///
+    /// Three times at most, never inside the last day before it starts, and
+    /// only onto the same kind of day — a weekday for a weekday, a weekend for
+    /// a weekend, an ordinary day for an ordinary day. Those rules exist to
+    /// keep the total identical: the money is already with the venue, so a move
+    /// that changed the price would need a second payment or a refund, and
+    /// neither is something this platform can do.
+    /// </summary>
+    Task<BookingResult<BookingDetail>> MoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        MoveBookingRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Records the GCash receipt the customer uploaded. Confirms nothing: a
     /// person at the venue still has to look at it.
     /// </summary>

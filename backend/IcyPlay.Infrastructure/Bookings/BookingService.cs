@@ -154,6 +154,163 @@ public sealed class BookingService(
         return detail;
     }
 
+    public async Task<BookingResult<BookingDetail>> MoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        MoveBookingRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        // Another customer's booking answers the same as one that is not there.
+        if (booking is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        // A hold that has not been paid for needs no moving: let it lapse and
+        // book the other date. Anything already decided is not a booking to
+        // carry anywhere.
+        if (booking.Status is not (BookingStatus.PendingVerification or BookingStatus.Confirmed))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.NotMovable);
+        }
+
+        if (booking.MoveCount >= BookingMove.Limit)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveLimitReached);
+        }
+
+        var offering = await LoadAsync(booking.BookableCourtId, request.StartDate, ct);
+
+        if (offering is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+        var venueNow = offering.LocalNow(utcNow);
+
+        var wasFor = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).ToArray();
+        var startsAt = booking.StartDate.ToDateTime(wasFor[0].StartsAt);
+
+        // Counted to the start of the booking as it stands, on the venue's
+        // clock. A venue that has kept the hour free needs more notice than an
+        // afternoon, and one already under way is not a booking to move.
+        if (startsAt - venueNow.DateTime < TimeSpan.FromHours(BookingMove.NoticeInHours))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.TooLateToMove);
+        }
+
+        var span = booking.EndDate.DayNumber - booking.StartDate.DayNumber;
+        var dates = Enumerable.Range(0, span + 1).Select(request.StartDate.AddDays).ToArray();
+
+        if (dates[0] <= DateOnly.FromDateTime(venueNow.DateTime))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.DateInThePast);
+        }
+
+        // Serializable for the same reason taking a booking is: the check and
+        // the write have to be one moment, or two people move onto the same
+        // hour at once.
+        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+
+        var holidays = new Dictionary<DateOnly, bool>();
+
+        foreach (var date in dates.Concat([booking.StartDate, booking.EndDate]).Distinct())
+        {
+            holidays[date] = await IsHolidayAsync(date, ct);
+        }
+
+        for (var day = 0; day <= span; day += 1)
+        {
+            var from = booking.StartDate.AddDays(day);
+            var to = dates[day];
+
+            if (!BookingMove.SameKindOfDay(from, to, holidays[from], holidays[to]))
+            {
+                return BookingResult<BookingDetail>.Fail(BookingFailure.DifferentKindOfDay);
+            }
+        }
+
+        var taken = await TakenAsync(offering, dates, ct);
+
+        // Its own hours are not in the way of themselves. Without this a move
+        // that overlaps the dates it is leaving would refuse on the strength of
+        // the very booking being moved.
+        var free = taken
+            .Where(slot => !wasFor.Any(was =>
+                was.Date == slot.Date && was.StartsAt == slot.StartsAt))
+            .ToArray();
+
+        var days = dates.ToDictionary(date => date, date => Day(offering, date, holidays[date], free));
+
+        var wanted = new CreateBookingRequest(
+            booking.BookableCourtId,
+            booking.Kind,
+            [
+                .. wasFor.Select(was => new BookingSlotInput(
+                    request.StartDate.AddDays(was.Date.DayNumber - booking.StartDate.DayNumber),
+                    was.StartsAt))
+            ]);
+
+        var failure = CheckSlots(wanted, days);
+
+        if (failure != BookingFailure.None)
+        {
+            return BookingResult<BookingDetail>.Fail(failure);
+        }
+
+        var moved = new List<BookingSlot>();
+
+        foreach (var input in wanted.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt))
+        {
+            var slot = days[input.Date].Slots.Single(candidate => candidate.StartsAt == input.StartsAt);
+
+            moved.Add(new BookingSlot(
+                booking.Id,
+                offering.Court.Id,
+                input.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                Enum.Parse<CourtRateKind>(slot.RateKind),
+                slot.Rate!.Value,
+                slot.PlatformFee,
+                utcNow));
+        }
+
+        // The rules above should make this impossible, and it is checked anyway:
+        // the money is already with the venue, so a move that came to a
+        // different total would need a second payment or a refund, and neither
+        // is something this platform can do.
+        if (moved.Sum(slot => slot.Amount + slot.PlatformFee) != booking.Total)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.PriceWouldChange);
+        }
+
+        db.BookingSlots.RemoveRange(booking.Slots);
+        booking.MoveTo(dates[0], dates[^1], moved, utcNow);
+        db.BookingSlots.AddRange(moved);
+
+        await db.SaveChangesAsync(ct);
+        await transaction.CommitAsync(ct);
+
+        logger.LogInformation(
+            "Booking {BookingId} moved to {StartDate}. Move {MoveCount} of {Limit}.",
+            booking.Id,
+            dates[0],
+            booking.MoveCount,
+            BookingMove.Limit);
+
+        return await GetAsync(bookingId, customerUserId, ct);
+    }
+
     public async Task<BookingResult<BookingDetail>> GetAsync(
         Guid bookingId,
         Guid customerUserId,
@@ -169,7 +326,8 @@ public sealed class BookingService(
                 SportKey = candidate.BookableCourt.CourtSport.Sport.Key,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
-                candidate.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl
+                candidate.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
+                candidate.BookableCourt.Court.Facility.TimeZone
             })
             .SingleOrDefaultAsync(ct);
 
@@ -182,7 +340,8 @@ public sealed class BookingService(
                 row.SportKey,
                 row.GcashNumber,
                 row.GcashAccountName,
-                row.GcashQrCodeUrl));
+                row.GcashQrCodeUrl,
+                row.TimeZone));
     }
 
     public async Task<IReadOnlyCollection<BookingDetail>> ListForCustomerAsync(
@@ -200,7 +359,8 @@ public sealed class BookingService(
                 SportKey = booking.BookableCourt.CourtSport.Sport.Key,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
-                booking.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl
+                booking.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
+                booking.BookableCourt.Court.Facility.TimeZone
             })
             .ToListAsync(ct);
 
@@ -211,7 +371,8 @@ public sealed class BookingService(
                 row.SportKey,
                 row.GcashNumber,
                 row.GcashAccountName,
-                row.GcashQrCodeUrl))
+                row.GcashQrCodeUrl,
+                row.TimeZone))
         ];
     }
 
@@ -722,7 +883,8 @@ public sealed class BookingService(
         string sportKey,
         string? gcashNumber,
         string? gcashAccountName,
-        string? gcashQrCodeUrl) => new(
+        string? gcashQrCodeUrl,
+        string timeZone) => new(
         booking.Id,
         booking.BookableCourtId,
         booking.Status.ToString(),
@@ -755,7 +917,42 @@ public sealed class BookingService(
                     slot.Amount,
                     slot.PlatformFee))
         ],
+        Math.Max(0, BookingMove.Limit - booking.MoveCount),
+        CanBeMoved(booking, timeZone),
         booking.CreatedAt);
+
+    /// <summary>
+    /// Whether this booking could be moved if somebody asked right now.
+    ///
+    /// The same rules the move itself applies, asked ahead of time so the page
+    /// can offer the button or explain why it cannot. Availability is not among
+    /// them: whether some other date is free is a question about that date, and
+    /// this one is about this booking.
+    /// </summary>
+    private bool CanBeMoved(Booking booking, string timeZone)
+    {
+        if (booking.Status is not (BookingStatus.PendingVerification or BookingStatus.Confirmed))
+        {
+            return false;
+        }
+
+        if (booking.MoveCount >= BookingMove.Limit)
+        {
+            return false;
+        }
+
+        var first = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).FirstOrDefault();
+
+        if (first is null)
+        {
+            return false;
+        }
+
+        var venueNow = Offering.LocalNowIn(timeZone, timeProvider.GetUtcNow());
+        var startsAt = booking.StartDate.ToDateTime(first.StartsAt);
+
+        return startsAt - venueNow.DateTime >= TimeSpan.FromHours(BookingMove.NoticeInHours);
+    }
 
     /// <summary>Everything one court needs to answer both questions, read once.</summary>
     private sealed record Offering(
@@ -779,8 +976,11 @@ public sealed class BookingService(
         /// that cannot be looked at is worse than one whose cut-off is off by
         /// the offset, and the zone is validated when the facility is saved.
         /// </summary>
-        public DateTimeOffset LocalNow(DateTimeOffset utcNow) =>
-            TimeZoneInfo.TryFindSystemTimeZoneById(TimeZone, out var zone)
+        public DateTimeOffset LocalNow(DateTimeOffset utcNow) => LocalNowIn(TimeZone, utcNow);
+
+        /// <inheritdoc cref="LocalNow" />
+        public static DateTimeOffset LocalNowIn(string timeZone, DateTimeOffset utcNow) =>
+            TimeZoneInfo.TryFindSystemTimeZoneById(timeZone, out var zone)
                 ? TimeZoneInfo.ConvertTime(utcNow, zone)
                 : utcNow;
 
