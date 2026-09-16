@@ -41,6 +41,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<FacilityAttendant> FacilityAttendants => Set<FacilityAttendant>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<BookingSlot> BookingSlots => Set<BookingSlot>();
+    public DbSet<BookingMoveRequest> BookingMoveRequests => Set<BookingMoveRequest>();
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
@@ -620,6 +621,7 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.FacilityName).HasMaxLength(200).IsRequired();
             entity.Property(x => x.SportName).HasMaxLength(150).IsRequired();
             entity.Property(x => x.PlatformHourlyRate).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PaidTotal).HasColumnType("decimal(10,2)");
             entity.Property(x => x.CancellationReason).HasMaxLength(500);
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
             // What a venue's console asks for: the bookings touching a stretch
@@ -655,6 +657,41 @@ public sealed class AppDbContext : DbContext
                 .WithMany(x => x.Slots)
                 .HasForeignKey(x => x.BookingId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.BookableCourt)
+                .WithMany()
+                .HasForeignKey(x => x.BookableCourtId)
+                // The booking's own cascade already reaches these rows; a
+                // second path is one more than SQL Server allows.
+                .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<BookingMoveRequest>(entity =>
+        {
+            entity.ToTable("BookingMoveRequests");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ToCourtName).HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Initiator).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.Property(x => x.WaiverReason).HasMaxLength(500);
+            entity.Property(x => x.DeclineReason).HasMaxLength(500);
+            entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
+            entity.Property(x => x.PaidBefore).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.NewTotal).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.BalanceDue).HasColumnType("decimal(10,2)");
+            entity.Ignore(x => x.IsOpen);
+            // Availability asks this of every court it draws: is there a move
+            // waiting to land here.
+            entity.HasIndex(x => new { x.ToBookableCourtId, x.Status });
+            entity.HasIndex(x => new { x.BookingId, x.Status });
+            entity.HasOne(x => x.Booking)
+                .WithMany()
+                .HasForeignKey(x => x.BookingId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.ToBookableCourt)
+                .WithMany()
+                .HasForeignKey(x => x.ToBookableCourtId)
+                .OnDelete(DeleteBehavior.NoAction);
         });
 
         modelBuilder.Entity<CourtOperatingHour>(entity =>

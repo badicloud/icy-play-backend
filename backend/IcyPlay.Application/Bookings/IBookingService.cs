@@ -43,20 +43,83 @@ public interface IBookingService
         CancellationToken ct);
 
     /// <summary>
-    /// Carries a booking to another date, keeping its hours, its court and its
-    /// price.
+    /// What moving this booking to another court would cost, before anybody
+    /// commits to it. "Move this booking" and "move it and pay another twelve
+    /// hundred pesos" are different questions, and only one can be answered
+    /// with a tap.
+    /// </summary>
+    Task<BookingResult<MoveQuoteResponse>> QuoteMoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        Guid toBookableCourtId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Asks to move a booking onto another court, keeping its hours.
     ///
-    /// Three times at most, never inside the last day before it starts, and
-    /// only onto the same kind of day — a weekday for a weekday, a weekend for
-    /// a weekend, an ordinary day for an ordinary day. Those rules exist to
-    /// keep the total identical: the money is already with the venue, so a move
-    /// that changed the price would need a second payment or a refund, and
-    /// neither is something this platform can do.
+    /// Raises a request rather than moving anything. A dearer court has to be
+    /// paid for, anything waiting to be paid for needs a clock, and putting a
+    /// settled booking back into a paying state would let that clock expire
+    /// something the customer has already paid. The booking moves when the
+    /// venue confirms; until then it is exactly where it was.
+    ///
+    /// A cheaper court asks for nothing and gives nothing back. There are no
+    /// refunds — that is what a move is instead of.
     /// </summary>
     Task<BookingResult<BookingDetail>> MoveAsync(
         Guid bookingId,
         Guid customerUserId,
         MoveBookingRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>The GCash receipt for the difference. The hold's clock stops here.</summary>
+    Task<BookingResult<BookingDetail>> AttachMoveReceiptAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        string receiptUrl,
+        CancellationToken cancellationToken);
+
+    /// <summary>The customer thought better of it. The held court goes back.</summary>
+    Task<BookingResult<BookingDetail>> WithdrawMoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The venue moves a booking itself, because the court it is on has a
+    /// problem. Immediate: the players are standing on it.
+    ///
+    /// A dearer court needs a waiver and a reason for it. An attendant cannot
+    /// take money from somebody who is not in the conversation — either the
+    /// customer is asked to upgrade, or the venue absorbs the difference and
+    /// says who decided that.
+    /// </summary>
+    Task<BookingResult<BookingDetail>> MoveByVenueAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        Guid toBookableCourtId,
+        string reason,
+        string? waiverReason,
+        CancellationToken cancellationToken);
+
+    /// <summary>The venue has looked at the payment, and the booking moves.</summary>
+    Task<BookingResult<BookingDetail>> ConfirmMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>The venue lets the customer off the difference, and says why.</summary>
+    Task<BookingResult<BookingDetail>> WaiveMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        string reason,
+        CancellationToken cancellationToken);
+
+    /// <summary>The venue says no. The booking stays exactly where it was.</summary>
+    Task<BookingResult<BookingDetail>> DeclineMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        string? reason,
         CancellationToken cancellationToken);
 
     /// <summary>

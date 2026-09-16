@@ -20,6 +20,7 @@ public sealed class BookingSlot : Entity
     public BookingSlot(
         Guid bookingId,
         Guid courtId,
+        Guid bookableCourtId,
         DateOnly date,
         TimeOnly startsAt,
         TimeOnly endsAt,
@@ -30,6 +31,7 @@ public sealed class BookingSlot : Entity
     {
         BookingId = bookingId;
         CourtId = courtId;
+        BookableCourtId = bookableCourtId;
         Date = date;
         StartsAt = startsAt;
         EndsAt = endsAt;
@@ -57,6 +59,22 @@ public sealed class BookingSlot : Entity
     {
         get; private set;
     }
+
+    /// <summary>
+    /// Which part of that floor this hour was sold as.
+    ///
+    /// On the hour rather than on the booking, because a booking can change
+    /// court half way through: a court that fails at two o'clock leaves the
+    /// morning on one and the afternoon on another. Reading it off the booking
+    /// would say the morning had been played somewhere it never was, and the
+    /// clash rule — basketball blocking all three pickleball courts — would be
+    /// asked about the wrong one.
+    /// </summary>
+    public Guid BookableCourtId
+    {
+        get; private set;
+    }
+    public BookableCourt BookableCourt { get; private set; } = null!;
 
     public DateOnly Date
     {

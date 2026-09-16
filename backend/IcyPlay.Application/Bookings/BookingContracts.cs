@@ -117,6 +117,12 @@ public sealed record BookingDetail(
     string Status,
     string Kind,
     string CourtName,
+    /// <summary>
+    /// Which venue, so a move can offer the other courts in the same building.
+    /// The name beside it is a snapshot of what the venue was called; this is
+    /// the venue itself.
+    /// </summary>
+    Guid FacilityId,
     string FacilityName,
     string SportName,
     /// <summary>
@@ -199,20 +205,24 @@ public enum BookingFailure
     HoldExpired,
     /// <summary>The receipt is not a secure link on the configured Cloudinary account.</summary>
     UntrustedReceiptUrl,
-    /// <summary>Only a booking that still stands and has not started can be moved.</summary>
+    /// <summary>Only a booking that still stands can be moved.</summary>
     NotMovable,
-    /// <summary>Three moves is the limit, and it has been reached.</summary>
+    /// <summary>The venue's limit on moves for one booking has been reached.</summary>
     MoveLimitReached,
-    /// <summary>Inside the last day before it starts. The venue has kept the hour free.</summary>
-    TooLateToMove,
     /// <summary>
-    /// A weekday for a weekend, or an ordinary day for a holiday. Those are
-    /// priced differently, and a move that changes the price is a second
-    /// payment rather than a move.
+    /// Every hour of it has been played. There is nothing left to move, and a
+    /// booking that is over is a refund rather than a move.
     /// </summary>
-    DifferentKindOfDay,
-    /// <summary>The same hours came to a different total on the new dates.</summary>
-    PriceWouldChange,
+    BookingFinished,
+    /// <summary>
+    /// This booking is already waiting on a move. Two at once and the customer
+    /// and the venue can be sending it to different courts.
+    /// </summary>
+    MoveAlreadyRequested,
+    /// <summary>No move is waiting on this booking, or it has already been settled.</summary>
+    MoveRequestNotFound,
+    /// <summary>The difference has not been paid, so there is nothing to confirm yet.</summary>
+    MoveNotPaid,
     /// <summary>The receipt has to be a picture. A PDF or a video is not one.</summary>
     ReceiptNotAnImage,
     /// <summary>Nothing to submit: no receipt has been uploaded.</summary>
@@ -251,7 +261,37 @@ public sealed record AttachReceiptRequest(string ReceiptUrl);
 /// of days and the court all stay as they were. That is what keeps the price
 /// identical, which is what lets a move happen without a second payment.
 /// </summary>
-public sealed record MoveBookingRequest(DateOnly StartDate);
+/// <summary>
+/// Where a booking would rather be played.
+///
+/// The court changes; the hours do not. A customer moving to another court
+/// wants the same slot on another floor, and a venue moving somebody off a
+/// failed court has no interest in rescheduling them as well.
+/// </summary>
+public sealed record MoveBookingRequest(Guid ToBookableCourtId);
+
+/// <summary>
+/// What a move would cost before anybody commits to it.
+///
+/// Asked and answered before the customer says yes, because "move this
+/// booking" and "move this booking and pay another twelve hundred pesos" are
+/// different questions and only one of them can be answered with a tap.
+/// </summary>
+public sealed record MoveQuoteResponse(
+    Guid ToBookableCourtId,
+    string ToCourtName,
+    /// <summary>Hours already played. They stay where they were, at what they cost.</summary>
+    int HoursStaying,
+    int HoursMoving,
+    decimal PaidAlready,
+    decimal NewTotal,
+    /// <summary>The shortfall, and never less than nothing: a cheaper court is not a refund.</summary>
+    decimal BalanceDue,
+    /// <summary>Minutes the new court is held for while the difference is paid.</summary>
+    int HoldMinutes)
+{
+    public bool IsUpgrade => BalanceDue > 0m;
+}
 
 public sealed class AttachReceiptRequestValidator : AbstractValidator<AttachReceiptRequest>
 {

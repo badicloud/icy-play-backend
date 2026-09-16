@@ -83,6 +83,8 @@ public static class AuditAction
     public const string FacilityOwnerOnboarded = "FacilityOwnerOnboarded";
     public const string FacilityOwnerBusinessUpdated = "FacilityOwnerBusinessUpdated";
     public const string FacilityOwnerPaymentDetailsUpdated = "FacilityOwnerPaymentDetailsUpdated";
+    /// <summary>The dials the venue sets from its own desk.</summary>
+    public const string FacilityOwnerDeskSettingsUpdated = "FacilityOwnerDeskSettingsUpdated";
     public const string FacilityOwnerInvitationSent = "FacilityOwnerInvitationSent";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";

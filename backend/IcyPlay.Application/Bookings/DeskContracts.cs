@@ -135,6 +135,40 @@ public sealed record DeskQuery(
     int Page = 1,
     int PageSize = 10);
 
+/// <summary>
+/// The two dials a venue sets for itself, both about how long it is prepared
+/// to hold a court for somebody who has not paid yet.
+/// </summary>
+public sealed record DeskSettings(
+    /// <summary>Minutes a court is held while the customer pays.</summary>
+    int PartialBookingExpiryMinutes,
+    /// <summary>How many times a customer may move one booking.</summary>
+    int MoveLimit,
+    int SmallestExpiry,
+    int LargestExpiry,
+    int SmallestMoveLimit,
+    int LargestMoveLimit);
+
+public sealed record UpdateDeskSettingsRequest(
+    int PartialBookingExpiryMinutes,
+    int MoveLimit);
+
+/// <summary>
+/// The venue moving a booking itself, because the court has a problem.
+/// </summary>
+public sealed record MoveByVenueRequest(
+    Guid ToBookableCourtId,
+    /// <summary>Why the booking is being moved. Always required of an attendant.</summary>
+    string Reason,
+    /// <summary>
+    /// Why the customer is not paying the difference, when there is one. A
+    /// separate question from why the booking moved: a flooded court explains
+    /// the move, not who decided to absorb the cost.
+    /// </summary>
+    string? WaiverReason);
+
+public sealed record WaiveMoveRequest(string Reason);
+
 public sealed record RejectBookingRequest(string? Reason);
 
 public enum DeskFailure

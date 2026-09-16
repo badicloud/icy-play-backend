@@ -417,6 +417,83 @@ public sealed class DeskService(
     private static string UnitLabel(string sportName, int divisionNumber, int divisions) =>
         divisions <= 1 ? sportName : $"{sportName} {divisionNumber}";
 
+    public async Task<DeskResult<DeskSettings>> SettingsAsync(Guid userId, CancellationToken ct)
+    {
+        var owner = await OwnerForAsync(userId, ct);
+
+        return owner is null
+            ? DeskResult<DeskSettings>.Fail(DeskFailure.NotAttended)
+            : DeskResult<DeskSettings>.Success(Settings(owner));
+    }
+
+    public async Task<DeskResult<DeskSettings>> UpdateSettingsAsync(
+        Guid userId,
+        UpdateDeskSettingsRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var owner = await OwnerForAsync(userId, ct);
+
+        if (owner is null)
+        {
+            return DeskResult<DeskSettings>.Fail(DeskFailure.NotAttended);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = SettingsSnapshot(owner);
+
+        // Both are clamped rather than refused. A dial is a dial: somebody
+        // typing 600 minutes means "the longest you allow", not "fail".
+        owner.SetPaymentHold(request.PartialBookingExpiryMinutes, now);
+        owner.SetMoveLimit(request.MoveLimit, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.FacilityOwnerDeskSettingsUpdated,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            before,
+            SettingsSnapshot(owner));
+
+        await db.SaveChangesAsync(ct);
+
+        return DeskResult<DeskSettings>.Success(Settings(owner));
+    }
+
+    private static DeskSettings Settings(Domain.Identity.FacilityOwner owner) => new(
+        owner.PartialBookingExpiryMinutes,
+        owner.MoveLimit,
+        PaymentHold.MinimumMinutes,
+        PaymentHold.MaximumMinutes,
+        BookingMove.SmallestLimit,
+        BookingMove.LargestLimit);
+
+    private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
+        new()
+        {
+            ["partialBookingExpiryMinutes"] =
+                owner.PartialBookingExpiryMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["moveLimit"] = owner.MoveLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        };
+
+    /// <summary>
+    /// The venue owner behind this desk, whether the person asking owns it or
+    /// is an attendant on it. Both set the same dials: an attendant is the one
+    /// standing there when a customer says half an hour is too long to wait.
+    /// </summary>
+    private async Task<Domain.Identity.FacilityOwner?> OwnerForAsync(Guid userId, CancellationToken ct)
+    {
+        var ownerId = await VenueQuery(userId)
+            .Select(facility => facility.FacilityOwnerId)
+            .FirstOrDefaultAsync(ct);
+
+        return ownerId == Guid.Empty
+            ? null
+            : await db.FacilityOwners.FirstOrDefaultAsync(candidate => candidate.Id == ownerId, ct);
+    }
+
     /// <summary>
     /// The venues this person works: the ones they own, and the ones they are
     /// on the desk of today.

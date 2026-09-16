@@ -542,6 +542,102 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     // ------------------------------------------------------------- the set-up
 
     /// <summary>A booking that has been paid for and handed to the venue.</summary>
+    [Fact]
+    public async Task SettingsAsync_ShouldStartAtThePlatformDefaults()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Settings Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var sut = CreateService(context);
+
+        // Act
+        var settings = await sut.SettingsAsync(attendant, CancellationToken.None);
+
+        // Assert: five minutes to pay and three moves, until the venue says
+        // otherwise. The range travels with them, so the panel can say what is
+        // possible rather than refusing after the fact.
+        using (new AssertionScope())
+        {
+            settings.Succeeded.Should().BeTrue();
+            settings.Value!.PartialBookingExpiryMinutes.Should().Be(PaymentHold.DefaultMinutes);
+            settings.Value.MoveLimit.Should().Be(BookingMove.DefaultLimit);
+            settings.Value.SmallestExpiry.Should().Be(PaymentHold.MinimumMinutes);
+            settings.Value.LargestMoveLimit.Should().Be(BookingMove.LargestLimit);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_ShouldLetAnAttendantSetBothDials()
+    {
+        // Arrange: an attendant rather than the owner. They are the one
+        // standing there when a customer says the hold is too short.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Dialled Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var sut = CreateService(context);
+
+        // Act
+        var saved = await sut.UpdateSettingsAsync(
+            attendant,
+            new UpdateDeskSettingsRequest(20, 5),
+            Desk(attendant),
+            CancellationToken.None);
+
+        // Assert
+        var stored = await context.FacilityOwners
+            .AsNoTracking()
+            .SingleAsync(owner => owner.UserId == venue.OwnerUserId);
+
+        using (new AssertionScope())
+        {
+            saved.Succeeded.Should().BeTrue();
+            stored.PartialBookingExpiryMinutes.Should().Be(20);
+            stored.MoveLimit.Should().Be(5);
+        }
+    }
+
+    [Fact]
+    public async Task UpdateSettingsAsync_ShouldClampRatherThanRefuse()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Clamped Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var sut = CreateService(context);
+
+        // Act: a day is not a hold, and neither is no moves at all.
+        var saved = await sut.UpdateSettingsAsync(
+            attendant,
+            new UpdateDeskSettingsRequest(9999, 0),
+            Desk(attendant),
+            CancellationToken.None);
+
+        // Assert: a dial is a dial. Somebody typing 9999 means "the longest you
+        // allow", not "fail and lose what I typed".
+        using (new AssertionScope())
+        {
+            saved.Value!.PartialBookingExpiryMinutes.Should().Be(PaymentHold.MaximumMinutes);
+            saved.Value.MoveLimit.Should().Be(BookingMove.SmallestLimit);
+        }
+    }
+
+    [Fact]
+    public async Task SettingsAsync_ShouldRefuseSomebodyWhoDoesNotWorkTheVenue()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        await VenueAsync(context, "Private Settings Courts");
+        var sut = CreateService(context);
+
+        // Act
+        var settings = await sut.SettingsAsync(Guid.NewGuid(), CancellationToken.None);
+
+        // Assert: a desk somebody does not work answers the same as one that is
+        // not there.
+        settings.Failure.Should().Be(DeskFailure.NotAttended);
+    }
+
     private static async Task<Guid> SubmittedAsync(
         AppDbContext context,
         Venue venue,

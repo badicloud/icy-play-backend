@@ -124,7 +124,32 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
-    /// Carries a booking to another date, keeping its hours and its price.
+    /// What moving onto that court would cost. Answered before anybody commits
+    /// to anything, because a move that wants paying for is a different
+    /// proposition from one that does not.
+    /// </summary>
+    [HttpGet("{bookingId:guid}/move-quote")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> MoveQuote(
+        Guid bookingId,
+        [FromQuery] Guid toBookableCourtId,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.QuoteMoveAsync(bookingId, userId, toBookableCourtId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MoveQuoteResponse>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Asks to move a booking onto another court, keeping its hours. Raises a
+    /// request; the booking itself does not move until the venue confirms.
     /// </summary>
     [HttpPost("{bookingId:guid}/move")]
     [Authorize(Roles = UserRoleName.Customer)]
@@ -139,6 +164,46 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
         }
 
         var result = await bookings.MoveAsync(bookingId, userId, request, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// The GCash receipt for the difference an upgrade came to. The hold's
+    /// clock stops here: from now on the wait is the venue's.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/move/receipt")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> AttachMoveReceipt(
+        Guid bookingId,
+        AttachReceiptRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.AttachMoveReceiptAsync(bookingId, userId, request.ReceiptUrl, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Thought better of it. The held court goes back on sale.</summary>
+    [HttpPost("{bookingId:guid}/move/withdraw")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> WithdrawMove(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.WithdrawMoveAsync(bookingId, userId, ct);
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
@@ -258,19 +323,23 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             BookingFailure.MoveLimitReached => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
-                "This booking has already been moved three times, which is the limit."),
-            BookingFailure.TooLateToMove => (
+                "This booking has been moved as many times as this venue allows."),
+            BookingFailure.BookingFinished => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
-                "A booking can only be moved more than 24 hours before it starts."),
-            BookingFailure.DifferentKindOfDay => (
-                StatusCodes.Status400BadRequest,
-                ErrorCodes.BadRequest,
-                "Move a weekday booking to a weekday and a weekend one to a weekend, and not onto a holiday. Those days are priced differently."),
-            BookingFailure.PriceWouldChange => (
+                "Every hour of this booking has been played, so there is nothing left to move."),
+            BookingFailure.MoveAlreadyRequested => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
-                "Those hours come to a different total on that date, so the booking cannot simply be moved."),
+                "This booking is already waiting on a move. Settle that one first."),
+            BookingFailure.MoveRequestNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "No move is waiting on this booking."),
+            BookingFailure.MoveNotPaid => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The difference has not been paid yet, so there is nothing to confirm."),
             BookingFailure.TooFarAhead => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

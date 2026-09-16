@@ -173,6 +173,31 @@ public sealed class Booking : Entity
     public decimal Total => RentalTotal + PlatformFeeTotal;
 
     /// <summary>
+    /// What the customer has actually handed over, across the first payment and
+    /// any upgrade since.
+    ///
+    /// Stored rather than derived, which the rest of this class avoids on
+    /// principle — but a move to a cheaper court leaves the slots totalling less
+    /// than was paid, and a move to a dearer one more. Reading the money off the
+    /// slots after that would quietly restate a month that has already been
+    /// billed. The slots say what is being played; this says what was paid.
+    /// </summary>
+    public decimal PaidTotal
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// Records a payment against the booking: the first one on confirmation,
+    /// and the difference each time an upgrade completes.
+    /// </summary>
+    public void Settle(decimal amount, DateTimeOffset now)
+    {
+        PaidTotal += amount;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
     /// Whether this booking still holds its court at a given moment.
     ///
     /// A rejected or cancelled one has let go. So has an unpaid one whose hold
@@ -228,6 +253,12 @@ public sealed class Booking : Entity
     {
         Status = BookingStatus.Confirmed;
         ConfirmedAt = now;
+
+        // The venue has looked at the receipt and said the money is there, so
+        // this is the moment the booking knows what it was paid. An upgrade
+        // later asks the difference against this figure; without it the
+        // customer would be charged the whole of the new court.
+        PaidTotal = Total;
         UpdatedAt = now;
     }
 
@@ -259,24 +290,55 @@ public sealed class Booking : Entity
     /// the count is the only thing standing between a booking and an indefinite
     /// option on somebody else's calendar.
     /// </remarks>
+    /// <summary>
+    /// Moves the booking onto another court, or another set of hours, or both.
+    ///
+    /// <paramref name="keptSlots"/> are the hours that do not move — the ones
+    /// already played when a court fails mid-session. They stay on the court
+    /// they were played on and at the price they were sold for: re-pricing an
+    /// hour somebody has already had is charging them for a court they were
+    /// never on.
+    ///
+    /// <paramref name="countsAgainstTheLimit"/> is false when the venue asked
+    /// for the move rather than the customer.
+    /// </summary>
     public void MoveTo(
-        DateOnly startDate,
-        DateOnly endDate,
-        IReadOnlyCollection<BookingSlot> slots,
+        Guid bookableCourtId,
+        string courtName,
+        IReadOnlyCollection<BookingSlot> keptSlots,
+        IReadOnlyCollection<BookingSlot> movedSlots,
+        bool countsAgainstTheLimit,
         DateTimeOffset now)
     {
-        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(keptSlots);
+        ArgumentNullException.ThrowIfNull(movedSlots);
 
-        StartDate = startDate;
-        EndDate = endDate;
+        if (keptSlots.Count == 0 && movedSlots.Count == 0)
+        {
+            throw new InvalidOperationException("A move has to leave the booking with hours in it.");
+        }
+
         Slots.Clear();
 
-        foreach (var slot in slots)
+        foreach (var slot in keptSlots.Concat(movedSlots).OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt))
         {
             Slots.Add(slot);
         }
 
-        MoveCount += 1;
+        // Where the booking is now. The hours already played keep their own
+        // court on each slot, so a session that changed courts half way through
+        // can still say which half was where.
+        BookableCourtId = bookableCourtId;
+        CourtName = courtName.Trim();
+
+        StartDate = Slots.Min(slot => slot.Date);
+        EndDate = Slots.Max(slot => slot.Date);
+
+        if (countsAgainstTheLimit)
+        {
+            MoveCount += 1;
+        }
+
         MovedAt = now;
         UpdatedAt = now;
     }
@@ -332,27 +394,32 @@ public static class BookingKind
 public static class BookingMove
 {
     /// <summary>
-    /// Three, then no more. A booking that can be carried forward for ever is
+    /// How many moves a customer gets before the answer is no, unless the venue
+    /// has set its own figure. A booking that can be carried forward for ever is
     /// an option on a venue's calendar rather than a booking, and the venue is
     /// the one turning other people away to keep holding it.
+    ///
+    /// A move the venue itself asked for is not counted: it is not the
+    /// customer's doing, and spending their allowance on the venue's flooded
+    /// court would be charging them for it twice.
     /// </summary>
-    public const int Limit = 3;
+    public const int DefaultLimit = 3;
+
+    public const int SmallestLimit = 1;
+    public const int LargestLimit = 20;
+
+    public static int ClampLimit(int limit) => Math.Clamp(limit, SmallestLimit, LargestLimit);
 
     /// <summary>
-    /// A venue that has kept an hour free needs more notice than an afternoon.
-    /// Counted to the start of the booking as it stands, on the venue's clock.
+    /// Whether a booking in this state may still be moved.
+    ///
+    /// Before it starts, and while it is being played: a court that floods at
+    /// two o'clock is exactly when a move is worth most. Once the last hour has
+    /// been played there is nothing left to move — that is a refund, and there
+    /// are none.
     /// </summary>
-    public const int NoticeInHours = 24;
-
-    /// <summary>
-    /// Saturdays and Sundays are their own kind of day, and so are holidays: a
-    /// court is priced differently on each. Moving within a kind is what keeps
-    /// the total identical, which is what lets a move happen with no second
-    /// payment and no refund.
-    /// </summary>
-    public static bool SameKindOfDay(DateOnly from, DateOnly to, bool fromIsHoliday, bool toIsHoliday) =>
-        fromIsHoliday == toIsHoliday
-        && Court.IsWeekend(from.DayOfWeek) == Court.IsWeekend(to.DayOfWeek);
+    public static bool IsMovable(BookingStatus status) =>
+        status is BookingStatus.PendingVerification or BookingStatus.Confirmed;
 }
 
 public static class BookingStatuses

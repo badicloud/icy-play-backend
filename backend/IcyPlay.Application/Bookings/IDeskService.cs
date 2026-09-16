@@ -73,6 +73,18 @@ public interface IDeskService
     /// Says it is not, with a reason. The hours go back on sale, because a
     /// rejected booking holds nothing.
     /// </summary>
+    /// <summary>
+    /// What this venue has set for itself, with the range each dial allows so
+    /// the panel can say what is possible rather than refusing after the fact.
+    /// </summary>
+    Task<DeskResult<DeskSettings>> SettingsAsync(Guid userId, CancellationToken ct);
+
+    Task<DeskResult<DeskSettings>> UpdateSettingsAsync(
+        Guid userId,
+        UpdateDeskSettingsRequest request,
+        AuditActor actor,
+        CancellationToken ct);
+
     Task<DeskResult<DeskBooking>> RejectAsync(
         Guid userId,
         Guid bookingId,

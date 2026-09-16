@@ -10,14 +10,19 @@ namespace IcyPlay.Domain.Bookings;
 public static class PaymentHold
 {
     /// <summary>
-    /// Long enough to open GCash, pay, and photograph the receipt without
-    /// hurrying; short enough that a court abandoned mid-payment is back on
-    /// sale the same evening.
+    /// What a venue holds a court for while waiting to be paid, unless it says
+    /// otherwise.
+    ///
+    /// It was half an hour, on the reasoning that somebody should be able to
+    /// open GCash and pay without hurrying. Venues came back and said half an
+    /// hour is a court sitting dark on a Saturday because somebody wandered
+    /// off, and that paying takes a minute or two. Their floor, their call.
     /// </summary>
-    public const int DefaultMinutes = 30;
+    public const int DefaultMinutes = 5;
 
     /// <summary>
-    /// Five minutes is not enough time to pay for anything. A day is not a hold,
+    /// Under five minutes a customer is racing the clock rather than paying,
+    /// and every abandoned payment is a complaint. A day is not a hold either,
     /// it is a free reservation, and the whole point is that it is neither.
     /// </summary>
     public const int MinimumMinutes = 5;

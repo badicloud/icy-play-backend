@@ -20,7 +20,7 @@ namespace IcyPlay.Api.Controllers;
 [ApiController]
 [Authorize(Roles = $"{UserRoleName.FacilityOwner},{UserRoleName.FacilityAttendant}")]
 [Route("api/v1/desk")]
-public sealed class DeskController(IDeskService desk) : ControllerBase
+public sealed class DeskController(IDeskService desk, IBookingService bookings) : ControllerBase
 {
     /// <summary>
     /// The venues this person may confirm bookings for. One venue needs no
@@ -194,6 +194,178 @@ public sealed class DeskController(IDeskService desk) : ControllerBase
         return result.Succeeded
             ? Ok(new ApiEnvelope<DeskBooking>(result.Value!))
             : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Moves a booking onto another court because the one it is on has a
+    /// problem. Immediate: the players are standing on it.
+    ///
+    /// A dearer court needs a waiver and a reason for it. Taking money from
+    /// somebody who is not in the conversation is not something an attendant
+    /// can do — either the customer is asked to upgrade, or the venue absorbs
+    /// the difference and says who decided that.
+    /// </summary>
+    [HttpPost("bookings/{bookingId:guid}/move")]
+    public async Task<IActionResult> Move(
+        Guid bookingId,
+        MoveByVenueRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.MoveByVenueAsync(
+            bookingId,
+            userId,
+            request.ToBookableCourtId,
+            request.Reason,
+            request.WaiverReason,
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : BookingFailureResult(result.Failure);
+    }
+
+    /// <summary>
+    /// The difference has been paid, or there was none. The booking moves.
+    /// </summary>
+    [HttpPost("bookings/{bookingId:guid}/move/confirm")]
+    public async Task<IActionResult> ConfirmMove(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.ConfirmMoveAsync(bookingId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : BookingFailureResult(result.Failure);
+    }
+
+    /// <summary>Lets the customer off the difference, and records who decided.</summary>
+    [HttpPost("bookings/{bookingId:guid}/move/waive")]
+    public async Task<IActionResult> WaiveMove(
+        Guid bookingId,
+        WaiveMoveRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.WaiveMoveAsync(bookingId, userId, request.Reason, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : BookingFailureResult(result.Failure);
+    }
+
+    /// <summary>Says no. The booking stays exactly where it was.</summary>
+    [HttpPost("bookings/{bookingId:guid}/move/decline")]
+    public async Task<IActionResult> DeclineMove(
+        Guid bookingId,
+        RejectBookingRequest? request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.DeclineMoveAsync(bookingId, userId, request?.Reason, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            : BookingFailureResult(result.Failure);
+    }
+
+    /// <summary>The two dials this venue sets for itself.</summary>
+    [HttpGet("settings")]
+    public async Task<IActionResult> Settings(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.SettingsAsync(userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskSettings>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    [HttpPut("settings")]
+    public async Task<IActionResult> UpdateSettings(
+        UpdateDeskSettingsRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.UpdateSettingsAsync(userId, request, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskSettings>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// The booking service answers with its own failures, which are not the
+    /// desk's. Only the ones an attendant can actually provoke are spelled out.
+    /// </summary>
+    private IActionResult BookingFailureResult(BookingFailure failure)
+    {
+        var (status, code, message) = failure switch
+        {
+            BookingFailure.CourtNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "No booking with that id."),
+            BookingFailure.NotMovable => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Only a booking the venue is holding or has confirmed can be moved."),
+            BookingFailure.BookingFinished => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Every hour of this booking has been played, so there is nothing left to move."),
+            BookingFailure.MoveAlreadyRequested => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking is already waiting on a move. Settle that one first."),
+            BookingFailure.MoveRequestNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "No move is waiting on this booking."),
+            BookingFailure.MoveNotPaid => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That court costs more than this booking has paid. Ask the customer to upgrade, or waive the difference and say why."),
+            BookingFailure.SlotTaken => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Somebody already has one of those hours on that court."),
+            BookingFailure.OutsideOpeningHours => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That court is not open for all of those hours."),
+            BookingFailure.NotPriced => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That court has no price set, so nothing can be moved onto it."),
+            _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "That move could not be made.")
+        };
+
+        return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
     }
 
     private Guid? CurrentUserId() =>

@@ -99,6 +99,27 @@ public sealed class FacilityOwner : Entity
     /// </summary>
     public int PartialBookingExpiryMinutes { get; private set; } = PaymentHold.DefaultMinutes;
 
+    /// <summary>
+    /// How many times a customer may move one of this venue's bookings.
+    ///
+    /// Per venue for the same reason the hold is: a quiet hall can be generous
+    /// about it, a hall turning people away every Saturday cannot. Moves the
+    /// venue itself asked for are not counted against it.
+    /// </summary>
+    public int MoveLimit { get; private set; } = BookingMove.DefaultLimit;
+
+    public void SetPaymentHold(int partialBookingExpiryMinutes, DateTimeOffset now)
+    {
+        PartialBookingExpiryMinutes = PaymentHold.Clamp(partialBookingExpiryMinutes);
+        UpdatedAt = now;
+    }
+
+    public void SetMoveLimit(int moveLimit, DateTimeOffset now)
+    {
+        MoveLimit = BookingMove.ClampLimit(moveLimit);
+        UpdatedAt = now;
+    }
+
     /// <summary>Whether this venue can be paid at all yet.</summary>
     public bool CanTakePayment =>
         !string.IsNullOrWhiteSpace(GcashNumber) || !string.IsNullOrWhiteSpace(GcashQrCodeUrl);

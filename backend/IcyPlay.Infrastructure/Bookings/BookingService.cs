@@ -194,6 +194,7 @@ public sealed class BookingService(
             db.BookingSlots.Add(new BookingSlot(
                 booking.Id,
                 offering.Court.Id,
+                offering.BookableCourt.Id,
                 wanted.Date,
                 slot.StartsAt,
                 slot.EndsAt,
@@ -238,142 +239,514 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
         }
 
-        // A hold that has not been paid for needs no moving: let it lapse and
-        // book the other date. Anything already decided is not a booking to
-        // carry anywhere.
-        if (booking.Status is not (BookingStatus.PendingVerification or BookingStatus.Confirmed))
+        // One open request at a time, or the customer and the venue can be
+        // moving the same booking to two different courts at once.
+        if (await db.BookingMoveRequests.AnyAsync(
+                candidate => candidate.BookingId == booking.Id &&
+                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
+                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
+                ct))
         {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.NotMovable);
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveAlreadyRequested);
         }
 
-        if (booking.MoveCount >= BookingMove.Limit)
+        var limit = await MoveLimitAsync(booking, ct);
+
+        if (booking.MoveCount >= limit)
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.MoveLimitReached);
         }
 
-        var offering = await LoadAsync(booking.BookableCourtId, request.StartDate, ct);
+        var quoted = await QuoteAsync(booking, request.ToBookableCourtId, ct);
 
-        if (offering is null)
+        if (!quoted.Succeeded)
+        {
+            return BookingResult<BookingDetail>.Fail(quoted.Failure);
+        }
+
+        var quote = quoted.Value!;
+        var utcNow = timeProvider.GetUtcNow();
+
+        var moveRequest = new BookingMoveRequest(
+            booking.Id,
+            request.ToBookableCourtId,
+            quote.ToCourtName,
+            MoveInitiator.Customer,
+            customerUserId,
+            null,
+            booking.PaidTotal,
+            quote.NewTotal,
+            quote.HoldMinutes,
+            utcNow);
+
+        db.BookingMoveRequests.Add(moveRequest);
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Booking {BookingId} asked to move to {BookableCourtId}, balance {BalanceDue}.",
+            booking.Id,
+            request.ToBookableCourtId,
+            moveRequest.BalanceDue);
+
+        return await GetAsync(bookingId, customerUserId, ct);
+    }
+
+    /// <summary>
+    /// The customer attaches the GCash receipt for the difference. The clock on
+    /// the held court stops here: from now on the wait is the venue's.
+    /// </summary>
+    public async Task<BookingResult<BookingDetail>> AttachMoveReceiptAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        string receiptUrl,
+        CancellationToken ct)
+    {
+        if (!assets.IsTrustedSecureUrl(receiptUrl))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.UntrustedReceiptUrl);
+        }
+
+        var moveRequest = await OpenMoveAsync(bookingId, customerUserId, ct);
+
+        if (moveRequest is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+
+        if (!moveRequest.HoldsTheCourtAt(utcNow))
+        {
+            moveRequest.Expire(utcNow);
+            await db.SaveChangesAsync(ct);
+
+            return BookingResult<BookingDetail>.Fail(BookingFailure.HoldExpired);
+        }
+
+        moveRequest.AttachReceipt(receiptUrl, utcNow);
+        await db.SaveChangesAsync(ct);
+
+        return await GetAsync(bookingId, customerUserId, ct);
+    }
+
+    /// <summary>
+    /// The venue has looked at the payment, or decided there was nothing to
+    /// pay, and the booking moves.
+    /// </summary>
+    public async Task<BookingResult<BookingDetail>> ConfirmMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        CancellationToken ct)
+    {
+        var moveRequest = await db.BookingMoveRequests
+            .Include(candidate => candidate.Booking)
+                .ThenInclude(booking => booking.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.BookingId == bookingId &&
+                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
+                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
+                ct);
+
+        if (moveRequest is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
+        }
+
+        // Still owing, and nobody has let them off: there is nothing to confirm.
+        if (moveRequest.Status == MoveRequestStatus.AwaitingPayment)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveNotPaid);
+        }
+
+        var booking = moveRequest.Booking;
+
+        // Priced again at the moment it lands rather than trusted from when it
+        // was asked for. Between the two somebody else may have taken the hour,
+        // and a quote is not a hold on anything but this one court.
+        var quoted = await QuoteAsync(booking, moveRequest.ToBookableCourtId, ct);
+
+        if (!quoted.Succeeded)
+        {
+            return BookingResult<BookingDetail>.Fail(quoted.Failure);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+
+        Apply(booking, moveRequest, quoted.Value!, countsAgainstTheLimit: true, utcNow);
+        moveRequest.Complete(attendantUserId, utcNow);
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Booking {BookingId} moved to {BookableCourtId}. Balance settled: {BalanceDue}.",
+            booking.Id,
+            moveRequest.ToBookableCourtId,
+            moveRequest.BalanceDue);
+
+        return await GetAsync(bookingId, booking.CustomerUserId, ct);
+    }
+
+    /// <summary>
+    /// The venue lets the customer off the difference, and says who decided so.
+    /// </summary>
+    public async Task<BookingResult<BookingDetail>> WaiveMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        string reason,
+        CancellationToken ct)
+    {
+        var moveRequest = await db.BookingMoveRequests
+            .Include(candidate => candidate.Booking)
+            .SingleOrDefaultAsync(
+                candidate => candidate.BookingId == bookingId &&
+                    candidate.Status == MoveRequestStatus.AwaitingPayment,
+                ct);
+
+        if (moveRequest is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
+        }
+
+        moveRequest.Waive(attendantUserId, reason, timeProvider.GetUtcNow());
+        await db.SaveChangesAsync(ct);
+
+        return await GetAsync(bookingId, moveRequest.Booking.CustomerUserId, ct);
+    }
+
+    /// <summary>The venue says no. The booking stays exactly where it was.</summary>
+    public async Task<BookingResult<BookingDetail>> DeclineMoveAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        string? reason,
+        CancellationToken ct)
+    {
+        var moveRequest = await db.BookingMoveRequests
+            .Include(candidate => candidate.Booking)
+            .SingleOrDefaultAsync(
+                candidate => candidate.BookingId == bookingId &&
+                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
+                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
+                ct);
+
+        if (moveRequest is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
+        }
+
+        moveRequest.Decline(attendantUserId, reason, timeProvider.GetUtcNow());
+        await db.SaveChangesAsync(ct);
+
+        return await GetAsync(bookingId, moveRequest.Booking.CustomerUserId, ct);
+    }
+
+    /// <summary>The customer thought better of it, and the held court goes back.</summary>
+    public async Task<BookingResult<BookingDetail>> WithdrawMoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct)
+    {
+        var moveRequest = await OpenMoveAsync(bookingId, customerUserId, ct);
+
+        if (moveRequest is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
+        }
+
+        moveRequest.Withdraw(timeProvider.GetUtcNow());
+        await db.SaveChangesAsync(ct);
+
+        return await GetAsync(bookingId, customerUserId, ct);
+    }
+
+    private async Task<BookingMoveRequest?> OpenMoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct) =>
+        await db.BookingMoveRequests
+            .Include(candidate => candidate.Booking)
+            .SingleOrDefaultAsync(
+                candidate => candidate.BookingId == bookingId &&
+                    candidate.Booking.CustomerUserId == customerUserId &&
+                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
+                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
+                ct);
+
+    /// <summary>
+    /// Prices a move without committing anybody to it, so the customer can be
+    /// told what it costs before they say yes.
+    /// </summary>
+    public async Task<BookingResult<MoveQuoteResponse>> QuoteMoveAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        Guid toBookableCourtId,
+        CancellationToken ct)
+    {
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        if (booking is null)
+        {
+            return BookingResult<MoveQuoteResponse>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var quoted = await QuoteAsync(booking, toBookableCourtId, ct);
+
+        return quoted.Succeeded
+            ? BookingResult<MoveQuoteResponse>.Success(Quoted(booking, quoted.Value!))
+            : BookingResult<MoveQuoteResponse>.Fail(quoted.Failure);
+    }
+
+    /// <summary>
+    /// The venue moves a booking itself, because the court it is on has a
+    /// problem. Immediate: the players are standing on it.
+    ///
+    /// A dearer court is not charged for here. An attendant cannot take money
+    /// from somebody who is not in the conversation — either the customer is
+    /// asked to upgrade, or the venue absorbs it and says who decided that.
+    /// </summary>
+    public async Task<BookingResult<BookingDetail>> MoveByVenueAsync(
+        Guid bookingId,
+        Guid attendantUserId,
+        Guid toBookableCourtId,
+        string reason,
+        string? waiverReason,
+        CancellationToken ct)
+    {
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(candidate => candidate.Id == bookingId, ct);
+
+        if (booking is null)
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
         }
 
+        if (await HasOpenMoveAsync(booking.Id, ct))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveAlreadyRequested);
+        }
+
+        var quoted = await QuoteAsync(booking, toBookableCourtId, ct);
+
+        if (!quoted.Succeeded)
+        {
+            return BookingResult<BookingDetail>.Fail(quoted.Failure);
+        }
+
+        var quote = quoted.Value!;
+        var owed = Math.Max(0m, quote.NewTotal - booking.PaidTotal);
+
+        // A dearer court needs somebody to have decided who pays for it. Without
+        // a waiver the answer is the customer, and the customer has to be asked
+        // rather than billed.
+        if (owed > 0m && string.IsNullOrWhiteSpace(waiverReason))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveNotPaid);
+        }
+
         var utcNow = timeProvider.GetUtcNow();
-        var venueNow = offering.LocalNow(utcNow);
 
-        var wasFor = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).ToArray();
-        var startsAt = booking.StartDate.ToDateTime(wasFor[0].StartsAt);
+        var moveRequest = new BookingMoveRequest(
+            booking.Id,
+            toBookableCourtId,
+            quote.ToCourtName,
+            MoveInitiator.Attendant,
+            attendantUserId,
+            reason,
+            booking.PaidTotal,
+            quote.NewTotal,
+            quote.HoldMinutes,
+            utcNow);
 
-        // Counted to the start of the booking as it stands, on the venue's
-        // clock. A venue that has kept the hour free needs more notice than an
-        // afternoon, and one already under way is not a booking to move.
-        if (startsAt - venueNow.DateTime < TimeSpan.FromHours(BookingMove.NoticeInHours))
+        if (owed > 0m)
         {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.TooLateToMove);
+            moveRequest.Waive(attendantUserId, waiverReason!, utcNow);
         }
 
-        var span = booking.EndDate.DayNumber - booking.StartDate.DayNumber;
-        var dates = Enumerable.Range(0, span + 1).Select(request.StartDate.AddDays).ToArray();
+        db.BookingMoveRequests.Add(moveRequest);
 
-        if (dates[0] <= DateOnly.FromDateTime(venueNow.DateTime))
+        // The venue's own doing, so it does not spend the customer's allowance.
+        Apply(booking, moveRequest, quote, countsAgainstTheLimit: false, utcNow);
+        moveRequest.Complete(attendantUserId, utcNow);
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Booking {BookingId} moved to {BookableCourtId} by the venue. Reason: {Reason}.",
+            booking.Id,
+            toBookableCourtId,
+            reason);
+
+        return await GetAsync(bookingId, booking.CustomerUserId, ct);
+    }
+
+    /// <summary>
+    /// Writes the move onto the booking: the hours already played stay where
+    /// they were, the rest are the newly priced ones, and what the customer has
+    /// paid goes up by whatever the move was settled for.
+    /// </summary>
+    private void Apply(
+        Booking booking,
+        BookingMoveRequest moveRequest,
+        MoveQuote quote,
+        bool countsAgainstTheLimit,
+        DateTimeOffset now)
+    {
+        db.BookingSlots.RemoveRange(booking.Slots.Except(quote.Kept));
+
+        booking.MoveTo(
+            quote.ToBookableCourtId,
+            quote.ToCourtName,
+            quote.Kept,
+            quote.Moved,
+            countsAgainstTheLimit,
+            now);
+
+        db.BookingSlots.AddRange(quote.Moved);
+        booking.Settle(moveRequest.BalanceDue, now);
+    }
+
+    private async Task<bool> HasOpenMoveAsync(Guid bookingId, CancellationToken ct) =>
+        await db.BookingMoveRequests.AnyAsync(
+            candidate => candidate.BookingId == bookingId &&
+                (candidate.Status == MoveRequestStatus.AwaitingPayment ||
+                    candidate.Status == MoveRequestStatus.AwaitingConfirmation),
+            ct);
+
+    private static MoveQuoteResponse Quoted(Booking booking, MoveQuote quote) => new(
+        quote.ToBookableCourtId,
+        quote.ToCourtName,
+        quote.Kept.Count,
+        quote.Moved.Count,
+        booking.PaidTotal,
+        quote.NewTotal,
+        Math.Max(0m, quote.NewTotal - booking.PaidTotal),
+        quote.HoldMinutes);
+
+    /// <summary>
+    /// What a booking would come to on another court, and what that leaves the
+    /// customer owing.
+    ///
+    /// Hours already played do not move and are not re-priced: re-pricing an
+    /// hour somebody has had is charging them for a court they were never on.
+    /// Everything still to come is priced on the new court at that court's own
+    /// rates, for the same dates and the same times.
+    /// </summary>
+    private async Task<BookingResult<MoveQuote>> QuoteAsync(
+        Booking booking,
+        Guid toBookableCourtId,
+        CancellationToken ct)
+    {
+        if (!BookingMove.IsMovable(booking.Status))
         {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.DateInThePast);
+            return BookingResult<MoveQuote>.Fail(BookingFailure.NotMovable);
         }
 
-        // Serializable for the same reason taking a booking is: the check and
-        // the write have to be one moment, or two people move onto the same
-        // hour at once.
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+        var ordered = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).ToArray();
+
+        if (ordered.Length == 0)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.NotMovable);
+        }
+
+        var target = await LoadAsync(toBookableCourtId, ordered[0].Date, ct);
+
+        if (target is null)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        if (target.Pair.StandardHourlyRate is null)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.NotPriced);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+        var venueNow = target.LocalNow(utcNow);
+
+        // Played, and so staying put. An hour counts as played once its last
+        // minute has gone on the venue's clock.
+        var played = ordered
+            .Where(slot => slot.Date.ToDateTime(slot.EndsAt) <= venueNow.DateTime)
+            .ToArray();
+        var toMove = ordered.Except(played).ToArray();
+
+        if (toMove.Length == 0)
+        {
+            // Every hour has been played. There is nothing left to move, and a
+            // booking that is over is a refund rather than a move.
+            return BookingResult<MoveQuote>.Fail(BookingFailure.BookingFinished);
+        }
+
+        var dates = toMove.Select(slot => slot.Date).Distinct().OrderBy(date => date).ToArray();
 
         var holidays = new Dictionary<DateOnly, bool>();
 
-        foreach (var date in dates.Concat([booking.StartDate, booking.EndDate]).Distinct())
+        foreach (var date in dates)
         {
             holidays[date] = await IsHolidayAsync(date, ct);
         }
 
-        for (var day = 0; day <= span; day += 1)
-        {
-            var from = booking.StartDate.AddDays(day);
-            var to = dates[day];
+        var taken = await TakenAsync(target, dates, ct, exceptBooking: booking.Id);
+        var days = dates.ToDictionary(date => date, date => Day(target, date, holidays[date], taken));
 
-            if (!BookingMove.SameKindOfDay(from, to, holidays[from], holidays[to]))
+        var priced = new List<BookingSlot>();
+
+        foreach (var slot in toMove)
+        {
+            var offered = days[slot.Date].Slots
+                .FirstOrDefault(candidate => candidate.StartsAt == slot.StartsAt);
+
+            if (offered is null)
             {
-                return BookingResult<BookingDetail>.Fail(BookingFailure.DifferentKindOfDay);
+                return BookingResult<MoveQuote>.Fail(BookingFailure.OutsideOpeningHours);
             }
-        }
 
-        var taken = await TakenAsync(offering, dates, ct);
+            if (!offered.IsOpen)
+            {
+                return BookingResult<MoveQuote>.Fail(BookingFailure.SlotTaken);
+            }
 
-        // Its own hours are not in the way of themselves. Without this a move
-        // that overlaps the dates it is leaving would refuse on the strength of
-        // the very booking being moved.
-        var free = taken
-            .Where(slot => !wasFor.Any(was =>
-                was.Date == slot.Date && was.StartsAt == slot.StartsAt))
-            .ToArray();
-
-        var days = dates.ToDictionary(date => date, date => Day(offering, date, holidays[date], free));
-
-        var wanted = new CreateBookingRequest(
-            booking.BookableCourtId,
-            booking.Kind,
-            [
-                .. wasFor.Select(was => new BookingSlotInput(
-                    request.StartDate.AddDays(was.Date.DayNumber - booking.StartDate.DayNumber),
-                    was.StartsAt))
-            ]);
-
-        var failure = CheckSlots(wanted, days);
-
-        if (failure != BookingFailure.None)
-        {
-            return BookingResult<BookingDetail>.Fail(failure);
-        }
-
-        var moved = new List<BookingSlot>();
-
-        foreach (var input in wanted.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt))
-        {
-            var slot = days[input.Date].Slots.Single(candidate => candidate.StartsAt == input.StartsAt);
-
-            moved.Add(new BookingSlot(
+            priced.Add(new BookingSlot(
                 booking.Id,
-                offering.Court.Id,
-                input.Date,
-                slot.StartsAt,
-                slot.EndsAt,
-                Enum.Parse<CourtRateKind>(slot.RateKind),
-                slot.Rate!.Value,
-                slot.PlatformFee,
+                target.Court.Id,
+                target.BookableCourt.Id,
+                slot.Date,
+                offered.StartsAt,
+                offered.EndsAt,
+                Enum.Parse<CourtRateKind>(offered.RateKind),
+                offered.Rate!.Value,
+                offered.PlatformFee,
                 utcNow));
         }
 
-        // The rules above should make this impossible, and it is checked anyway:
-        // the money is already with the venue, so a move that came to a
-        // different total would need a second payment or a refund, and neither
-        // is something this platform can do.
-        if (moved.Sum(slot => slot.Amount + slot.PlatformFee) != booking.Total)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.PriceWouldChange);
-        }
+        var keptTotal = played.Sum(slot => slot.Amount + slot.PlatformFee);
+        var movedTotal = priced.Sum(slot => slot.Amount + slot.PlatformFee);
 
-        db.BookingSlots.RemoveRange(booking.Slots);
-        booking.MoveTo(dates[0], dates[^1], moved, utcNow);
-        db.BookingSlots.AddRange(moved);
-
-        await db.SaveChangesAsync(ct);
-        await transaction.CommitAsync(ct);
-
-        logger.LogInformation(
-            "Booking {BookingId} moved to {StartDate}. Move {MoveCount} of {Limit}.",
-            booking.Id,
-            dates[0],
-            booking.MoveCount,
-            BookingMove.Limit);
-
-        return await GetAsync(bookingId, customerUserId, ct);
+        return BookingResult<MoveQuote>.Success(new MoveQuote(
+            target.BookableCourt.Id,
+            target.CourtName,
+            played,
+            priced,
+            keptTotal + movedTotal,
+            target.HoldMinutes));
     }
+
+    /// <summary>
+    /// How many moves this venue allows a customer on one booking. Per venue,
+    /// because it is their court being held while somebody makes up their mind.
+    /// </summary>
+    private async Task<int> MoveLimitAsync(Booking booking, CancellationToken ct) =>
+        await db.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.Id == booking.BookableCourtId)
+            .Select(unit => unit.Court.Facility.FacilityOwner.MoveLimit)
+            .FirstOrDefaultAsync(ct) is var limit && limit > 0
+            ? limit
+            : BookingMove.DefaultLimit;
 
     public async Task<BookingResult<BookingDetail>> GetAsync(
         Guid bookingId,
@@ -391,7 +764,9 @@ public sealed class BookingService(
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
-                candidate.BookableCourt.Court.Facility.TimeZone
+                candidate.BookableCourt.Court.Facility.TimeZone,
+                candidate.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
+                candidate.BookableCourt.Court.FacilityId
             })
             .SingleOrDefaultAsync(ct);
 
@@ -405,7 +780,9 @@ public sealed class BookingService(
                 row.GcashNumber,
                 row.GcashAccountName,
                 row.GcashQrCodeUrl,
-                row.TimeZone));
+                row.TimeZone,
+                row.MoveLimit,
+                row.FacilityId));
     }
 
     public async Task<IReadOnlyCollection<BookingDetail>> ListForCustomerAsync(
@@ -424,7 +801,9 @@ public sealed class BookingService(
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
-                booking.BookableCourt.Court.Facility.TimeZone
+                booking.BookableCourt.Court.Facility.TimeZone,
+                booking.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
+                booking.BookableCourt.Court.FacilityId
             })
             .ToListAsync(ct);
 
@@ -436,7 +815,9 @@ public sealed class BookingService(
                 row.GcashNumber,
                 row.GcashAccountName,
                 row.GcashQrCodeUrl,
-                row.TimeZone))
+                row.TimeZone,
+                row.MoveLimit,
+                row.FacilityId))
         ];
     }
 
@@ -685,7 +1066,8 @@ public sealed class BookingService(
     private async Task<IReadOnlyCollection<(DateOnly Date, TimeOnly StartsAt, TimeOnly EndsAt)>> TakenAsync(
         Offering offering,
         IReadOnlyCollection<DateOnly> dates,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? exceptBooking = null)
     {
         var live = BookingStatuses.Live;
 
@@ -696,25 +1078,56 @@ public sealed class BookingService(
             .Where(slot =>
                 slot.CourtId == offering.Court.Id &&
                 dates.Contains(slot.Date) &&
+                // A booking being moved is not in its own way. Identified by
+                // the booking and not by the hour: another court on the same
+                // floor at the same time is somebody else's, and dropping it
+                // for looking alike would move this booking on top of them.
+                (exceptBooking == null || slot.BookingId != exceptBooking) &&
                 live.Contains(slot.Booking.Status) &&
                 // The same rule as Booking.HasLapsedAt, asked in SQL: an unpaid
                 // hold that has run out with no receipt is not holding anything.
                 (slot.Booking.Status != BookingStatus.PendingPayment ||
                     slot.Booking.ReceiptUrl != null ||
                     now < slot.Booking.HoldsUntil))
-            .Select(slot => new
-            {
+            .Select(slot => new Holding(
                 slot.Date,
                 slot.StartsAt,
                 slot.EndsAt,
-                slot.Booking.BookableCourt.CourtSportId,
-                slot.Booking.BookableCourt.DivisionNumber
-            })
+                slot.BookableCourt.CourtSportId,
+                slot.BookableCourt.DivisionNumber))
+            .ToListAsync(ct);
+
+        // A booking waiting to move onto this floor holds the hours it is
+        // moving into, exactly as an unpaid booking holds the hours it is
+        // waiting to pay for. Without this the court a customer is part way
+        // through paying an upgrade for is still on sale to somebody else.
+        //
+        // The hours it holds are the booking's own, on the court it is moving
+        // to: a move keeps the times and changes the floor. Hours already
+        // played are in there too and cost nothing to hold, because an hour
+        // that has gone is never offered anyway.
+        var incoming = await db.BookingMoveRequests
+            .AsNoTracking()
+            .Where(move =>
+                move.ToBookableCourt.Court.Id == offering.Court.Id &&
+                (exceptBooking == null || move.BookingId != exceptBooking) &&
+                (move.Status == MoveRequestStatus.AwaitingConfirmation ||
+                    (move.Status == MoveRequestStatus.AwaitingPayment &&
+                        (move.ReceiptUrl != null || now < move.HoldsUntil))))
+            .SelectMany(move => move.Booking.Slots
+                .Where(slot => dates.Contains(slot.Date))
+                .Select(slot => new Holding(
+                    slot.Date,
+                    slot.StartsAt,
+                    slot.EndsAt,
+                    move.ToBookableCourt.CourtSportId,
+                    move.ToBookableCourt.DivisionNumber)))
             .ToListAsync(ct);
 
         return
         [
             .. held
+                .Concat(incoming)
                 .Where(slot => offering.BookableCourt.ClashesWith(slot.CourtSportId, slot.DivisionNumber))
                 .Select(slot => (slot.Date, slot.StartsAt, slot.EndsAt))
         ];
@@ -836,6 +1249,30 @@ public sealed class BookingService(
     /// </summary>
     private static decimal PerSlot(decimal hourlyRate, int slotLengthMinutes) =>
         Math.Round(hourlyRate * slotLengthMinutes / 60m, 2, MidpointRounding.AwayFromZero);
+
+    /// <summary>
+    /// One hour somebody has a claim on, and which part of the floor that claim
+    /// is against. Both the booked hours and the hours waiting to move in are
+    /// read into this shape so the clash rule can be asked once of both.
+    /// </summary>
+    private sealed record Holding(
+        DateOnly Date,
+        TimeOnly StartsAt,
+        TimeOnly EndsAt,
+        Guid CourtSportId,
+        int DivisionNumber);
+
+    /// <summary>
+    /// What a move would come to: the hours staying put, the hours priced on
+    /// the new court, and the total of the two.
+    /// </summary>
+    private sealed record MoveQuote(
+        Guid ToBookableCourtId,
+        string ToCourtName,
+        IReadOnlyCollection<BookingSlot> Kept,
+        IReadOnlyCollection<BookingSlot> Moved,
+        decimal NewTotal,
+        int HoldMinutes);
 
     // -------------------------------------------------------------- the rules
 
@@ -989,12 +1426,15 @@ public sealed class BookingService(
         string? gcashNumber,
         string? gcashAccountName,
         string? gcashQrCodeUrl,
-        string timeZone) => new(
+        string timeZone,
+        int moveLimit,
+        Guid facilityId) => new(
         booking.Id,
         booking.BookableCourtId,
         booking.Status.ToString(),
         booking.Kind,
         booking.CourtName,
+        facilityId,
         booking.FacilityName,
         booking.SportName,
         sportKey,
@@ -1022,41 +1462,43 @@ public sealed class BookingService(
                     slot.Amount,
                     slot.PlatformFee))
         ],
-        Math.Max(0, BookingMove.Limit - booking.MoveCount),
-        CanBeMoved(booking, timeZone),
+        Math.Max(0, moveLimit - booking.MoveCount),
+        CanBeMoved(booking, timeZone, moveLimit),
         booking.CreatedAt);
 
     /// <summary>
     /// Whether this booking could be moved if somebody asked right now.
     ///
     /// The same rules the move itself applies, asked ahead of time so the page
-    /// can offer the button or explain why it cannot. Availability is not among
-    /// them: whether some other date is free is a question about that date, and
-    /// this one is about this booking.
+    /// can offer the button or explain why it cannot. Which courts are free is
+    /// not among them: that is a question about those courts, and this one is
+    /// about this booking.
     /// </summary>
-    private bool CanBeMoved(Booking booking, string timeZone)
+    private bool CanBeMoved(Booking booking, string timeZone, int moveLimit)
     {
-        if (booking.Status is not (BookingStatus.PendingVerification or BookingStatus.Confirmed))
+        if (!BookingMove.IsMovable(booking.Status))
         {
             return false;
         }
 
-        if (booking.MoveCount >= BookingMove.Limit)
+        if (booking.MoveCount >= moveLimit)
         {
             return false;
         }
 
-        var first = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).FirstOrDefault();
+        var last = booking.Slots.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).LastOrDefault();
 
-        if (first is null)
+        if (last is null)
         {
             return false;
         }
 
+        // While it is still being played is exactly when a move is worth most:
+        // a court that fails at two o'clock has an afternoon left in it. Once
+        // the last hour has gone there is nothing left to move.
         var venueNow = Offering.LocalNowIn(timeZone, timeProvider.GetUtcNow());
-        var startsAt = booking.StartDate.ToDateTime(first.StartsAt);
 
-        return startsAt - venueNow.DateTime >= TimeSpan.FromHours(BookingMove.NoticeInHours);
+        return last.Date.ToDateTime(last.EndsAt) > venueNow.DateTime;
     }
 
     /// <summary>Everything one court needs to answer both questions, read once.</summary>
