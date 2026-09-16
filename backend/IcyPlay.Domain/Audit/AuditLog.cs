@@ -112,6 +112,8 @@ public static class AuditAction
     public const string HolidayUpdated = "HolidayUpdated";
     public const string HolidayRetired = "HolidayRetired";
     public const string HolidayReinstated = "HolidayReinstated";
+    /// <summary>One line for a whole uploaded file, with what it did to it.</summary>
+    public const string HolidaysImported = "HolidaysImported";
     public const string SportCreated = "SportCreated";
     public const string SportUpdated = "SportUpdated";
     public const string SportRetired = "SportRetired";

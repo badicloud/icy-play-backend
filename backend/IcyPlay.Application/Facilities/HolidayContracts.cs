@@ -31,6 +31,83 @@ public sealed record UpdateHolidayRequest(
     bool RepeatsAnnually);
 
 /// <summary>
+/// What became of one row of an imported file.
+///
+/// Every row is answered, including the ones that changed nothing: an import
+/// that says "14 added" and nothing else leaves the reader to work out what
+/// happened to the other six, and the usual answer — they were already there —
+/// is the one they most need to hear.
+/// </summary>
+public sealed record HolidayImportRow(
+    /// <summary>The row in the sheet, as Excel numbers it, so it can be found.</summary>
+    int Row,
+    string? Name,
+    DateOnly? Date,
+    HolidayImportOutcome Outcome,
+    /// <summary>Why it was skipped or rejected. Null when it was added.</summary>
+    string? Reason);
+
+public enum HolidayImportOutcome
+{
+    Added,
+    /// <summary>Already on the calendar, or repeated further up the same file.</summary>
+    Skipped,
+    /// <summary>Could not be read as a holiday at all.</summary>
+    Rejected
+}
+
+/// <summary>
+/// What an import did, row by row and in total.
+/// </summary>
+public sealed record HolidayImportResult(
+    int Added,
+    int Skipped,
+    int Rejected,
+    IReadOnlyCollection<HolidayImportRow> Rows);
+
+public enum HolidayImportFailure
+{
+    None,
+    /// <summary>Not a workbook, or one this cannot open.</summary>
+    Unreadable,
+    /// <summary>Opened, but the header is not the template's.</summary>
+    NotTheTemplate,
+    /// <summary>A header and nothing under it.</summary>
+    Empty,
+    TooManyRows
+}
+
+public sealed record HolidayImportOutput(
+    HolidayImportResult? Result,
+    HolidayImportFailure Failure = HolidayImportFailure.None)
+{
+    public bool Succeeded => Failure == HolidayImportFailure.None;
+    public static HolidayImportOutput Success(HolidayImportResult result) => new(result);
+    public static HolidayImportOutput Fail(HolidayImportFailure failure) => new(null, failure);
+}
+
+/// <summary>
+/// The shape of the template, in one place: the sheet that is handed out and
+/// the sheet that is read back are the same sheet, so a column renamed here
+/// moves both at once.
+/// </summary>
+public static class HolidayTemplate
+{
+    public const string SheetName = "Holidays";
+    public const string FileName = "icyplay-holidays-template.xlsx";
+
+    public static readonly IReadOnlyList<string> Columns =
+        ["Name", "Date", "Kind", "Repeats annually"];
+
+    /// <summary>
+    /// A ceiling on what one upload may carry. The Philippine calendar has
+    /// about twenty holidays a year; a file with thousands of rows is a mistake
+    /// rather than a request, and reading it would hold a transaction open.
+    /// </summary>
+    public const int MostRows = 500;
+}
+
+/// <summary>
 /// The holiday calendar, managed rather than compiled in. Half the Philippine
 /// calendar moves each year, so a venue charging a holiday rate correctly is a
 /// matter of data, not of a deploy.
@@ -67,6 +144,21 @@ public interface IHolidayService
     /// it decides which of a court's rates applies.
     /// </summary>
     Task<bool> IsHolidayAsync(DateOnly day, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The empty sheet an admin fills in, as xlsx bytes.
+    /// </summary>
+    byte[] Template();
+
+    /// <summary>
+    /// Reads a filled-in template and adds what is new, leaving what is already
+    /// there alone. Answers every row rather than a count, because "already on
+    /// the calendar" is the outcome an importer most needs to see.
+    /// </summary>
+    Task<HolidayImportOutput> ImportAsync(
+        Stream workbook,
+        AuditActor actor,
+        CancellationToken cancellationToken);
 }
 
 public sealed class CreateHolidayRequestValidator : AbstractValidator<CreateHolidayRequest>

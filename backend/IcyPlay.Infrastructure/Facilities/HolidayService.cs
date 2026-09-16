@@ -43,6 +43,107 @@ public sealed class HolidayService(
         ];
     }
 
+    public byte[] Template() => HolidayWorkbook.Write();
+
+    public async Task<HolidayImportOutput> ImportAsync(
+        Stream workbook,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var (failure, parsed) = HolidayWorkbook.Read(workbook);
+
+        if (failure != HolidayImportFailure.None)
+        {
+            return HolidayImportOutput.Fail(failure);
+        }
+
+        // The whole calendar, read once. An import of twenty rows would
+        // otherwise ask the database twenty times whether it already knew each
+        // one, and the calendar is small enough to hold.
+        var existing = await db.Holidays
+            .AsNoTracking()
+            .Select(holiday => new { holiday.Name, holiday.Date })
+            .ToArrayAsync(ct);
+
+        var known = new HashSet<(string Name, DateOnly Date)>(
+            existing.Select(holiday => (holiday.Name, holiday.Date)));
+
+        var now = timeProvider.GetUtcNow();
+        var rows = new List<HolidayImportRow>();
+        var added = new List<Holiday>();
+
+        foreach (var row in parsed)
+        {
+            if (!row.IsUsable)
+            {
+                rows.Add(new HolidayImportRow(
+                    row.Row,
+                    row.Name,
+                    row.Date,
+                    HolidayImportOutcome.Rejected,
+                    row.Problem));
+                continue;
+            }
+
+            var key = (row.Name!, row.Date!.Value);
+
+            // The same set answers both duplicate questions: one against the
+            // calendar, and one against the rows already taken from this file.
+            // A sheet listing Christmas twice is a duplicate the database has
+            // not heard of yet.
+            if (!known.Add(key))
+            {
+                rows.Add(new HolidayImportRow(
+                    row.Row,
+                    row.Name,
+                    row.Date,
+                    HolidayImportOutcome.Skipped,
+                    "Already on the calendar."));
+                continue;
+            }
+
+            added.Add(new Holiday(row.Name!, row.Date.Value, row.Kind!, row.RepeatsAnnually, now));
+            rows.Add(new HolidayImportRow(
+                row.Row,
+                row.Name,
+                row.Date,
+                HolidayImportOutcome.Added,
+                null));
+        }
+
+        if (added.Count > 0)
+        {
+            db.Holidays.AddRange(added);
+
+            // One audit line for the file rather than one per holiday: what was
+            // done here was an import, and the rows are in its record.
+            audit.RecordEvent(
+                actor,
+                AuditAction.HolidaysImported,
+                AuditEntityType.Holiday,
+                added[0].Id,
+                new Dictionary<string, string?>
+                {
+                    ["added"] = added.Count.ToString(CultureInfo.InvariantCulture),
+                    ["skipped"] = rows
+                        .Count(item => item.Outcome == HolidayImportOutcome.Skipped)
+                        .ToString(CultureInfo.InvariantCulture),
+                    ["rejected"] = rows
+                        .Count(item => item.Outcome == HolidayImportOutcome.Rejected)
+                        .ToString(CultureInfo.InvariantCulture),
+                    ["holidays"] = string.Join(", ", added.Select(holiday => holiday.Name))
+                });
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        return HolidayImportOutput.Success(new HolidayImportResult(
+            added.Count,
+            rows.Count(item => item.Outcome == HolidayImportOutcome.Skipped),
+            rows.Count(item => item.Outcome == HolidayImportOutcome.Rejected),
+            rows));
+    }
+
     public async Task<CourtResult<Guid>> CreateAsync(
         CreateHolidayRequest request,
         AuditActor actor,

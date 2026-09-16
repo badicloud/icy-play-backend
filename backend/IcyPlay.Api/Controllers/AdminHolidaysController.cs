@@ -83,6 +83,61 @@ public sealed class AdminHolidaysController(
     }
 
     /// <summary>
+    /// The empty sheet to fill in. Written by the same code that reads it back,
+    /// so a column renamed moves both at once.
+    /// </summary>
+    [HttpGet("template")]
+    public IActionResult Template() =>
+        File(
+            holidays.Template(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            HolidayTemplate.FileName);
+
+    /// <summary>
+    /// Takes a filled-in template and adds what is new. Holidays already on the
+    /// calendar are left alone rather than duplicated, and every row is answered
+    /// so the admin can see what happened to each one.
+    /// </summary>
+    [HttpPost("import")]
+    [RequestSizeLimit(5 * 1024 * 1024)]
+    public async Task<IActionResult> Import(IFormFile? file, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0)
+        {
+            return BadRequest(new ApiErrorEnvelope(new ApiError(
+                ErrorCodes.BadRequest, "Choose a filled-in template to import.")));
+        }
+
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        await using var contents = file.OpenReadStream();
+        var result = await holidays.ImportAsync(contents, actor, ct);
+
+        if (result.Succeeded)
+        {
+            return Ok(new ApiEnvelope<HolidayImportResult>(result.Result!));
+        }
+
+        var message = result.Failure switch
+        {
+            HolidayImportFailure.Unreadable =>
+                "That file could not be opened as a spreadsheet. Download the template and fill that in.",
+            HolidayImportFailure.NotTheTemplate =>
+                $"That sheet does not have the template's columns: {string.Join(", ", HolidayTemplate.Columns)}.",
+            HolidayImportFailure.Empty => "That template has no rows filled in.",
+            HolidayImportFailure.TooManyRows =>
+                $"That file has more than {HolidayTemplate.MostRows} rows. Split it and import again.",
+            _ => "That file could not be imported."
+        };
+
+        return BadRequest(new ApiErrorEnvelope(new ApiError(ErrorCodes.BadRequest, message)));
+    }
+
+    /// <summary>
     /// Retires rather than deletes. A booking priced as a holiday needs the day
     /// that made it one to still be there when the receipt is questioned.
     /// </summary>
