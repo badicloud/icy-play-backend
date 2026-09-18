@@ -596,6 +596,110 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task Catalog_ShouldFallBackToAPhotoOfTheVenueBeforeTheSportsStockPicture()
+    {
+        // Arrange: a venue that has been photographed but whose courts have
+        // not. Common on the day a venue is set up — the owner uploads a shot
+        // of the building and gets to the individual floors later.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var keys = await SportKeysAsync(context, sports);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Photographed Venue"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        // The sport has a stock picture, so the venue photo has something to
+        // beat. Without this the test would pass on an empty chain.
+        var sport = await context.Sports.SingleAsync(candidate => candidate.Id == sports[0]);
+        sport.Illustrate(
+            "icyplay/sports/stock",
+            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/icyplay/sports/stock.jpg",
+            Now);
+
+        context.Photos.Add(new Photo(
+            created.Value!.FacilityId,
+            // Null: this is a photo of the venue, not of any one court.
+            null,
+            null,
+            "icyplay/facilities/the-building",
+            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/icyplay/facilities/the-building.jpg",
+            "The front of the building",
+            0,
+            true,
+            Now));
+        await context.SaveChangesAsync();
+
+        // Act
+        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+
+        // Assert: somewhere the customer would actually be standing beats a
+        // stock photograph of the sport, which could be anywhere on earth.
+        using (new AssertionScope())
+        {
+            created.Succeeded.Should().BeTrue();
+            browsing
+                .Single(row => row.CourtId == created.Value!.CourtId)
+                .CoverPhotoUrl.Should().Contain("icyplay/facilities/the-building");
+        }
+    }
+
+    [Fact]
+    public async Task Catalog_ShouldPreferACourtsOwnPhotoOverOneOfTheVenue()
+    {
+        // Arrange: both exist. The venue photo is only ever a stand-in, and a
+        // court that has been photographed must not be shown as the car park.
+        await using var context = database.CreateContext();
+        var sut = CreateService(context);
+        var catalog = CreateCatalog(context);
+        var owner = await AddOwnerAsync(context);
+        await AddLiveContractAsync(context, owner);
+        var sports = await SportIdsAsync(context, 1);
+        var keys = await SportKeysAsync(context, sports);
+
+        var created = await sut.CreateAsync(
+            Request(owner, newFacility: NewFacility("Both Photographed"), sportIds: sports),
+            Admin(),
+            CancellationToken.None);
+
+        context.Photos.Add(new Photo(
+            created.Value!.FacilityId,
+            null,
+            null,
+            "icyplay/facilities/the-building",
+            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/icyplay/facilities/the-building.jpg",
+            null,
+            0,
+            true,
+            Now));
+
+        context.Photos.Add(new Photo(
+            created.Value!.FacilityId,
+            created.Value!.CourtId,
+            null,
+            "icyplay/courts/the-floor",
+            $"https://res.cloudinary.com/{CloudName}/image/upload/v1/icyplay/courts/the-floor.jpg",
+            null,
+            0,
+            true,
+            Now));
+        await context.SaveChangesAsync();
+
+        // Act
+        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+
+        // Assert
+        browsing
+            .Single(row => row.CourtId == created.Value!.CourtId)
+            .CoverPhotoUrl.Should().Contain("icyplay/courts/the-floor");
+    }
+
+    [Fact]
     public async Task Catalog_ShouldFallBackToTheSportsOwnPictureForACourtWithNoPhotos()
     {
         // Arrange: a court on its opening day, before anybody has photographed

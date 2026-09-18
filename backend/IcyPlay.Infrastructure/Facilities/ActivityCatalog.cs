@@ -315,6 +315,15 @@ public sealed class ActivityCatalog(
                     .Where(photo => photo.CourtId == link.CourtId && photo.IsCover)
                     .Select(photo => photo.SecureUrl)
                     .FirstOrDefault(),
+                // A photo of the building, for a court nobody has photographed
+                // yet. Read the way the court detail reads them: belonging to
+                // the venue rather than to any one floor.
+                FacilityPhotoUrl = db.Photos
+                    .Where(photo => photo.FacilityId == link.Court.FacilityId && photo.CourtId == null)
+                    .OrderByDescending(photo => photo.IsCover)
+                    .ThenBy(photo => photo.DisplayOrder)
+                    .Select(photo => photo.SecureUrl)
+                    .FirstOrDefault(),
                 SportImageUrl = link.Sport.ImageSecureUrl,
                 // Either level closes it: a facility shut for the week takes
                 // every court in it down.
@@ -378,7 +387,16 @@ public sealed class ActivityCatalog(
                         row.PostalCode,
                         row.Latitude,
                         row.Longitude,
-                        row.SportPhotoUrl ?? row.CoverPhotoUrl ?? row.SportImageUrl,
+                        // Nearest first: this court set up for this sport, then
+                        // this court however it was last shot, then the venue
+                        // around it, and only then the sport's stock picture.
+                        // The venue comes before the stock picture because it is
+                        // a photograph of somewhere the customer would actually
+                        // be standing.
+                        row.SportPhotoUrl
+                            ?? row.CoverPhotoUrl
+                            ?? row.FacilityPhotoUrl
+                            ?? row.SportImageUrl,
                         row.VenueType,
                         row.Surface,
                         row.HasLighting,
