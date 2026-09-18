@@ -332,6 +332,10 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This booking is already waiting on a move. Settle that one first."),
+            BookingFailure.NotTheSameOffering => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "A booking can only move to another court for the same sport at the same venue."),
             BookingFailure.MoveRequestNotFound => (
                 StatusCodes.Status404NotFound,
                 ErrorCodes.NotFound,

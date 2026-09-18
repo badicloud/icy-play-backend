@@ -165,7 +165,40 @@ public sealed record BookingDetail(
     /// place and the reader's clock cannot disagree with the venue's.
     /// </summary>
     bool CanBeMoved,
+    /// <summary>
+    /// The move this booking is waiting on, or null when it is not waiting on
+    /// one.
+    ///
+    /// Carried on the booking because it is the booking's own state: a card
+    /// that shows the old court and no explanation reads as though the request
+    /// went nowhere, and a customer who thinks that asks again.
+    /// </summary>
+    PendingMove? PendingMove,
     DateTimeOffset CreatedAt);
+
+/// <summary>
+/// A move that has been asked for and not yet settled.
+///
+/// What the customer needs is the answer to three questions: where it is
+/// going, whether they owe anything, and who they are waiting on.
+/// </summary>
+public sealed record PendingMove(
+    /// <summary>AwaitingPayment or AwaitingConfirmation.</summary>
+    string Status,
+    /// <summary>The court as it was named when the move was asked for.</summary>
+    string ToCourtName,
+    /// <summary>What is still owed for it, and never less than nothing.</summary>
+    decimal BalanceDue,
+    /// <summary>When the held court goes back on sale, if it is unpaid.</summary>
+    DateTimeOffset HoldsUntil,
+    /// <summary>
+    /// True when the venue moved the booking rather than the customer asking.
+    /// The two read very differently to the person holding the booking.
+    /// </summary>
+    bool RaisedByVenue,
+    /// <summary>Why, when an attendant moved it. Null when the customer asked.</summary>
+    string? Reason,
+    DateTimeOffset RequestedAt);
 
 public sealed record BookedSlot(
     DateOnly Date,
@@ -228,7 +261,16 @@ public enum BookingFailure
     /// <summary>Nothing to submit: no receipt has been uploaded.</summary>
     NoReceipt,
     /// <summary>The booking is not waiting to be paid for, so this step does not apply.</summary>
-    NotAwaitingPayment
+    NotAwaitingPayment,
+    /// <summary>
+    /// The court offered is not the same sport, or is not at the same venue.
+    ///
+    /// A move changes which floor the hours are on. It does not change what was
+    /// bought: a booking carries the sport and the venue as they were named and
+    /// priced when the agreement was made, and moving pickleball onto a
+    /// badminton court would leave a record of a thing that never happened.
+    /// </summary>
+    NotTheSameOffering
 }
 
 /// <summary>

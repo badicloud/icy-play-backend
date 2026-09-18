@@ -664,6 +664,31 @@ public sealed class BookingService(
             return BookingResult<MoveQuote>.Fail(BookingFailure.NotPriced);
         }
 
+        // The same sport, at the same venue.
+        //
+        // Every way of moving a booking comes through here — the customer's
+        // request, the attendant's move, and the confirmation afterwards — so
+        // this is the one place the rule has to hold. Without it a pickleball
+        // booking could be sent to a badminton court in another building, and
+        // the booking would keep saying "Pickleball" and the old venue's name
+        // because those are recorded on it as they were sold.
+        var from = await db.BookableCourts
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == booking.BookableCourtId)
+            .Select(candidate => new
+            {
+                candidate.CourtSport.SportId,
+                candidate.Court.FacilityId
+            })
+            .SingleOrDefaultAsync(ct);
+
+        if (from is null
+            || from.SportId != target.Pair.SportId
+            || from.FacilityId != target.Court.FacilityId)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.NotTheSameOffering);
+        }
+
         var utcNow = timeProvider.GetUtcNow();
         var venueNow = target.LocalNow(utcNow);
 
@@ -772,17 +797,23 @@ public sealed class BookingService(
 
         // Another customer's booking answers the same as one that does not
         // exist, so an id cannot be probed for whether it is somebody's.
-        return row is null
-            ? BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound)
-            : BookingResult<BookingDetail>.Success(Detail(
-                row.Booking,
-                row.SportKey,
-                row.GcashNumber,
-                row.GcashAccountName,
-                row.GcashQrCodeUrl,
-                row.TimeZone,
-                row.MoveLimit,
-                row.FacilityId));
+        if (row is null)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var pending = await PendingMovesAsync([row.Booking.Id], ct);
+
+        return BookingResult<BookingDetail>.Success(Detail(
+            row.Booking,
+            row.SportKey,
+            row.GcashNumber,
+            row.GcashAccountName,
+            row.GcashQrCodeUrl,
+            row.TimeZone,
+            row.MoveLimit,
+            row.FacilityId,
+            pending.GetValueOrDefault(row.Booking.Id)));
     }
 
     public async Task<IReadOnlyCollection<BookingDetail>> ListForCustomerAsync(
@@ -807,6 +838,8 @@ public sealed class BookingService(
             })
             .ToListAsync(ct);
 
+        var pending = await PendingMovesAsync([.. rows.Select(row => row.Booking.Id)], ct);
+
         return
         [
             .. rows.Select(row => Detail(
@@ -817,7 +850,8 @@ public sealed class BookingService(
                 row.GcashQrCodeUrl,
                 row.TimeZone,
                 row.MoveLimit,
-                row.FacilityId))
+                row.FacilityId,
+                pending.GetValueOrDefault(row.Booking.Id)))
         ];
     }
 
@@ -1428,7 +1462,8 @@ public sealed class BookingService(
         string? gcashQrCodeUrl,
         string timeZone,
         int moveLimit,
-        Guid facilityId) => new(
+        Guid facilityId,
+        PendingMove? pendingMove = null) => new(
         booking.Id,
         booking.BookableCourtId,
         booking.Status.ToString(),
@@ -1463,8 +1498,53 @@ public sealed class BookingService(
                     slot.PlatformFee))
         ],
         Math.Max(0, moveLimit - booking.MoveCount),
-        CanBeMoved(booking, timeZone, moveLimit),
+        // A booking already waiting on a move cannot be moved again, and the
+        // panel above says why rather than leaving a dead button.
+        pendingMove is null && CanBeMoved(booking, timeZone, moveLimit),
+        pendingMove,
         booking.CreatedAt);
+
+    /// <summary>
+    /// The open move requests for these bookings, by booking.
+    ///
+    /// One at a time is enforced when a request is raised, so a booking has at
+    /// most one of these; reading them together keeps the list to one query
+    /// rather than one per card.
+    /// </summary>
+    private async Task<Dictionary<Guid, PendingMove>> PendingMovesAsync(
+        Guid[] bookingIds,
+        CancellationToken ct)
+    {
+        var open = await db.BookingMoveRequests
+            .AsNoTracking()
+            .Where(request => bookingIds.Contains(request.BookingId) &&
+                (request.Status == MoveRequestStatus.AwaitingPayment ||
+                    request.Status == MoveRequestStatus.AwaitingConfirmation))
+            .Select(request => new
+            {
+                request.BookingId,
+                request.Status,
+                request.ToCourtName,
+                request.BalanceDue,
+                request.HoldsUntil,
+                request.Initiator,
+                request.Reason,
+                request.CreatedAt
+            })
+            .ToListAsync(ct);
+
+        return open.ToDictionary(
+            request => request.BookingId,
+            request => new PendingMove(
+                request.Status,
+                request.ToCourtName,
+                request.BalanceDue,
+                request.HoldsUntil,
+                // An attendant acts for the venue, which is what the customer sees.
+                request.Initiator == MoveInitiator.Attendant,
+                request.Reason,
+                request.CreatedAt));
+    }
 
     /// <summary>
     /// Whether this booking could be moved if somebody asked right now.
