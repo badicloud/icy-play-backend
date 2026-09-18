@@ -79,7 +79,7 @@ public sealed class FacilityInputValidator : AbstractValidator<FacilityInput>
         RuleFor(x => x.Province).NotEmpty().MaximumLength(100);
         RuleFor(x => x.PostalCode).MaximumLength(20);
         RuleFor(x => x.Country).NotEmpty().MaximumLength(100);
-        RuleFor(x => x.TimeZone).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.TimeZone).NotEmpty().MaximumLength(100).MustBeARealTimeZone();
         RuleFor(x => x.ContactPhone).MaximumLength(50);
         RuleFor(x => x.ContactEmail).EmailAddress().MaximumLength(256)
             .When(x => !string.IsNullOrWhiteSpace(x.ContactEmail));
