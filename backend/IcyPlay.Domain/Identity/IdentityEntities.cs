@@ -108,6 +108,28 @@ public sealed class FacilityOwner : Entity
     /// </summary>
     public int MoveLimit { get; private set; } = BookingMove.DefaultLimit;
 
+    /// <summary>
+    /// When the seeder raised this venue, and null for every real one.
+    ///
+    /// A stored fact rather than a guess at the name. Removing demonstration
+    /// data is destructive and done in bulk, and "everything called Demo
+    /// something" is a rule that one day matches a venue somebody is actually
+    /// trading from.
+    /// </summary>
+    public DateTimeOffset? SeededAt
+    {
+        get; private set;
+    }
+
+    /// <summary>Whether this venue exists only to be demonstrated against.</summary>
+    public bool IsSeeded => SeededAt is not null;
+
+    public void MarkSeeded(DateTimeOffset now)
+    {
+        SeededAt = now;
+        UpdatedAt = now;
+    }
+
     public void SetPaymentHold(int partialBookingExpiryMinutes, DateTimeOffset now)
     {
         PartialBookingExpiryMinutes = PaymentHold.Clamp(partialBookingExpiryMinutes);

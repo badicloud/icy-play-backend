@@ -66,6 +66,7 @@ public static class DependencyInjection
         services.AddScoped<IFacilityOwnerEditService, FacilityOwnerEditService>();
         services.AddScoped<ICourtService, CourtService>();
         services.AddScoped<ISportService, SportService>();
+        services.AddScoped<ISeedService, SeedService>();
         services.AddScoped<IHolidayService, HolidayService>();
         services.AddMemoryCache();
         // One signal outlives the requests that clear it.

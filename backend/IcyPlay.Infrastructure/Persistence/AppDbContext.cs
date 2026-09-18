@@ -91,6 +91,11 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.PartialBookingExpiryMinutes)
                 .HasDefaultValue(PaymentHold.DefaultMinutes);
             entity.Ignore(x => x.CanTakePayment);
+            entity.Ignore(x => x.IsSeeded);
+            // Filtered, because the question is only ever asked one way round:
+            // which venues are demonstration data. Real venues are the vast
+            // majority and none of them belong in this index.
+            entity.HasIndex(x => x.SeededAt).HasFilter("[SeededAt] IS NOT NULL");
             entity.Property(x => x.BillingPhone).HasMaxLength(50);
             entity.HasOne(x => x.User).WithOne().HasForeignKey<FacilityOwner>(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
         });

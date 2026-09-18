@@ -86,6 +86,12 @@ public static class AuditAction
     /// <summary>The dials the venue sets from its own desk.</summary>
     public const string FacilityOwnerDeskSettingsUpdated = "FacilityOwnerDeskSettingsUpdated";
     public const string FacilityOwnerInvitationSent = "FacilityOwnerInvitationSent";
+    /// <summary>
+    /// Demonstration venues were removed in bulk. Kept even though the rows
+    /// themselves are gone: the trail is the only thing left saying it
+    /// happened, and it outlives what it describes by design.
+    /// </summary>
+    public const string SeededDataRemoved = "SeededDataRemoved";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
     public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
