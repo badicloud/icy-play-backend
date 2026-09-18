@@ -319,6 +319,44 @@ public sealed class AuthService(
             : AuthResult<PasswordResetTokenStatusResponse>.Fail(failure);
     }
 
+    /// <summary>
+    /// Whether the new password is the one already stored.
+    ///
+    /// A stored hash the hasher cannot read answers "no" rather than throwing.
+    /// It has one shape — Base64 of a versioned blob — and anything else in
+    /// that column makes this throw FormatException from deep inside the
+    /// framework. Which would be tolerable if it happened anywhere else, but
+    /// this is the password reset: the one way back into an account nobody can
+    /// sign into. A row with an unreadable hash would be locked out for good,
+    /// by the very screen meant to rescue it.
+    ///
+    /// Nothing is loosened by answering no. The reset is already authorised —
+    /// the holder proved it with a token sent to the address on the account —
+    /// and this check only stops somebody setting the password they already
+    /// have. If the old one cannot be read, there is nothing to reuse.
+    /// </summary>
+    private bool Matches(User user, string newPassword)
+    {
+        if (string.IsNullOrWhiteSpace(user.PasswordHash))
+        {
+            return false;
+        }
+
+        try
+        {
+            return passwordHasher.VerifyHashedPassword(user, user.PasswordHash, newPassword)
+                != PasswordVerificationResult.Failed;
+        }
+        catch (FormatException)
+        {
+            logger.LogWarning(
+                "The stored password hash for {UserId} could not be read, so the reused-password check was skipped.",
+                user.Id);
+
+            return false;
+        }
+    }
+
     public async Task<AuthResult<ResetPasswordResponse>> ResetPasswordAsync(
         string token,
         string newPassword,
@@ -335,8 +373,7 @@ public sealed class AuthService(
 
         // Only an exact match can be detected: the stored value is a one-way hash,
         // so the old password cannot be read back and compared for similarity.
-        if (passwordHasher.VerifyHashedPassword(user, user.PasswordHash, newPassword)
-            != PasswordVerificationResult.Failed)
+        if (Matches(user, newPassword))
         {
             logger.LogInformation(
                 "Password reset was rejected because the new password matched the current one. UserId: {UserId}",

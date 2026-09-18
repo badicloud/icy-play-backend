@@ -198,6 +198,45 @@ public sealed class PasswordResetTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task ResetPasswordAsync_WhenTheStoredHashCannotBeRead_ShouldStillSetTheNewPassword()
+    {
+        // Arrange: a row whose password column holds something the hasher
+        // cannot parse. Seeded accounts, old imports and hand-edited rows all
+        // get there, and every one of them reaches this screen eventually.
+        await using var context = database.CreateContext();
+        var user = await AddUserAsync(context, "unreadable-hash@example.com");
+        user.SetPasswordHash("not-a-real-hash");
+        await context.SaveChangesAsync();
+
+        var emailSender = new CapturingTransactionalEmailSender();
+        await CreateAuthService(context, emailSender)
+            .ForgotPasswordAsync(user.Email, CancellationToken.None);
+        var rawToken = ReadTokenFromEmail(emailSender);
+        var sut = CreateAuthService(context, emailSender, RequestTime.AddMinutes(5));
+
+        // Act
+        var result = await sut.ResetPasswordAsync(rawToken, NewPassword, CancellationToken.None);
+
+        // Assert: the reset is the one way back into an account nobody can sign
+        // into. Throwing here would lock the row out for good, by the very
+        // screen meant to rescue it — and the check being skipped loosens
+        // nothing, because there is no old password left to reuse.
+        context.ChangeTracker.Clear();
+        var stored = await context.Users
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == user.Id);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            stored.PasswordHash.Should().NotBe("not-a-real-hash");
+            new PasswordHasher<User>()
+                .VerifyHashedPassword(stored, stored.PasswordHash, NewPassword)
+                .Should().NotBe(PasswordVerificationResult.Failed);
+        }
+    }
+
+    [Fact]
     public async Task ResetPasswordAsync_WhenNewPasswordMatchesTheCurrentOne_ShouldRejectAndKeepTheLinkUsable()
     {
         // Arrange
