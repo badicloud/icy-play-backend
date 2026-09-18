@@ -329,116 +329,6 @@ public sealed class BookingService(
         return await GetAsync(bookingId, customerUserId, ct);
     }
 
-    /// <summary>
-    /// The venue has looked at the payment, or decided there was nothing to
-    /// pay, and the booking moves.
-    /// </summary>
-    public async Task<BookingResult<BookingDetail>> ConfirmMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        CancellationToken ct)
-    {
-        var moveRequest = await db.BookingMoveRequests
-            .Include(candidate => candidate.Booking)
-                .ThenInclude(booking => booking.Slots)
-            .SingleOrDefaultAsync(
-                candidate => candidate.BookingId == bookingId &&
-                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
-                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
-                ct);
-
-        if (moveRequest is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
-        }
-
-        // Still owing, and nobody has let them off: there is nothing to confirm.
-        if (moveRequest.Status == MoveRequestStatus.AwaitingPayment)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveNotPaid);
-        }
-
-        var booking = moveRequest.Booking;
-
-        // Priced again at the moment it lands rather than trusted from when it
-        // was asked for. Between the two somebody else may have taken the hour,
-        // and a quote is not a hold on anything but this one court.
-        var quoted = await QuoteAsync(booking, moveRequest.ToBookableCourtId, ct);
-
-        if (!quoted.Succeeded)
-        {
-            return BookingResult<BookingDetail>.Fail(quoted.Failure);
-        }
-
-        var utcNow = timeProvider.GetUtcNow();
-
-        Apply(booking, moveRequest, quoted.Value!, countsAgainstTheLimit: true, utcNow);
-        moveRequest.Complete(attendantUserId, utcNow);
-
-        await db.SaveChangesAsync(ct);
-
-        logger.LogInformation(
-            "Booking {BookingId} moved to {BookableCourtId}. Balance settled: {BalanceDue}.",
-            booking.Id,
-            moveRequest.ToBookableCourtId,
-            moveRequest.BalanceDue);
-
-        return await GetAsync(bookingId, booking.CustomerUserId, ct);
-    }
-
-    /// <summary>
-    /// The venue lets the customer off the difference, and says who decided so.
-    /// </summary>
-    public async Task<BookingResult<BookingDetail>> WaiveMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        string reason,
-        CancellationToken ct)
-    {
-        var moveRequest = await db.BookingMoveRequests
-            .Include(candidate => candidate.Booking)
-            .SingleOrDefaultAsync(
-                candidate => candidate.BookingId == bookingId &&
-                    candidate.Status == MoveRequestStatus.AwaitingPayment,
-                ct);
-
-        if (moveRequest is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
-        }
-
-        moveRequest.Waive(attendantUserId, reason, timeProvider.GetUtcNow());
-        await db.SaveChangesAsync(ct);
-
-        return await GetAsync(bookingId, moveRequest.Booking.CustomerUserId, ct);
-    }
-
-    /// <summary>The venue says no. The booking stays exactly where it was.</summary>
-    public async Task<BookingResult<BookingDetail>> DeclineMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        string? reason,
-        CancellationToken ct)
-    {
-        var moveRequest = await db.BookingMoveRequests
-            .Include(candidate => candidate.Booking)
-            .SingleOrDefaultAsync(
-                candidate => candidate.BookingId == bookingId &&
-                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
-                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
-                ct);
-
-        if (moveRequest is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
-        }
-
-        moveRequest.Decline(attendantUserId, reason, timeProvider.GetUtcNow());
-        await db.SaveChangesAsync(ct);
-
-        return await GetAsync(bookingId, moveRequest.Booking.CustomerUserId, ct);
-    }
-
     /// <summary>The customer thought better of it, and the held court goes back.</summary>
     public async Task<BookingResult<BookingDetail>> WithdrawMoveAsync(
         Guid bookingId,
@@ -499,95 +389,6 @@ public sealed class BookingService(
             : BookingResult<MoveQuoteResponse>.Fail(quoted.Failure);
     }
 
-    /// <summary>
-    /// The venue moves a booking itself, because the court it is on has a
-    /// problem. Immediate: the players are standing on it.
-    ///
-    /// A dearer court is not charged for here. An attendant cannot take money
-    /// from somebody who is not in the conversation — either the customer is
-    /// asked to upgrade, or the venue absorbs it and says who decided that.
-    /// </summary>
-    public async Task<BookingResult<BookingDetail>> MoveByVenueAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        Guid toBookableCourtId,
-        string reason,
-        string? waiverReason,
-        CancellationToken ct)
-    {
-        var booking = await db.Bookings
-            .Include(candidate => candidate.Slots)
-            .SingleOrDefaultAsync(candidate => candidate.Id == bookingId, ct);
-
-        if (booking is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
-        }
-
-        if (await HasOpenMoveAsync(booking.Id, ct))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveAlreadyRequested);
-        }
-
-        var quoted = await QuoteAsync(booking, toBookableCourtId, ct);
-
-        if (!quoted.Succeeded)
-        {
-            return BookingResult<BookingDetail>.Fail(quoted.Failure);
-        }
-
-        var quote = quoted.Value!;
-        var owed = Math.Max(0m, quote.NewTotal - booking.PaidTotal);
-
-        // A dearer court needs somebody to have decided who pays for it. Without
-        // a waiver the answer is the customer, and the customer has to be asked
-        // rather than billed.
-        if (owed > 0m && string.IsNullOrWhiteSpace(waiverReason))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveNotPaid);
-        }
-
-        var utcNow = timeProvider.GetUtcNow();
-
-        var moveRequest = new BookingMoveRequest(
-            booking.Id,
-            toBookableCourtId,
-            quote.ToCourtName,
-            MoveInitiator.Attendant,
-            attendantUserId,
-            reason,
-            booking.PaidTotal,
-            quote.NewTotal,
-            quote.HoldMinutes,
-            utcNow);
-
-        if (owed > 0m)
-        {
-            moveRequest.Waive(attendantUserId, waiverReason!, utcNow);
-        }
-
-        db.BookingMoveRequests.Add(moveRequest);
-
-        // The venue's own doing, so it does not spend the customer's allowance.
-        Apply(booking, moveRequest, quote, countsAgainstTheLimit: false, utcNow);
-        moveRequest.Complete(attendantUserId, utcNow);
-
-        await db.SaveChangesAsync(ct);
-
-        logger.LogInformation(
-            "Booking {BookingId} moved to {BookableCourtId} by the venue. Reason: {Reason}.",
-            booking.Id,
-            toBookableCourtId,
-            reason);
-
-        return await GetAsync(bookingId, booking.CustomerUserId, ct);
-    }
-
-    /// <summary>
-    /// Writes the move onto the booking: the hours already played stay where
-    /// they were, the rest are the newly priced ones, and what the customer has
-    /// paid goes up by whatever the move was settled for.
-    /// </summary>
     private void Apply(
         Booking booking,
         BookingMoveRequest moveRequest,
@@ -1601,7 +1402,10 @@ public sealed class BookingService(
         ///
         /// An unrecognised zone falls back to UTC rather than throwing: a court
         /// that cannot be looked at is worse than one whose cut-off is off by
-        /// the offset, and the zone is validated when the facility is saved.
+        /// the offset. That fallback is a last resort and not a safety net —
+        /// it is silent, and in Manila it is eight hours wrong. What keeps a
+        /// venue out of it is <see cref="TimeZoneRules"/>, which refuses a zone
+        /// the platform cannot read at the moment somebody types it.
         /// </summary>
         public DateTimeOffset LocalNow(DateTimeOffset utcNow) => LocalNowIn(TimeZone, utcNow);
 

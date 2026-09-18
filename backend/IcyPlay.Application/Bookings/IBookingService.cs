@@ -86,43 +86,6 @@ public interface IBookingService
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// The venue moves a booking itself, because the court it is on has a
-    /// problem. Immediate: the players are standing on it.
-    ///
-    /// A dearer court needs a waiver and a reason for it. An attendant cannot
-    /// take money from somebody who is not in the conversation — either the
-    /// customer is asked to upgrade, or the venue absorbs the difference and
-    /// says who decided that.
-    /// </summary>
-    Task<BookingResult<BookingDetail>> MoveByVenueAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        Guid toBookableCourtId,
-        string reason,
-        string? waiverReason,
-        CancellationToken cancellationToken);
-
-    /// <summary>The venue has looked at the payment, and the booking moves.</summary>
-    Task<BookingResult<BookingDetail>> ConfirmMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        CancellationToken cancellationToken);
-
-    /// <summary>The venue lets the customer off the difference, and says why.</summary>
-    Task<BookingResult<BookingDetail>> WaiveMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        string reason,
-        CancellationToken cancellationToken);
-
-    /// <summary>The venue says no. The booking stays exactly where it was.</summary>
-    Task<BookingResult<BookingDetail>> DeclineMoveAsync(
-        Guid bookingId,
-        Guid attendantUserId,
-        string? reason,
-        CancellationToken cancellationToken);
-
-    /// <summary>
     /// Records the GCash receipt the customer uploaded. Confirms nothing: a
     /// person at the venue still has to look at it.
     /// </summary>
