@@ -396,6 +396,392 @@ public sealed class DeskService(
         return DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct));
     }
 
+    public async Task<DeskResult<PagedResult<DeskUpgrade>>> UpgradesAsync(
+        Guid userId,
+        DeskUpgradeQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (!DeskUpgradeTab.IsSupported(query.Tab))
+        {
+            return DeskResult<PagedResult<DeskUpgrade>>.Fail(DeskFailure.UnknownTab);
+        }
+
+        var venueIds = await VenueQuery(userId)
+            .AsNoTracking()
+            .Select(facility => facility.Id)
+            .ToListAsync(ct);
+
+        if (query.FacilityId is Guid wanted)
+        {
+            if (!venueIds.Contains(wanted))
+            {
+                return DeskResult<PagedResult<DeskUpgrade>>.Fail(DeskFailure.NotAttended);
+            }
+
+            venueIds = [wanted];
+        }
+
+        var page = Math.Max(1, query.Page);
+        var pageSize = Math.Clamp(query.PageSize, 1, LargestPage);
+
+        // Only what the customer has actually sent. One still waiting to be paid
+        // for is nobody's work at the desk, and putting it in this queue would
+        // have somebody checking for a receipt that is not coming yet.
+        var rows = query.Tab == DeskUpgradeTab.Waiting
+            ? db.BookingUpgradeRequests.Where(row => row.Status == UpgradeStatus.AwaitingApproval)
+            : db.BookingUpgradeRequests.Where(row =>
+                row.Status == UpgradeStatus.Approved || row.Status == UpgradeStatus.Declined);
+
+        rows = rows.AsNoTracking()
+            .Where(row => venueIds.Contains(row.Booking.BookableCourt.Court.FacilityId));
+
+        var total = await rows.CountAsync(ct);
+
+        // Waiting is ordered by how long it has been waiting, oldest first:
+        // somebody who paid an hour ago should not be behind somebody who paid
+        // a minute ago. Settled is history, and history reads newest first.
+        var ordered = query.Tab == DeskUpgradeTab.Waiting
+            ? rows.OrderBy(row => row.ReceiptUploadedAt).ThenBy(row => row.CreatedAt)
+            : rows.OrderByDescending(row => row.SettledAt);
+
+        var items = await ordered
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(row => new UpgradeRow(
+                row,
+                row.Booking,
+                row.Booking.BookableCourt.Court.FacilityId,
+                row.Booking.BookableCourt.Court.Facility.Name,
+                row.Booking.BookableCourt.CourtSport.Sport.Name,
+                row.Booking.BookableCourt.CourtSport.Sport.Key,
+                db.Users
+                    .Where(user => user.Id == row.RequestedByUserId)
+                    .Select(user => new Person(user.FullName, user.Email, user.PhoneNumber))
+                    .FirstOrDefault(),
+                row.Booking.Slots.ToList(),
+                row.Slots.ToList()))
+            .ToListAsync(ct);
+
+        return DeskResult<PagedResult<DeskUpgrade>>.Success(
+            new PagedResult<DeskUpgrade>([.. items.Select(Upgrade)], page, pageSize, total));
+    }
+
+    public async Task<DeskResult<DeskUpgrade>> ApproveUpgradeAsync(
+        Guid userId,
+        Guid upgradeId,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var upgrade = await ForDeskUpgradeAsync(userId, upgradeId, ct);
+
+        if (upgrade is null)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotFound);
+        }
+
+        // Two people at one desk, both pressing. The first press stands.
+        if (upgrade.Status != UpgradeStatus.AwaitingApproval)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotWaiting);
+        }
+
+        if (upgrade.ReceiptUrl is null)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.NoReceipt);
+        }
+
+        var booking = upgrade.Booking;
+        var utcNow = timeProvider.GetUtcNow();
+
+        var target = await db.BookableCourts
+            .Include(unit => unit.Court)
+            .SingleOrDefaultAsync(unit => unit.Id == upgrade.ToBookableCourtId, ct);
+
+        if (target is null)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotFound);
+        }
+
+        var venueNow = await VenueNowAsync(target.Court.FacilityId, utcNow, ct);
+
+        // Hours already played stay where they were played. Worked out again
+        // here rather than trusted from the quote, because time has passed
+        // since — and if it has passed far enough that the swap no longer adds
+        // up, saying so beats guessing which hours the customer meant.
+        var played = booking.Slots
+            .Where(slot => slot.Date.ToDateTime(slot.EndsAt) <= venueNow.DateTime)
+            .ToArray();
+
+        if (played.Length + upgrade.Slots.Count != booking.Slots.Count)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeStale);
+        }
+
+        if (await IsTakenAsync(target, booking.Id, [.. upgrade.Slots], utcNow, ct))
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeHoursTaken);
+        }
+
+        // Priced as it was quoted, not as the court costs today. The customer
+        // has already paid against that figure, and a rate the venue changed in
+        // between must not change what they bought.
+        var moved = upgrade.Slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .Select(slot => new BookingSlot(
+                booking.Id,
+                target.CourtId,
+                target.Id,
+                slot.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                slot.RateKind,
+                slot.Amount,
+                slot.PlatformFee,
+                utcNow))
+            .ToArray();
+
+        var wasOn = booking.CourtName;
+
+        db.BookingSlots.RemoveRange(booking.Slots.Except(played).ToArray());
+        booking.MoveTo(target.Id, upgrade.ToCourtName, played, moved, countsAgainstTheLimit: true, utcNow);
+        db.BookingSlots.AddRange(moved);
+        booking.Settle(upgrade.BalanceDue, utcNow);
+
+        upgrade.Approve(userId, utcNow);
+
+        Record(
+            actor,
+            AuditAction.BookingUpgradeApproved,
+            booking,
+            null,
+            $"Upgrade approved. Moved from {wasOn} to {booking.CourtName}, and {upgrade.BalanceDue:N2} was paid.");
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Upgrade {UpgradeId} approved at the desk. Booking {BookingId} moved to {BookableCourtId}.",
+            upgradeId,
+            booking.Id,
+            target.Id);
+
+        return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
+    }
+
+    public async Task<DeskResult<DeskUpgrade>> DeclineUpgradeAsync(
+        Guid userId,
+        Guid upgradeId,
+        string? reason,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var upgrade = await ForDeskUpgradeAsync(userId, upgradeId, ct);
+
+        if (upgrade is null)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotFound);
+        }
+
+        if (upgrade.Status != UpgradeStatus.AwaitingApproval)
+        {
+            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotWaiting);
+        }
+
+        upgrade.Decline(userId, reason, timeProvider.GetUtcNow());
+
+        Record(
+            actor,
+            AuditAction.BookingUpgradeDeclined,
+            upgrade.Booking,
+            reason,
+            $"Upgrade to {upgrade.ToCourtName} was declined. The booking stays where it is.");
+
+        await db.SaveChangesAsync(ct);
+
+        // No letter yet, for the same reason a rejected booking gets none: a
+        // refusal needs somewhere for the customer to answer from, and that is
+        // the message thread, which is not built.
+        logger.LogInformation(
+            "Upgrade {UpgradeId} was declined at the desk. The customer has not been emailed.",
+            upgradeId);
+
+        return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
+    }
+
+    /// <summary>
+    /// The upgrade, tracked, and only if its booking sits at a venue this
+    /// person works. One elsewhere answers the same as one that is not there.
+    /// </summary>
+    private async Task<BookingUpgradeRequest?> ForDeskUpgradeAsync(
+        Guid userId,
+        Guid upgradeId,
+        CancellationToken ct)
+    {
+        var venueIds = VenueQuery(userId).Select(facility => facility.Id);
+
+        return await db.BookingUpgradeRequests
+            .Include(row => row.Slots)
+            .Include(row => row.Booking)
+            .ThenInclude(booking => booking.Slots)
+            .SingleOrDefaultAsync(
+                row => row.Id == upgradeId
+                    && venueIds.Contains(row.Booking.BookableCourt.Court.FacilityId),
+                ct);
+    }
+
+    /// <summary>
+    /// Whether anybody else holds one of the hours being asked for.
+    ///
+    /// An upgrade holds its hours with a clock rather than a lock — the court
+    /// stays on sale while the customer pays — so this is the last place a
+    /// clash can be caught before two people are sent to the same floor.
+    /// </summary>
+    private async Task<bool> IsTakenAsync(
+        Domain.Facilities.BookableCourt target,
+        Guid exceptBooking,
+        IReadOnlyCollection<BookingUpgradeSlot> wanted,
+        DateTimeOffset utcNow,
+        CancellationToken ct)
+    {
+        var dates = wanted.Select(slot => slot.Date).Distinct().ToArray();
+        var live = BookingStatuses.Live;
+
+        var held = await db.BookingSlots
+            .AsNoTracking()
+            .Where(slot =>
+                slot.CourtId == target.CourtId
+                && dates.Contains(slot.Date)
+                && slot.BookingId != exceptBooking
+                && live.Contains(slot.Booking.Status)
+                // The same rule as Booking.HasLapsedAt, asked in SQL: an unpaid
+                // hold that has run out with no receipt holds nothing.
+                && (slot.Booking.Status != BookingStatus.PendingPayment
+                    || slot.Booking.ReceiptUrl != null
+                    || utcNow < slot.Booking.HoldsUntil))
+            .Select(slot => new
+            {
+                slot.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                slot.BookableCourt.CourtSportId,
+                slot.BookableCourt.DivisionNumber
+            })
+            .ToListAsync(ct);
+
+        return held
+            .Where(slot => target.ClashesWith(slot.CourtSportId, slot.DivisionNumber))
+            .Any(slot => wanted.Any(want =>
+                want.Date == slot.Date && want.StartsAt < slot.EndsAt && slot.StartsAt < want.EndsAt));
+    }
+
+    /// <summary>
+    /// The venue's own wall clock. A court is played at the time the floor is
+    /// in, never at the time the server happens to keep.
+    /// </summary>
+    private async Task<DateTimeOffset> VenueNowAsync(
+        Guid facilityId,
+        DateTimeOffset utcNow,
+        CancellationToken ct)
+    {
+        var timeZone = await db.Facilities
+            .AsNoTracking()
+            .Where(facility => facility.Id == facilityId)
+            .Select(facility => facility.TimeZone)
+            .SingleOrDefaultAsync(ct);
+
+        return timeZone is not null && TimeZoneInfo.TryFindSystemTimeZoneById(timeZone, out var zone)
+            ? TimeZoneInfo.ConvertTime(utcNow, zone)
+            : utcNow;
+    }
+
+    private async Task<DeskUpgrade> OneUpgradeAsync(Guid upgradeId, CancellationToken ct)
+    {
+        var row = await db.BookingUpgradeRequests
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == upgradeId)
+            .Select(candidate => new UpgradeRow(
+                candidate,
+                candidate.Booking,
+                candidate.Booking.BookableCourt.Court.FacilityId,
+                candidate.Booking.BookableCourt.Court.Facility.Name,
+                candidate.Booking.BookableCourt.CourtSport.Sport.Name,
+                candidate.Booking.BookableCourt.CourtSport.Sport.Key,
+                db.Users
+                    .Where(user => user.Id == candidate.RequestedByUserId)
+                    .Select(user => new Person(user.FullName, user.Email, user.PhoneNumber))
+                    .FirstOrDefault(),
+                candidate.Booking.Slots.ToList(),
+                candidate.Slots.ToList()))
+            .SingleAsync(ct);
+
+        return Upgrade(row);
+    }
+
+    private static DeskUpgrade Upgrade(UpgradeRow row)
+    {
+        var who = row.Customer ?? NobodyKnown;
+
+        return new DeskUpgrade(
+            row.Request.Id,
+            row.Request.BookingId,
+            row.FacilityId,
+            row.FacilityName,
+            who.FullName,
+            who.Email,
+            who.PhoneNumber,
+            row.SportName,
+            row.SportKey,
+            row.Booking.CourtName,
+            row.Request.ToBookableCourtId,
+            row.Request.ToCourtName,
+            row.Request.RentalNow,
+            row.Request.RentalNew,
+            row.Request.BalanceDue,
+            row.Request.Status,
+            row.Request.ReceiptUrl,
+            row.Request.ReceiptUploadedAt,
+            row.Request.CreatedAt,
+            row.Request.SettledAt,
+            row.Request.DeclineReason,
+            [
+                .. row.BookingSlots
+                    .OrderBy(slot => slot.Date)
+                    .ThenBy(slot => slot.StartsAt)
+                    .Select(slot => new BookedSlot(
+                        slot.Date,
+                        slot.StartsAt,
+                        slot.EndsAt,
+                        slot.RateKind.ToString(),
+                        slot.Amount,
+                        slot.PlatformFee))
+            ],
+            [
+                .. row.WantedSlots
+                    .OrderBy(slot => slot.Date)
+                    .ThenBy(slot => slot.StartsAt)
+                    .Select(slot => new BookedSlot(
+                        slot.Date,
+                        slot.StartsAt,
+                        slot.EndsAt,
+                        slot.RateKind.ToString(),
+                        slot.Amount,
+                        slot.PlatformFee))
+            ]);
+    }
+
+    private sealed record UpgradeRow(
+        BookingUpgradeRequest Request,
+        Booking Booking,
+        Guid FacilityId,
+        string FacilityName,
+        string SportName,
+        string SportKey,
+        Person? Customer,
+        IReadOnlyCollection<BookingSlot> BookingSlots,
+        IReadOnlyCollection<BookingUpgradeSlot> WantedSlots);
+
     /// <summary>
     /// Whether this court sits in a venue they work. Asked before every read of
     /// one court, so a court id from elsewhere answers the same as a made-up one.
@@ -558,6 +944,21 @@ public sealed class DeskService(
     }
 
     private void Record(AuditActor actor, string action, Booking booking, string? reason) =>
+        Record(actor, action, booking, reason, null);
+
+    /// <summary>
+    /// Writes what the desk just did into the platform's trail.
+    ///
+    /// The description is written for the customer to read, because the same
+    /// trail is what their own booking history reads back. Without one, an
+    /// entry can only say the name of the action it was.
+    /// </summary>
+    private void Record(
+        AuditActor actor,
+        string action,
+        Booking booking,
+        string? reason,
+        string? description) =>
         audit.RecordEvent(
             actor,
             action,
@@ -565,6 +966,7 @@ public sealed class DeskService(
             booking.Id,
             new Dictionary<string, string?>
             {
+                ["description"] = description,
                 ["court"] = booking.CourtName,
                 ["dates"] = booking.StartDate == booking.EndDate
                     ? booking.StartDate.ToString("yyyy-MM-dd")

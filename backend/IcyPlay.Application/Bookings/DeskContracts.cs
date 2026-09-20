@@ -155,6 +155,78 @@ public sealed record UpdateDeskSettingsRequest(
 
 public sealed record RejectBookingRequest(string? Reason);
 
+/// <summary>
+/// One upgrade as the venue's desk sees it.
+///
+/// Both sides of the swap are carried — the hours the booking holds now and the
+/// hours it is asking for — because the question at the desk is not "is this
+/// receipt real" alone. It is "is this receipt real, and is this court actually
+/// free", and answering the second needs both halves side by side.
+/// </summary>
+public sealed record DeskUpgrade(
+    Guid Id,
+    Guid BookingId,
+    Guid FacilityId,
+    string FacilityName,
+    string CustomerName,
+    string CustomerEmail,
+    string? CustomerPhone,
+    string SportName,
+    /// <summary>The sport's stable key, for artwork.</summary>
+    string SportKey,
+    /// <summary>The court the booking is on now.</summary>
+    string FromCourtName,
+    Guid ToBookableCourtId,
+    /// <summary>The court asked for, named as it was when the upgrade was asked for.</summary>
+    string ToCourtName,
+    /// <summary>What the booking's hours come to now, in court rental alone.</summary>
+    decimal RentalNow,
+    /// <summary>What the asked-for hours come to, at the price quoted.</summary>
+    decimal RentalNew,
+    /// <summary>The difference, fixed when the upgrade was asked for.</summary>
+    decimal BalanceDue,
+    string Status,
+    /// <summary>The receipt the customer sent. The whole point of the page.</summary>
+    string? ReceiptUrl,
+    DateTimeOffset? ReceiptUploadedAt,
+    DateTimeOffset RequestedAt,
+    DateTimeOffset? SettledAt,
+    /// <summary>Why the desk said no, when it did.</summary>
+    string? DeclineReason,
+    /// <summary>The hours the booking holds today.</summary>
+    IReadOnlyCollection<BookedSlot> HoursNow,
+    /// <summary>The hours it is asking for.</summary>
+    IReadOnlyCollection<BookedSlot> HoursWanted);
+
+/// <summary>
+/// Which pile of upgrades the desk is looking at.
+///
+/// The same split as the booking queue, for the same reason: what is waiting is
+/// work and what is settled is a record, and mixing them buries the two that
+/// need doing under the thirty that are done.
+/// </summary>
+public static class DeskUpgradeTab
+{
+    /// <summary>Paid and handed over, waiting on somebody at the venue.</summary>
+    public const string Waiting = "Waiting";
+
+    /// <summary>Approved or declined. History.</summary>
+    public const string Settled = "Settled";
+
+    public static readonly IReadOnlyCollection<string> All = [Waiting, Settled];
+
+    public static bool IsSupported(string value) => All.Contains(value);
+}
+
+public sealed record DeskUpgradeQuery(
+    string Tab = DeskUpgradeTab.Waiting,
+    /// <summary>Null means every venue this person works.</summary>
+    Guid? FacilityId = null,
+    int Page = 1,
+    int PageSize = 10);
+
+public sealed record DeclineUpgradeRequest(string? Reason);
+
 public enum DeskFailure
 {
     None,
@@ -169,7 +241,24 @@ public enum DeskFailure
     /// <summary>Not a status anybody can ask for.</summary>
     UnknownStatus,
     /// <summary>More days than a diary will answer for in one go.</summary>
-    WindowTooWide
+    WindowTooWide,
+    /// <summary>No upgrade of that id at a venue this person works.</summary>
+    UpgradeNotFound,
+    /// <summary>Already decided. A second press must not undo the first.</summary>
+    UpgradeNotWaiting,
+    /// <summary>
+    /// Somebody else has taken those hours since the upgrade was asked for.
+    ///
+    /// An upgrade holds its hours with a clock, not with a lock — the court
+    /// stays on sale while the customer pays. So the desk is the last place
+    /// this can be caught, and approving anyway would double-book the floor.
+    /// </summary>
+    UpgradeHoursTaken,
+    /// <summary>
+    /// Hours have been played since the upgrade was asked for, so the swap no
+    /// longer adds up. Better to say so than to guess which hours it meant.
+    /// </summary>
+    UpgradeStale
 }
 
 public sealed record DeskResult<T>(T? Value, DeskFailure Failure = DeskFailure.None)

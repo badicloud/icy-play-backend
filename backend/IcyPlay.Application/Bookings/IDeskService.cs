@@ -74,6 +74,44 @@ public interface IDeskService
     /// rejected booking holds nothing.
     /// </summary>
     /// <summary>
+    /// Upgrades customers have paid for and handed over, and the ones already
+    /// settled.
+    ///
+    /// Its own queue rather than a row in the booking queue: an upgrade is a
+    /// different decision. A booking confirmation asks whether a payment is
+    /// real; this asks that and whether a particular court is free, and the
+    /// two need different things on screen.
+    /// </summary>
+    Task<DeskResult<PagedResult<DeskUpgrade>>> UpgradesAsync(
+        Guid userId,
+        DeskUpgradeQuery query,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Says the payment is good and moves the booking onto the better court.
+    ///
+    /// This is the only place a booking moves without the customer asking,
+    /// because it is the one they already asked for and paid for. The hours
+    /// they leave go back on sale the moment it lands.
+    /// </summary>
+    Task<DeskResult<DeskUpgrade>> ApproveUpgradeAsync(
+        Guid userId,
+        Guid upgradeId,
+        AuditActor actor,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Says no, with a reason the customer is shown. The booking stays exactly
+    /// where it was.
+    /// </summary>
+    Task<DeskResult<DeskUpgrade>> DeclineUpgradeAsync(
+        Guid userId,
+        Guid upgradeId,
+        string? reason,
+        AuditActor actor,
+        CancellationToken ct);
+
+    /// <summary>
     /// What this venue has set for itself, with the range each dial allows so
     /// the panel can say what is possible rather than refusing after the fact.
     /// </summary>

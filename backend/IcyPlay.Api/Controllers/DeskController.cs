@@ -197,6 +197,77 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// Upgrades customers have paid for and handed over, and the ones already
+    /// settled.
+    /// </summary>
+    [HttpGet("upgrades")]
+    public async Task<IActionResult> Upgrades(
+        [FromQuery] string tab = DeskUpgradeTab.Waiting,
+        [FromQuery] Guid? facilityId = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.UpgradesAsync(
+            userId,
+            new DeskUpgradeQuery(tab, facilityId, page, pageSize),
+            ct);
+
+        if (!result.Succeeded)
+        {
+            return Failure(result.Failure);
+        }
+
+        var paged = result.Value!;
+
+        return Ok(new ApiListEnvelope<DeskUpgrade>(
+            paged.Items,
+            new PaginationMeta(paged.Page, paged.PageSize, paged.TotalItems, paged.TotalPages)));
+    }
+
+    /// <summary>
+    /// Says the payment is good and moves the booking onto the better court.
+    /// </summary>
+    [HttpPost("upgrades/{upgradeId:guid}/approve")]
+    public async Task<IActionResult> ApproveUpgrade(Guid upgradeId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.ApproveUpgradeAsync(userId, upgradeId, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskUpgrade>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Says no, with a reason. The booking stays exactly where it was.</summary>
+    [HttpPost("upgrades/{upgradeId:guid}/decline")]
+    public async Task<IActionResult> DeclineUpgrade(
+        Guid upgradeId,
+        DeclineUpgradeRequest? request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.DeclineUpgradeAsync(userId, upgradeId, request?.Reason, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskUpgrade>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     [HttpGet("settings")]
     public async Task<IActionResult> Settings(CancellationToken ct)
     {
@@ -333,6 +404,24 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "That is not a booking status."),
+            DeskFailure.UpgradeNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "That upgrade is not one of yours to decide."),
+            DeskFailure.UpgradeNotWaiting => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Somebody has already decided this one."),
+            DeskFailure.UpgradeHoursTaken => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Those hours have been taken since this was asked for, so this upgrade " +
+                "cannot go ahead. Decline it and the customer keeps the booking they have."),
+            DeskFailure.UpgradeStale => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Hours on this booking have been played since the upgrade was asked for, " +
+                "so it no longer adds up. Decline it and ask the customer to choose again."),
             DeskFailure.WindowTooWide => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
