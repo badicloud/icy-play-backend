@@ -1015,9 +1015,9 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task QuoteMoveAsync_ShouldSayWhetherTheBookingIsOnTheVenuesToday()
+    public async Task QuoteMoveAsync_ShouldSayWhetherTheBookingHasBegun()
     {
-        // Arrange: one booking on the venue's today and one still to come.
+        // Arrange: one booking, asked about from three moments.
         await using var context = database.CreateContext();
         var floor = await FloorAsync(context, "Today Or Not Courts");
         var sut = CreateService(context);
@@ -1034,28 +1034,52 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         var thatMorning = CreateService(context, onTheDay);
 
+        // Half past seven at the venue, which is half eleven the night before
+        // in UTC. The booking's hour has begun and not yet ended.
+        var underWay = CreateService(
+            context,
+            new DateTimeOffset(Tuesday.ToDateTime(new TimeOnly(23, 30)), TimeSpan.Zero));
+
         // Act
-        var asLater = await sut.QuoteMoveAsync(
+        var daysAway = await sut.QuoteMoveAsync(
             later,
             floor.Customer,
             floor.Pickleball2,
             null,
             CancellationToken.None);
 
-        var asToday = await thatMorning.QuoteMoveAsync(
+        var anHourBefore = await thatMorning.QuoteMoveAsync(
             later,
             floor.Customer,
             floor.Pickleball2,
             null,
+            CancellationToken.None);
+
+        // Asked onto a later hour, because an hour that has begun is shut on
+        // every court — so a booking under way cannot be quoted onto its own
+        // time, only onto time still ahead of it.
+        var midWay = await underWay.QuoteMoveAsync(
+            later,
+            floor.Customer,
+            floor.Pickleball2,
+            [new BookingSlotInput(Wednesday, new TimeOnly(10, 0))],
             CancellationToken.None);
 
         // Assert: this is what the move screen reads to decide whether to offer
-        // dates at all, and it is asked per request because "today" turns over
-        // while the screen is open.
+        // dates at all, and it is asked per request because it turns over while
+        // the screen is open.
         using (new AssertionScope())
         {
-            asLater.Value!.StartsToday.Should().BeFalse();
-            asToday.Value!.StartsToday.Should().BeTrue();
+            daysAway.Value!.IsInPlay.Should().BeFalse();
+
+            // The case this used to get wrong. It asked whether the hours fell
+            // on the venue's today, so a booking at seven was refused a date at
+            // six in the morning — today, an hour off, and nowhere near begun.
+            // The server would have moved it to tomorrow; only the screen said
+            // no.
+            anHourBefore.Value!.IsInPlay.Should().BeFalse();
+
+            midWay.Value!.IsInPlay.Should().BeTrue();
         }
     }
 
@@ -1813,8 +1837,13 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             stored.ReceiptUrl.Should().Be(Receipt);
             stored.ReceiptUploadedAt.Should().NotBeNull();
 
-            // Still the customer's turn: uploading is not sending.
-            stored.Status.Should().Be(UpgradeStatus.AwaitingPayment);
+            // Uploading IS sending. It was not, and the gap between the two
+            // left an upgrade paid for and holding its hours where no desk
+            // could see it.
+            stored.Status.Should().Be(UpgradeStatus.AwaitingApproval);
+
+            // And the hold stops mattering: somebody who has paid must not
+            // lose their hours to a queue they are not in.
             stored.HoldsTheCourtAt(stored.HoldsUntil.AddHours(1)).Should().BeTrue();
         }
     }
@@ -1854,7 +1883,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task SubmitUpgradeAsync_ShouldHandItToTheVenueAndLeaveTheBookingWhereItIs()
+    public async Task AttachUpgradeReceiptAsync_ShouldHandItToTheVenueAndLeaveTheBookingWhereItIs()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -1870,14 +1899,12 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new MoveBookingRequest(dearer),
             CancellationToken.None);
 
-        await sut.AttachUpgradeReceiptAsync(
+        // Act
+        var sent = await sut.AttachUpgradeReceiptAsync(
             booking,
             floor.Customer,
             new AttachReceiptRequest(Receipt),
             CancellationToken.None);
-
-        // Act
-        var sent = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
 
         // Assert: it is the venue's turn, and the booking has still not moved.
         // Sending money is not the same as being given the court.
@@ -1897,7 +1924,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task SubmitUpgradeAsync_ShouldRefuseWhenNoReceiptHasBeenUploaded()
+    public async Task AttachUpgradeReceiptAsync_ShouldRefuseAnUpgradeThatWasNeverAskedFor()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -1906,26 +1933,24 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
 
-        await sut.RequestUpgradeAsync(
+        // Act: no upgrade was ever asked for on this booking.
+        var sent = await sut.AttachUpgradeReceiptAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new AttachReceiptRequest(Receipt),
             CancellationToken.None);
 
-        // Act
-        var sent = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
-
-        // Assert: there is nothing for the venue to look at, so handing them
-        // the queue entry would only waste somebody's afternoon.
+        // Assert: there is nothing to attach it to. A receipt on its own is
+        // not a request to upgrade anything.
         using (new AssertionScope())
         {
             sent.Succeeded.Should().BeFalse();
-            sent.Failure.Should().Be(BookingFailure.NoReceipt);
+            sent.Failure.Should().Be(BookingFailure.MoveRequestNotFound);
         }
     }
 
     [Fact]
-    public async Task SubmitUpgradeAsync_ShouldRefuseASecondSending()
+    public async Task AttachUpgradeReceiptAsync_ShouldTakeAReplacementWhileTheVenueIsLooking()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -1947,17 +1972,24 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new AttachReceiptRequest(Receipt),
             CancellationToken.None);
 
-        await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+        const string better =
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/clearer-receipt.jpg";
 
         // Act
-        var again = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+        var again = await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(better),
+            CancellationToken.None);
 
-        // Assert: it is out of the customer's hands. Changing a receipt the
-        // venue is already looking at would change it while they look.
+        // Assert: sending the wrong picture is the one mistake worth being
+        // able to undo, and without this the only way out is to ring the
+        // venue. It stays with them either way.
         using (new AssertionScope())
         {
-            again.Succeeded.Should().BeFalse();
-            again.Failure.Should().Be(BookingFailure.NotAwaitingPayment);
+            again.Succeeded.Should().BeTrue();
+            again.Value!.ReceiptUrl.Should().Be(better);
+            again.Value.Status.Should().Be(UpgradeStatus.AwaitingApproval);
         }
     }
 

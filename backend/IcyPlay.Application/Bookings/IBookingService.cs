@@ -119,25 +119,19 @@ public interface IBookingService
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Records the receipt for an upgrade the customer has paid.
+    /// Takes the receipt for an upgrade and hands it to the venue, in one go.
     ///
-    /// Confirms nothing. What it does do is stop the clock: from here the hours
-    /// are held until the venue answers, because somebody who has paid must not
-    /// lose them to a queue they are not in.
+    /// One action, the same as a booking's own receipt: the second step
+    /// contradicted the message above it, which already said the venue was
+    /// checking. Confirms nothing, and stops the clock — somebody who has paid
+    /// must not lose their hours to a queue they are not in.
+    ///
+    /// Also takes a replacement while the venue is still looking.
     /// </summary>
     Task<BookingResult<UpgradeRequestResponse>> AttachUpgradeReceiptAsync(
         Guid bookingId,
         Guid customerUserId,
         AttachReceiptRequest request,
-        CancellationToken cancellationToken);
-
-    /// <summary>
-    /// Hands the upgrade to the venue to check. From here it is their turn, and
-    /// the booking still has not moved.
-    /// </summary>
-    Task<BookingResult<UpgradeRequestResponse>> SubmitUpgradeAsync(
-        Guid bookingId,
-        Guid customerUserId,
         CancellationToken cancellationToken);
 
     /// <summary>

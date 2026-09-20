@@ -408,16 +408,21 @@ public sealed record MoveQuoteResponse(
     /// <summary>Minutes the new court is held for while the difference is paid.</summary>
     int HoldMinutes,
     /// <summary>
-    /// Whether the hours still to be played fall on the venue's today.
+    /// Whether the booking has begun, on the venue's clock.
     ///
     /// What the move screen reads to decide whether to offer dates at all: a
-    /// booking today can change its hours but not its day, and one still to
-    /// come can change both. Answered per request rather than once with the
-    /// booking, because "today" turns over while the screen is open — opened
-    /// at two minutes to midnight and answered at one minute past, the honest
-    /// answer is a different one.
+    /// booking under way can change court but not when it is, and one that has
+    /// not started can change both.
+    ///
+    /// This used to ask whether the hours fell on the venue's today, which is
+    /// a different and stricter question. A booking at eight tonight is today
+    /// and has not begun, and there was never a reason it could not be carried
+    /// to tomorrow — the server would have taken it. Only this screen said no.
+    ///
+    /// Answered per request rather than once with the booking, because it
+    /// turns over while the screen is open.
     /// </summary>
-    bool StartsToday)
+    bool IsInPlay)
 {
     public bool IsUpgrade => BalanceDue > 0m;
 }

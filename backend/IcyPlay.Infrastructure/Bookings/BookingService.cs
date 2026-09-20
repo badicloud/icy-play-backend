@@ -479,9 +479,11 @@ public sealed class BookingService(
         var upgrade = found.Value!;
         var utcNow = timeProvider.GetUtcNow();
 
-        // Already sent. A second receipt after the venue has it would change
-        // what they are looking at while they look at it.
-        if (upgrade.Status != UpgradeStatus.AwaitingPayment)
+        // Waiting to be paid for, or already with the venue and having the
+        // picture swapped for a better one. Anything else is settled.
+        var waiting = upgrade.Status == UpgradeStatus.AwaitingPayment;
+
+        if (!waiting && upgrade.Status != UpgradeStatus.AwaitingApproval)
         {
             return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NotAwaitingPayment);
         }
@@ -510,54 +512,38 @@ public sealed class BookingService(
         }
 
         upgrade.AttachReceipt(request.ReceiptUrl, utcNow);
-        await db.SaveChangesAsync(ct);
-
-        return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
-    }
-
-    public async Task<BookingResult<UpgradeRequestResponse>> SubmitUpgradeAsync(
-        Guid bookingId,
-        Guid customerUserId,
-        CancellationToken ct)
-    {
-        var found = await FindOpenUpgradeAsync(bookingId, customerUserId, ct);
-
-        if (!found.Succeeded)
-        {
-            return BookingResult<UpgradeRequestResponse>.Fail(found.Failure);
-        }
-
-        var upgrade = found.Value!;
-        var utcNow = timeProvider.GetUtcNow();
-
-        if (upgrade.Status != UpgradeStatus.AwaitingPayment)
-        {
-            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NotAwaitingPayment);
-        }
-
-        if (string.IsNullOrWhiteSpace(upgrade.ReceiptUrl))
-        {
-            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NoReceipt);
-        }
-
-        upgrade.Submit(utcNow);
 
         var booking = await db.Bookings
             .Include(candidate => candidate.Slots)
             .SingleAsync(candidate => candidate.Id == bookingId, ct);
 
-        Record(
-            customerUserId,
-            AuditAction.BookingUpgradePaymentSubmitted,
-            booking,
-            $"Sent {upgrade.BalanceDue:N2} to the venue for the upgrade to {upgrade.ToCourtName}, waiting for them to check it.");
+        // Sending the receipt IS the submission, the same as it is on a
+        // booking's own checkout. They were two steps, and the second one
+        // contradicted the message above it: the page already said the venue
+        // was checking, then asked you to send it.
+        if (waiting)
+        {
+            upgrade.Submit(utcNow);
+
+            Record(
+                customerUserId,
+                AuditAction.BookingUpgradePaymentSubmitted,
+                booking,
+                $"Sent {upgrade.BalanceDue:N2} to the venue for the upgrade to {upgrade.ToCourtName}, waiting for them to check it.");
+        }
+        else
+        {
+            // The venue already has one and is being handed another. Recorded,
+            // because the desk must be able to see that what it is looking at
+            // is not what it was first shown.
+            Record(
+                customerUserId,
+                AuditAction.BookingUpgradePaymentSubmitted,
+                booking,
+                $"Sent a different receipt for the upgrade to {upgrade.ToCourtName}.");
+        }
 
         await db.SaveChangesAsync(ct);
-
-        logger.LogInformation(
-            "Upgrade {UpgradeId} on booking {BookingId} submitted for verification.",
-            upgrade.Id,
-            bookingId);
 
         return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
     }
@@ -715,7 +701,7 @@ public sealed class BookingService(
         quote.RentalNew,
         Math.Max(0m, quote.RentalNew - quote.RentalNow),
         quote.HoldMinutes,
-        quote.StartsToday);
+        quote.IsInPlay);
 
     /// <summary>
     /// What a booking would come to on another court, and what that leaves the
@@ -878,9 +864,15 @@ public sealed class BookingService(
             rentalNow,
             rentalNew,
             target.HoldMinutes,
-            // The first hour still to be played, against the venue's today. A
-            // booking on today can change its hours but not its day.
-            toMove[0].Date == target.Today(utcNow)));
+            // Has the first hour begun, on the venue's clock. A booking under
+            // way can change court but not when it is; one that has not
+            // started can change both.
+            //
+            // This asked whether the hours fell on the venue's today, which
+            // refused a date to every booking later the same day — an eight
+            // o'clock tonight is today and has not begun, and the server would
+            // happily have moved it to tomorrow.
+            ordered[0].Date.ToDateTime(ordered[0].StartsAt) <= venueNow.DateTime));
     }
 
     /// <summary>
@@ -1576,10 +1568,10 @@ public sealed class BookingService(
         decimal RentalNew,
         int HoldMinutes,
         /// <summary>
-        /// Whether the hours still to be played fall on the venue's today,
-        /// which is what decides whether the move screen offers dates.
+        /// Whether the booking has begun on the venue's clock, which is what
+        /// decides whether the move screen offers dates.
         /// </summary>
-        bool StartsToday);
+        bool IsInPlay);
 
     // -------------------------------------------------------------- the rules
 

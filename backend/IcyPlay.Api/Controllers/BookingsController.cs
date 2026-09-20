@@ -276,26 +276,6 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
-    /// Hands the upgrade to the venue to check. The booking still does not
-    /// move: that happens when somebody there says yes.
-    /// </summary>
-    [HttpPost("{bookingId:guid}/upgrade/submit")]
-    [Authorize(Roles = UserRoleName.Customer)]
-    public async Task<IActionResult> SubmitUpgrade(Guid bookingId, CancellationToken ct)
-    {
-        if (CurrentUserId() is not Guid userId)
-        {
-            return Unauthorized();
-        }
-
-        var result = await bookings.SubmitUpgradeAsync(bookingId, userId, ct);
-
-        return result.Succeeded
-            ? Ok(new ApiEnvelope<UpgradeRequestResponse>(result.Value!))
-            : Failure(result.Failure);
-    }
-
-    /// <summary>
     /// Records the receipt the browser has just put in Cloudinary. The file
     /// never passes through here — only the link to it, which is checked.
     /// </summary>
