@@ -413,13 +413,18 @@ public static class BookingMove
     /// <summary>
     /// Whether a booking in this state may still be moved.
     ///
-    /// Before it starts, and while it is being played: a court that floods at
-    /// two o'clock is exactly when a move is worth most. Once the last hour has
-    /// been played there is nothing left to move — that is a refund, and there
-    /// are none.
+    /// Confirmed only. A booking whose payment the venue has not checked yet
+    /// might still be turned down, and moving one shuffles courts around an
+    /// agreement that may never stand — the hours it leaves go back on sale,
+    /// and the hours it takes come off it, for a booking that then evaporates.
+    ///
+    /// Confirmed covers both before it starts and while it is being played: a
+    /// court that floods at two o'clock is exactly when a move is worth most.
+    /// Once the last hour has been played there is nothing left to move — that
+    /// is a refund, and there are none.
     /// </summary>
     public static bool IsMovable(BookingStatus status) =>
-        status is BookingStatus.PendingVerification or BookingStatus.Confirmed;
+        status is BookingStatus.Confirmed;
 }
 
 public static class BookingStatuses

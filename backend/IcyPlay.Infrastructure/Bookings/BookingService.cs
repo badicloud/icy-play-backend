@@ -1,8 +1,11 @@
 using System.Data;
+using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Storage;
+using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
+using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -20,6 +23,7 @@ public sealed class BookingService(
     AppDbContext db,
     ICloudinaryAssetService assets,
     IBookingNotifier notifier,
+    IAuditLogger audit,
     TimeProvider timeProvider,
     ILogger<BookingService> logger) : IBookingService
 {
@@ -204,6 +208,12 @@ public sealed class BookingService(
                 takenAt));
         }
 
+        Record(
+            customerUserId,
+            AuditAction.BookingCreated,
+            booking,
+            $"Booked {booking.CourtName} for {Hours(booking)}.");
+
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
 
@@ -239,17 +249,6 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
         }
 
-        // One open request at a time, or the customer and the venue can be
-        // moving the same booking to two different courts at once.
-        if (await db.BookingMoveRequests.AnyAsync(
-                candidate => candidate.BookingId == booking.Id &&
-                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
-                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
-                ct))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveAlreadyRequested);
-        }
-
         var limit = await MoveLimitAsync(booking, ct);
 
         if (booking.MoveCount >= limit)
@@ -257,7 +256,7 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.MoveLimitReached);
         }
 
-        var quoted = await QuoteAsync(booking, request.ToBookableCourtId, ct);
+        var quoted = await QuoteAsync(booking, request.ToBookableCourtId, request.Slots, ct);
 
         if (!quoted.Succeeded)
         {
@@ -265,110 +264,59 @@ public sealed class BookingService(
         }
 
         var quote = quoted.Value!;
+
+        // Dearer hours are refused rather than absorbed.
+        //
+        // The move happens the moment it is asked for: the venue is not asked
+        // to approve it and the customer is not sent to a checkout, so there is
+        // no step left where money could change hands. Letting this through
+        // would hand the customer better hours and hand the venue the bill,
+        // without either of them being asked.
+        //
+        // Court rental on both sides. The platform fee is charged per hour
+        // booked and a move buys no hours, so counting it would refuse a move
+        // between two courts that cost exactly the same.
+        if (quote.RentalNew > quote.RentalNow)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveCostsMore);
+        }
+
         var utcNow = timeProvider.GetUtcNow();
+        var wasOn = booking.CourtName;
+        var wasFor = Hours(booking);
 
-        var moveRequest = new BookingMoveRequest(
-            booking.Id,
-            request.ToBookableCourtId,
-            quote.ToCourtName,
-            MoveInitiator.Customer,
+        // Nothing settled: a cheaper court is not a refund, which is the rule
+        // the booking policy states and the move screen repeats.
+        Apply(booking, quote, settled: 0m, countsAgainstTheLimit: true, utcNow);
+
+        // Written after the move, so the entry describes where it landed, and
+        // carrying where it came from — which the booking itself no longer
+        // says, because a booking only ever knows where it is now.
+        Record(
             customerUserId,
-            null,
-            booking.PaidTotal,
-            quote.NewTotal,
-            quote.HoldMinutes,
-            utcNow);
+            AuditAction.BookingMoved,
+            booking,
+            wasOn == booking.CourtName
+                ? $"Moved from {wasFor} to {Hours(booking)}."
+                : $"Moved from {wasOn} ({wasFor}) to {booking.CourtName} ({Hours(booking)}).");
 
-        db.BookingMoveRequests.Add(moveRequest);
         await db.SaveChangesAsync(ct);
 
         logger.LogInformation(
-            "Booking {BookingId} asked to move to {BookableCourtId}, balance {BalanceDue}.",
+            "Booking {BookingId} moved to {BookableCourtId}, move {MoveCount} of {Limit}.",
             booking.Id,
             request.ToBookableCourtId,
-            moveRequest.BalanceDue);
+            booking.MoveCount,
+            limit);
 
         return await GetAsync(bookingId, customerUserId, ct);
     }
 
-    /// <summary>
-    /// The customer attaches the GCash receipt for the difference. The clock on
-    /// the held court stops here: from now on the wait is the venue's.
-    /// </summary>
-    public async Task<BookingResult<BookingDetail>> AttachMoveReceiptAsync(
-        Guid bookingId,
-        Guid customerUserId,
-        string receiptUrl,
-        CancellationToken ct)
-    {
-        if (!assets.IsTrustedSecureUrl(receiptUrl))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.UntrustedReceiptUrl);
-        }
-
-        var moveRequest = await OpenMoveAsync(bookingId, customerUserId, ct);
-
-        if (moveRequest is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
-        }
-
-        var utcNow = timeProvider.GetUtcNow();
-
-        if (!moveRequest.HoldsTheCourtAt(utcNow))
-        {
-            moveRequest.Expire(utcNow);
-            await db.SaveChangesAsync(ct);
-
-            return BookingResult<BookingDetail>.Fail(BookingFailure.HoldExpired);
-        }
-
-        moveRequest.AttachReceipt(receiptUrl, utcNow);
-        await db.SaveChangesAsync(ct);
-
-        return await GetAsync(bookingId, customerUserId, ct);
-    }
-
-    /// <summary>The customer thought better of it, and the held court goes back.</summary>
-    public async Task<BookingResult<BookingDetail>> WithdrawMoveAsync(
-        Guid bookingId,
-        Guid customerUserId,
-        CancellationToken ct)
-    {
-        var moveRequest = await OpenMoveAsync(bookingId, customerUserId, ct);
-
-        if (moveRequest is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.MoveRequestNotFound);
-        }
-
-        moveRequest.Withdraw(timeProvider.GetUtcNow());
-        await db.SaveChangesAsync(ct);
-
-        return await GetAsync(bookingId, customerUserId, ct);
-    }
-
-    private async Task<BookingMoveRequest?> OpenMoveAsync(
-        Guid bookingId,
-        Guid customerUserId,
-        CancellationToken ct) =>
-        await db.BookingMoveRequests
-            .Include(candidate => candidate.Booking)
-            .SingleOrDefaultAsync(
-                candidate => candidate.BookingId == bookingId &&
-                    candidate.Booking.CustomerUserId == customerUserId &&
-                    (candidate.Status == MoveRequestStatus.AwaitingPayment ||
-                        candidate.Status == MoveRequestStatus.AwaitingConfirmation),
-                ct);
-
-    /// <summary>
-    /// Prices a move without committing anybody to it, so the customer can be
-    /// told what it costs before they say yes.
-    /// </summary>
     public async Task<BookingResult<MoveQuoteResponse>> QuoteMoveAsync(
         Guid bookingId,
         Guid customerUserId,
         Guid toBookableCourtId,
+        IReadOnlyCollection<BookingSlotInput>? wanted,
         CancellationToken ct)
     {
         var booking = await db.Bookings
@@ -382,17 +330,365 @@ public sealed class BookingService(
             return BookingResult<MoveQuoteResponse>.Fail(BookingFailure.CourtNotFound);
         }
 
-        var quoted = await QuoteAsync(booking, toBookableCourtId, ct);
+        var quoted = await QuoteAsync(booking, toBookableCourtId, wanted, ct);
 
         return quoted.Succeeded
             ? BookingResult<MoveQuoteResponse>.Success(Quoted(booking, quoted.Value!))
             : BookingResult<MoveQuoteResponse>.Fail(quoted.Failure);
     }
 
+    public async Task<BookingResult<UpgradeRequestResponse>> RequestUpgradeAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        MoveBookingRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        if (booking is null)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        // The same dial a free move is counted against. An upgrade is still a
+        // move, and paying for one must not be a way around the venue's limit.
+        var limit = await MoveLimitAsync(booking, ct);
+
+        if (booking.MoveCount >= limit)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.MoveLimitReached);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+        var open = await OpenUpgradeAsync(bookingId, utcNow, ct);
+
+        // One at a time. Two open requests and the customer can be paying for
+        // hours while the venue is approving different ones.
+        if (open is not null)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.MoveAlreadyRequested);
+        }
+
+        var quoted = await QuoteAsync(booking, request.ToBookableCourtId, request.Slots, ct);
+
+        if (!quoted.Succeeded)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(quoted.Failure);
+        }
+
+        var quote = quoted.Value!;
+
+        // Nothing to pay is nothing to upgrade. That move is free and immediate,
+        // and sending somebody to a checkout for nought pesos is a step whose
+        // only effect is to make them wonder what they are being charged for.
+        if (quote.RentalNew <= quote.RentalNow)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NothingToUpgrade);
+        }
+
+        var upgrade = new BookingUpgradeRequest(
+            booking.Id,
+            quote.ToBookableCourtId,
+            quote.ToCourtName,
+            customerUserId,
+            quote.RentalNow,
+            quote.RentalNew,
+            quote.HoldMinutes,
+            utcNow);
+
+        // Copied off the quote rather than pointing at it: these are hours the
+        // booking does not hold yet, and may never hold. They carry the price
+        // they were quoted at, because that is the figure being paid against.
+        foreach (var slot in quote.Moved.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt))
+        {
+            upgrade.Slots.Add(new BookingUpgradeSlot(
+                upgrade.Id,
+                slot.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                slot.RateKind,
+                slot.Amount,
+                slot.PlatformFee,
+                utcNow));
+        }
+
+        db.BookingUpgradeRequests.Add(upgrade);
+
+        Record(
+            customerUserId,
+            AuditAction.BookingUpgradeRequested,
+            booking,
+            $"Asked to upgrade to {upgrade.ToCourtName} ({Hours(upgrade)}) for {upgrade.BalanceDue:N2}, waiting to be paid.");
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Booking {BookingId} asked to upgrade to {BookableCourtId} for {BalanceDue}.",
+            booking.Id,
+            upgrade.ToBookableCourtId,
+            upgrade.BalanceDue);
+
+        return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
+    }
+
+    public async Task<BookingResult<UpgradeRequestResponse?>> OpenUpgradeAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct)
+    {
+        var owned = await db.Bookings
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        // Another customer's booking answers the same as one that is not there.
+        if (!owned)
+        {
+            return BookingResult<UpgradeRequestResponse?>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var utcNow = timeProvider.GetUtcNow();
+        var open = await OpenUpgradeAsync(bookingId, utcNow, ct);
+
+        return BookingResult<UpgradeRequestResponse?>.Success(
+            open is null ? null : Upgraded(open, utcNow));
+    }
+
+    public async Task<BookingResult<UpgradeRequestResponse>> AttachUpgradeReceiptAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        AttachReceiptRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var found = await FindOpenUpgradeAsync(bookingId, customerUserId, ct);
+
+        if (!found.Succeeded)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(found.Failure);
+        }
+
+        var upgrade = found.Value!;
+        var utcNow = timeProvider.GetUtcNow();
+
+        // Already sent. A second receipt after the venue has it would change
+        // what they are looking at while they look at it.
+        if (upgrade.Status != UpgradeStatus.AwaitingPayment)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NotAwaitingPayment);
+        }
+
+        // Checked exactly as a booking's own receipt is. The browser reports
+        // where it put the file, so the link is the customer's word for it: a
+        // link off the platform's own Cloudinary account is one this venue
+        // would be shown and nobody here could vouch for.
+        if (!assets.IsTrustedSecureUrl(request.ReceiptUrl))
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.UntrustedReceiptUrl);
+        }
+
+        if (!IsImage(request.ReceiptUrl))
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.ReceiptNotAnImage);
+        }
+
+        // The court being upgraded to, not the one the booking is on. They are
+        // at the same venue, so the answer is the same — but asking about the
+        // court being paid for is the question that stays right if that ever
+        // stops being true.
+        if (!await CanBePaidAsync(upgrade.ToBookableCourtId, ct))
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.VenueCannotBePaid);
+        }
+
+        upgrade.AttachReceipt(request.ReceiptUrl, utcNow);
+        await db.SaveChangesAsync(ct);
+
+        return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
+    }
+
+    public async Task<BookingResult<UpgradeRequestResponse>> SubmitUpgradeAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct)
+    {
+        var found = await FindOpenUpgradeAsync(bookingId, customerUserId, ct);
+
+        if (!found.Succeeded)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(found.Failure);
+        }
+
+        var upgrade = found.Value!;
+        var utcNow = timeProvider.GetUtcNow();
+
+        if (upgrade.Status != UpgradeStatus.AwaitingPayment)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NotAwaitingPayment);
+        }
+
+        if (string.IsNullOrWhiteSpace(upgrade.ReceiptUrl))
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NoReceipt);
+        }
+
+        upgrade.Submit(utcNow);
+
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleAsync(candidate => candidate.Id == bookingId, ct);
+
+        Record(
+            customerUserId,
+            AuditAction.BookingUpgradePaymentSubmitted,
+            booking,
+            $"Sent {upgrade.BalanceDue:N2} to the venue for the upgrade to {upgrade.ToCourtName}, waiting for them to check it.");
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Upgrade {UpgradeId} on booking {BookingId} submitted for verification.",
+            upgrade.Id,
+            bookingId);
+
+        return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
+    }
+
+    /// <summary>
+    /// The customer's own open upgrade, tracked and ready to be changed.
+    ///
+    /// Both halves of paying for one start here, so the ownership check and the
+    /// "is there one at all" check are written once rather than twice.
+    /// </summary>
+    private async Task<BookingResult<BookingUpgradeRequest>> FindOpenUpgradeAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct)
+    {
+        var owned = await db.Bookings
+            .AsNoTracking()
+            .AnyAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        if (!owned)
+        {
+            return BookingResult<BookingUpgradeRequest>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var open = await OpenUpgradeAsync(bookingId, timeProvider.GetUtcNow(), ct);
+
+        // Nothing open covers both "never asked" and "the clock ran out while
+        // they were in GCash". The second is the one that will actually happen,
+        // and the message the customer sees says so.
+        return open is null
+            ? BookingResult<BookingUpgradeRequest>.Fail(BookingFailure.MoveRequestNotFound)
+            : BookingResult<BookingUpgradeRequest>.Success(open);
+    }
+
+    /// <summary>
+    /// The upgrade still holding hours on this booking, if any.
+    ///
+    /// An unpaid request that has run out of clock is let go here rather than
+    /// by a job somewhere: the hours it was holding are free the moment it
+    /// lapses, and the next thing to ask is the thing that should find out.
+    /// </summary>
+    private async Task<BookingUpgradeRequest?> OpenUpgradeAsync(
+        Guid bookingId,
+        DateTimeOffset utcNow,
+        CancellationToken ct)
+    {
+        var candidates = await db.BookingUpgradeRequests
+            .Include(candidate => candidate.Slots)
+            .Where(candidate =>
+                candidate.BookingId == bookingId
+                && (candidate.Status == UpgradeStatus.AwaitingPayment
+                    || candidate.Status == UpgradeStatus.AwaitingApproval))
+            .ToListAsync(ct);
+
+        var lapsed = candidates.Where(candidate => !candidate.HoldsTheCourtAt(utcNow)).ToArray();
+
+        foreach (var expired in lapsed)
+        {
+            expired.Expire(utcNow);
+        }
+
+        if (lapsed.Length > 0)
+        {
+            await db.SaveChangesAsync(ct);
+        }
+
+        return candidates.Except(lapsed).OrderByDescending(candidate => candidate.CreatedAt).FirstOrDefault();
+    }
+
+    private static UpgradeRequestResponse Upgraded(BookingUpgradeRequest upgrade, DateTimeOffset utcNow) => new(
+        upgrade.Id,
+        upgrade.BookingId,
+        upgrade.ToBookableCourtId,
+        upgrade.ToCourtName,
+        upgrade.RentalNow,
+        upgrade.RentalNew,
+        upgrade.BalanceDue,
+        upgrade.Status,
+        upgrade.HoldsUntil,
+        // Read against the server's clock, because that is the clock the hold
+        // was set by. A browser an hour out would otherwise send somebody away
+        // from hours they still hold, or keep them paying for hours they lost.
+        upgrade.Status == UpgradeStatus.AwaitingPayment
+            && upgrade.ReceiptUrl is null
+            && utcNow >= upgrade.HoldsUntil,
+        upgrade.ReceiptUrl,
+        upgrade.DeclineReason,
+        [
+            .. upgrade.Slots
+                .OrderBy(slot => slot.Date)
+                .ThenBy(slot => slot.StartsAt)
+                .Select(slot => new UpgradeSlotResponse(
+                    slot.Date,
+                    slot.StartsAt,
+                    slot.EndsAt,
+                    slot.Amount))
+        ]);
+
+    /// <summary>The hours an upgrade is asking for, as a person would say them.</summary>
+    private static string Hours(BookingUpgradeRequest upgrade)
+    {
+        var ordered = upgrade.Slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        if (ordered.Length == 0)
+        {
+            return "no hours";
+        }
+
+        var first = ordered[0];
+        var last = ordered[^1];
+
+        return first.Date == last.Date
+            ? $"{first.Date:d MMM}, {first.StartsAt:h:mm tt} to {last.EndsAt:h:mm tt}"
+            : $"{first.Date:d MMM} to {last.Date:d MMM}";
+    }
+
+    /// <summary>
+    /// Puts the booking on the new court: the hours that moved replace the ones
+    /// that did not, and the hours already played keep their own court on each
+    /// slot, so a session that changed courts half way through can still say
+    /// which half was where.
+    /// </summary>
     private void Apply(
         Booking booking,
-        BookingMoveRequest moveRequest,
         MoveQuote quote,
+        decimal settled,
         bool countsAgainstTheLimit,
         DateTimeOffset now)
     {
@@ -407,25 +703,19 @@ public sealed class BookingService(
             now);
 
         db.BookingSlots.AddRange(quote.Moved);
-        booking.Settle(moveRequest.BalanceDue, now);
+        booking.Settle(settled, now);
     }
-
-    private async Task<bool> HasOpenMoveAsync(Guid bookingId, CancellationToken ct) =>
-        await db.BookingMoveRequests.AnyAsync(
-            candidate => candidate.BookingId == bookingId &&
-                (candidate.Status == MoveRequestStatus.AwaitingPayment ||
-                    candidate.Status == MoveRequestStatus.AwaitingConfirmation),
-            ct);
 
     private static MoveQuoteResponse Quoted(Booking booking, MoveQuote quote) => new(
         quote.ToBookableCourtId,
         quote.ToCourtName,
         quote.Kept.Count,
         quote.Moved.Count,
-        booking.PaidTotal,
-        quote.NewTotal,
-        Math.Max(0m, quote.NewTotal - booking.PaidTotal),
-        quote.HoldMinutes);
+        quote.RentalNow,
+        quote.RentalNew,
+        Math.Max(0m, quote.RentalNew - quote.RentalNow),
+        quote.HoldMinutes,
+        quote.StartsToday);
 
     /// <summary>
     /// What a booking would come to on another court, and what that leaves the
@@ -439,6 +729,7 @@ public sealed class BookingService(
     private async Task<BookingResult<MoveQuote>> QuoteAsync(
         Booking booking,
         Guid toBookableCourtId,
+        IReadOnlyCollection<BookingSlotInput>? wanted,
         CancellationToken ct)
     {
         if (!BookingMove.IsMovable(booking.Status))
@@ -453,7 +744,14 @@ public sealed class BookingService(
             return BookingResult<MoveQuote>.Fail(BookingFailure.NotMovable);
         }
 
-        var target = await LoadAsync(toBookableCourtId, ordered[0].Date, ct);
+        // Loaded against the earliest date the booking would end up on, which
+        // is what the venue's term has to cover. When the hours are moving to
+        // another day that is not the date the booking is on now.
+        var earliest = wanted is { Count: > 0 }
+            ? wanted.Min(slot => slot.Date)
+            : ordered[0].Date;
+
+        var target = await LoadAsync(toBookableCourtId, earliest, ct);
 
         if (target is null)
         {
@@ -507,7 +805,21 @@ public sealed class BookingService(
             return BookingResult<MoveQuote>.Fail(BookingFailure.BookingFinished);
         }
 
-        var dates = toMove.Select(slot => slot.Date).Distinct().OrderBy(date => date).ToArray();
+        // Where the hours are going. Their own dates and times unless the
+        // customer picked others, in which case there have to be exactly as
+        // many: a move changes when and where a booking is, never how much of
+        // it there is, and a screen that could add an hour by moving would be
+        // a way of buying one without paying.
+        var going = wanted is null
+            ? [.. toMove.Select(slot => new BookingSlotInput(slot.Date, slot.StartsAt))]
+            : wanted.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).ToArray();
+
+        if (going.Length != toMove.Length)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.KindDoesNotMatchSlots);
+        }
+
+        var dates = going.Select(slot => slot.Date).Distinct().OrderBy(date => date).ToArray();
 
         var holidays = new Dictionary<DateOnly, bool>();
 
@@ -521,7 +833,7 @@ public sealed class BookingService(
 
         var priced = new List<BookingSlot>();
 
-        foreach (var slot in toMove)
+        foreach (var slot in going)
         {
             var offered = days[slot.Date].Slots
                 .FirstOrDefault(candidate => candidate.StartsAt == slot.StartsAt);
@@ -549,16 +861,67 @@ public sealed class BookingService(
                 utcNow));
         }
 
-        var keptTotal = played.Sum(slot => slot.Amount + slot.PlatformFee);
-        var movedTotal = priced.Sum(slot => slot.Amount + slot.PlatformFee);
+        // Court rental only, on both sides.
+        //
+        // The platform fee is charged per hour booked, and a move buys no
+        // hours: the same number of them end up somewhere else. Counting it
+        // would make a move between two identically priced courts look as
+        // though it cost something.
+        var rentalNow = booking.Slots.Sum(slot => slot.Amount);
+        var rentalNew = played.Sum(slot => slot.Amount) + priced.Sum(slot => slot.Amount);
 
         return BookingResult<MoveQuote>.Success(new MoveQuote(
             target.BookableCourt.Id,
             target.CourtName,
             played,
             priced,
-            keptTotal + movedTotal,
-            target.HoldMinutes));
+            rentalNow,
+            rentalNew,
+            target.HoldMinutes,
+            // The first hour still to be played, against the venue's today. A
+            // booking on today can change its hours but not its day.
+            toMove[0].Date == target.Today(utcNow)));
+    }
+
+    /// <summary>
+    /// Writes what just happened into the platform's trail.
+    ///
+    /// The same trail the venue's desk writes to, keyed on the booking, so one
+    /// booking has one account of itself. The description is written for the
+    /// customer to read, because they are who reads it back.
+    /// </summary>
+    private void Record(Guid customerUserId, string action, Booking booking, string description) =>
+        audit.RecordEvent(
+            new AuditActor(customerUserId, UserRoleName.Customer),
+            action,
+            AuditEntityType.Booking,
+            booking.Id,
+            new Dictionary<string, string?>
+            {
+                ["description"] = description,
+                ["court"] = booking.CourtName,
+                ["total"] = booking.Total.ToString("0.00")
+            });
+
+    /// <summary>The booking's hours, as a person would say them.</summary>
+    private static string Hours(Booking booking)
+    {
+        var ordered = booking.Slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        if (ordered.Length == 0)
+        {
+            return "no hours";
+        }
+
+        var first = ordered[0];
+        var last = ordered[^1];
+
+        return first.Date == last.Date
+            ? $"{first.Date:d MMM}, {first.StartsAt:h:mm tt} to {last.EndsAt:h:mm tt}"
+            : $"{first.Date:d MMM} to {last.Date:d MMM}";
     }
 
     /// <summary>
@@ -573,6 +936,111 @@ public sealed class BookingService(
             .FirstOrDefaultAsync(ct) is var limit && limit > 0
             ? limit
             : BookingMove.DefaultLimit;
+
+    public async Task<BookingResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken ct)
+    {
+        // Another customer's booking answers the same as one that is not there,
+        // so an id cannot be probed for whose it is.
+        var booking = await db.Bookings
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                row => row.Id == bookingId && row.CustomerUserId == customerUserId,
+                ct);
+
+        if (booking is null)
+        {
+            return BookingResult<IReadOnlyCollection<BookingHistoryEntry>>.Fail(
+                BookingFailure.CourtNotFound);
+        }
+
+        var entries = await db.AuditLogs
+            .AsNoTracking()
+            .Where(entry => entry.EntityType == AuditEntityType.Booking && entry.EntityId == bookingId)
+            .OrderByDescending(entry => entry.CreatedAt)
+            .Select(entry => new
+            {
+                entry.Action,
+                entry.NewValuesJson,
+                entry.Reason,
+                entry.CreatedAt
+            })
+            .ToListAsync(ct);
+
+        var told = entries
+            .Select(entry => new BookingHistoryEntry(
+                entry.Action,
+                Describe(entry.Action, entry.NewValuesJson),
+                entry.Reason,
+                entry.CreatedAt))
+            .ToList();
+
+        // An expiry leaves no row, because nothing is there to write one: a
+        // booking does not change when its hold ends, it simply stops holding.
+        // So it is worked out here, from the booking, by the same rule the card
+        // uses to call itself expired. Without it the history of a booking that
+        // lapsed says only that it was made — and stops, at the exact moment
+        // the reader wants to know what became of it.
+        if (booking.HasLapsedAt(timeProvider.GetUtcNow()))
+        {
+            told.Add(new BookingHistoryEntry(
+                AuditAction.BookingHoldExpired,
+                "The hold ran out before payment arrived, so the hours went back on sale.",
+                null,
+                booking.HoldsUntil));
+        }
+
+        // Newest first. The entry somebody opens this for is almost always the
+        // last one — what just happened to my booking — and a list that puts it
+        // at the bottom makes them scroll past everything they already knew.
+        return BookingResult<IReadOnlyCollection<BookingHistoryEntry>>.Success(
+            [.. told.OrderByDescending(entry => entry.At)]);
+    }
+
+    /// <summary>
+    /// What to show for one entry.
+    ///
+    /// The description written at the time is preferred, because it says what
+    /// the booking looked like then rather than now. The fallbacks cover the
+    /// entries the desk wrote before any of this existed — an old booking
+    /// should still read as a history rather than as a row of blanks.
+    /// </summary>
+    private static string Describe(string action, string? detailsJson)
+    {
+        if (!string.IsNullOrWhiteSpace(detailsJson))
+        {
+            try
+            {
+                var details = System.Text.Json.JsonSerializer
+                    .Deserialize<Dictionary<string, string?>>(detailsJson);
+
+                if (details?.GetValueOrDefault("description") is string written
+                    && !string.IsNullOrWhiteSpace(written))
+                {
+                    return written;
+                }
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // An entry nobody can read is still an entry: it happened, and
+                // the action and the time are worth more than nothing.
+            }
+        }
+
+        return action switch
+        {
+            AuditAction.BookingCreated => "Booking made.",
+            AuditAction.BookingPaymentSubmitted => "Payment sent to the venue to check.",
+            AuditAction.BookingMoved => "Moved to another court.",
+            AuditAction.BookingConfirmed => "The venue confirmed your booking.",
+            AuditAction.BookingRejected => "The venue could not accept the payment.",
+            AuditAction.BookingHoldExpired =>
+                "The hold ran out before payment arrived, so the hours went back on sale.",
+            _ => "Updated."
+        };
+    }
 
     public async Task<BookingResult<BookingDetail>> GetAsync(
         Guid bookingId,
@@ -590,6 +1058,8 @@ public sealed class BookingService(
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
+                candidate.BookableCourt.Court.Facility.ContactPhone,
+                candidate.BookableCourt.Court.Facility.ContactEmail,
                 candidate.BookableCourt.Court.Facility.TimeZone,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
                 candidate.BookableCourt.Court.FacilityId
@@ -598,23 +1068,19 @@ public sealed class BookingService(
 
         // Another customer's booking answers the same as one that does not
         // exist, so an id cannot be probed for whether it is somebody's.
-        if (row is null)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
-        }
-
-        var pending = await PendingMovesAsync([row.Booking.Id], ct);
-
-        return BookingResult<BookingDetail>.Success(Detail(
-            row.Booking,
-            row.SportKey,
-            row.GcashNumber,
-            row.GcashAccountName,
-            row.GcashQrCodeUrl,
-            row.TimeZone,
-            row.MoveLimit,
-            row.FacilityId,
-            pending.GetValueOrDefault(row.Booking.Id)));
+        return row is null
+            ? BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound)
+            : BookingResult<BookingDetail>.Success(Detail(
+                row.Booking,
+                row.SportKey,
+                row.GcashNumber,
+                row.GcashAccountName,
+                row.GcashQrCodeUrl,
+                row.ContactPhone,
+                row.ContactEmail,
+                row.TimeZone,
+                row.MoveLimit,
+                row.FacilityId));
     }
 
     public async Task<IReadOnlyCollection<BookingDetail>> ListForCustomerAsync(
@@ -633,13 +1099,13 @@ public sealed class BookingService(
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashNumber,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashAccountName,
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
+                booking.BookableCourt.Court.Facility.ContactPhone,
+                booking.BookableCourt.Court.Facility.ContactEmail,
                 booking.BookableCourt.Court.Facility.TimeZone,
                 booking.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
                 booking.BookableCourt.Court.FacilityId
             })
             .ToListAsync(ct);
-
-        var pending = await PendingMovesAsync([.. rows.Select(row => row.Booking.Id)], ct);
 
         return
         [
@@ -649,10 +1115,11 @@ public sealed class BookingService(
                 row.GcashNumber,
                 row.GcashAccountName,
                 row.GcashQrCodeUrl,
+                row.ContactPhone,
+                row.ContactEmail,
                 row.TimeZone,
                 row.MoveLimit,
-                row.FacilityId,
-                pending.GetValueOrDefault(row.Booking.Id)))
+                row.FacilityId))
         ];
     }
 
@@ -673,7 +1140,12 @@ public sealed class BookingService(
 
         var now = timeProvider.GetUtcNow();
 
-        if (booking.Status != BookingStatus.PendingPayment)
+        // Waiting to be paid for, or already with the venue and having the
+        // picture swapped for a better one. Anything else — confirmed,
+        // rejected, cancelled — is settled, and a receipt changes nothing.
+        var waiting = booking.Status == BookingStatus.PendingPayment;
+
+        if (!waiting && booking.Status != BookingStatus.PendingVerification)
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.NotAwaitingPayment);
         }
@@ -695,53 +1167,50 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.ReceiptNotAnImage);
         }
 
+        if (!await CanBePaidAsync(booking.BookableCourtId, ct))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.VenueCannotBePaid);
+        }
+
         booking.AttachReceipt(request.ReceiptUrl, now);
+
+        // Sending the receipt IS the submission. They were two steps, and the
+        // gap between them was a hole: attaching stops the hold's clock, so the
+        // customer was told the venue was checking it while the booking sat in
+        // PendingPayment — which is in neither of the desk's queues. The court
+        // was held indefinitely and nobody was looking at it.
+        if (waiting)
+        {
+            booking.SubmitForVerification(now);
+
+            Record(
+                customerUserId,
+                AuditAction.BookingPaymentSubmitted,
+                booking,
+                "Payment sent to the venue to check.");
+        }
+        else
+        {
+            // The venue already has one and is being handed another. Recorded,
+            // because the desk must be able to see that what it is looking at
+            // is not what it was first shown.
+            Record(
+                customerUserId,
+                AuditAction.BookingPaymentSubmitted,
+                booking,
+                "Sent a different receipt to the venue.");
+        }
+
         await db.SaveChangesAsync(ct);
 
-        return await GetAsync(bookingId, customerUserId, ct);
-    }
-
-    public async Task<BookingResult<BookingDetail>> SubmitForVerificationAsync(
-        Guid bookingId,
-        Guid customerUserId,
-        CancellationToken ct)
-    {
-        var booking = await FindAsync(bookingId, customerUserId, ct);
-
-        if (booking is null)
+        if (waiting)
         {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.CourtNotFound);
+            // After the save, and deliberately: a mail provider being down must
+            // not undo a submission the customer has already been told went
+            // through. Only on the first one — a replaced picture is not a
+            // second payment and must not read as one.
+            await notifier.PaymentSubmittedAsync(booking, ct);
         }
-
-        var now = timeProvider.GetUtcNow();
-
-        if (booking.Status != BookingStatus.PendingPayment)
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.NotAwaitingPayment);
-        }
-
-        if (booking.HasLapsedAt(now))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.HoldExpired);
-        }
-
-        if (string.IsNullOrWhiteSpace(booking.ReceiptUrl))
-        {
-            return BookingResult<BookingDetail>.Fail(BookingFailure.NoReceipt);
-        }
-
-        booking.SubmitForVerification(now);
-        await db.SaveChangesAsync(ct);
-
-        logger.LogInformation(
-            "Booking {BookingId} submitted for verification by {CustomerUserId}.",
-            bookingId,
-            customerUserId);
-
-        // After the save, and deliberately: an email that fails must not undo a
-        // submission the customer has already been told went through. A venue
-        // that misses the mail still sees the booking in its queue.
-        await notifier.PaymentSubmittedAsync(booking, ct);
 
         return await GetAsync(bookingId, customerUserId, ct);
     }
@@ -799,6 +1268,29 @@ public sealed class BookingService(
     /// Cloudinary about the asset, which is a round trip this does not need to
     /// stop somebody uploading a PDF.
     /// </summary>
+    /// <summary>
+    /// Whether this court's venue has any way of being paid at all.
+    ///
+    /// Asked before a receipt is taken, because a receipt is evidence of a
+    /// payment — and a venue with neither a GCash number nor a QR code has no
+    /// account for one to have been sent to. Without this the desk is handed a
+    /// picture it cannot check against anything.
+    /// </summary>
+    private async Task<bool> CanBePaidAsync(Guid bookableCourtId, CancellationToken ct)
+    {
+        // The owner is fetched and the domain asked, rather than the same test
+        // written again in LINQ. It is one rule — "has this venue any way of
+        // being paid" — and a second copy of it is a second thing to keep in
+        // step with the first.
+        var owner = await db.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.Id == bookableCourtId)
+            .Select(unit => unit.Court.Facility.FacilityOwner)
+            .FirstOrDefaultAsync(ct);
+
+        return owner?.CanTakePayment ?? false;
+    }
+
     private static bool IsImage(string url)
     {
         if (!url.Contains("/image/upload/", StringComparison.OrdinalIgnoreCase))
@@ -932,37 +1424,9 @@ public sealed class BookingService(
                 slot.BookableCourt.DivisionNumber))
             .ToListAsync(ct);
 
-        // A booking waiting to move onto this floor holds the hours it is
-        // moving into, exactly as an unpaid booking holds the hours it is
-        // waiting to pay for. Without this the court a customer is part way
-        // through paying an upgrade for is still on sale to somebody else.
-        //
-        // The hours it holds are the booking's own, on the court it is moving
-        // to: a move keeps the times and changes the floor. Hours already
-        // played are in there too and cost nothing to hold, because an hour
-        // that has gone is never offered anyway.
-        var incoming = await db.BookingMoveRequests
-            .AsNoTracking()
-            .Where(move =>
-                move.ToBookableCourt.Court.Id == offering.Court.Id &&
-                (exceptBooking == null || move.BookingId != exceptBooking) &&
-                (move.Status == MoveRequestStatus.AwaitingConfirmation ||
-                    (move.Status == MoveRequestStatus.AwaitingPayment &&
-                        (move.ReceiptUrl != null || now < move.HoldsUntil))))
-            .SelectMany(move => move.Booking.Slots
-                .Where(slot => dates.Contains(slot.Date))
-                .Select(slot => new Holding(
-                    slot.Date,
-                    slot.StartsAt,
-                    slot.EndsAt,
-                    move.ToBookableCourt.CourtSportId,
-                    move.ToBookableCourt.DivisionNumber)))
-            .ToListAsync(ct);
-
         return
         [
             .. held
-                .Concat(incoming)
                 .Where(slot => offering.BookableCourt.ClashesWith(slot.CourtSportId, slot.DivisionNumber))
                 .Select(slot => (slot.Date, slot.StartsAt, slot.EndsAt))
         ];
@@ -1106,8 +1570,16 @@ public sealed class BookingService(
         string ToCourtName,
         IReadOnlyCollection<BookingSlot> Kept,
         IReadOnlyCollection<BookingSlot> Moved,
-        decimal NewTotal,
-        int HoldMinutes);
+        /// <summary>What the booking's hours come to now, in court rental alone.</summary>
+        decimal RentalNow,
+        /// <summary>What they would come to after the move, in court rental alone.</summary>
+        decimal RentalNew,
+        int HoldMinutes,
+        /// <summary>
+        /// Whether the hours still to be played fall on the venue's today,
+        /// which is what decides whether the move screen offers dates.
+        /// </summary>
+        bool StartsToday);
 
     // -------------------------------------------------------------- the rules
 
@@ -1203,34 +1675,24 @@ public sealed class BookingService(
             }
         }
 
-        // A single day sold open to close is every hour the court is open that
-        // day. One hour gone and there is no whole day left to sell -- and
-        // "book by the hour instead" is something the customer can act on.
-        if (request.Kind == BookingKind.WholeDay)
+        // A day sold open to close is every hour the court is open that day,
+        // and a run is a row of those days. One hour gone and there is no whole
+        // day left to sell -- and "book by the hour instead" is something the
+        // customer can act on.
+        //
+        // A run used to take each day for whatever was still free on it, so a
+        // single booked hour on the Wednesday cost nobody the rest of the week.
+        // The trouble was what it sold: a "week" that quietly missed an
+        // afternoon, priced as though it had not. A run is now whole days or it
+        // is not a run, and a week with a hole in it is two bookings that say
+        // what they are.
+        if (request.Kind is BookingKind.WholeDay or BookingKind.MultiDay)
         {
             foreach (var day in days.Values)
             {
                 var wantedOnDay = request.Slots.Count(slot => slot.Date == day.Date);
 
                 if (wantedOnDay != day.Slots.Count || day.Slots.Any(slot => !slot.IsOpen))
-                {
-                    return BookingFailure.DayNotWhollyAvailable;
-                }
-            }
-        }
-
-        // A run takes each of its days for whatever is still free on it. A
-        // single booked hour on the Wednesday of a tournament week should not
-        // cost the customer the other fifteen, nor split their week into two
-        // bookings -- but neither may they cherry-pick the mornings: a day in
-        // a run is all of what it has left.
-        if (request.Kind == BookingKind.MultiDay)
-        {
-            foreach (var day in days.Values)
-            {
-                var wantedOnDay = request.Slots.Count(slot => slot.Date == day.Date);
-
-                if (wantedOnDay != day.Slots.Count(slot => slot.IsOpen))
                 {
                     return BookingFailure.DayNotWhollyAvailable;
                 }
@@ -1261,10 +1723,11 @@ public sealed class BookingService(
         string? gcashNumber,
         string? gcashAccountName,
         string? gcashQrCodeUrl,
+        string? contactPhone,
+        string? contactEmail,
         string timeZone,
         int moveLimit,
-        Guid facilityId,
-        PendingMove? pendingMove = null) => new(
+        Guid facilityId) => new(
         booking.Id,
         booking.BookableCourtId,
         booking.Status.ToString(),
@@ -1286,6 +1749,9 @@ public sealed class BookingService(
         gcashNumber,
         gcashAccountName,
         gcashQrCodeUrl,
+        contactPhone,
+        contactEmail,
+        booking.CancellationReason,
         [
             .. booking.Slots
                 .OrderBy(slot => slot.Date)
@@ -1299,52 +1765,34 @@ public sealed class BookingService(
                     slot.PlatformFee))
         ],
         Math.Max(0, moveLimit - booking.MoveCount),
-        // A booking already waiting on a move cannot be moved again, and the
-        // panel above says why rather than leaving a dead button.
-        pendingMove is null && CanBeMoved(booking, timeZone, moveLimit),
-        pendingMove,
+        moveLimit,
+        CanBeMoved(booking, timeZone, moveLimit),
+        HasStarted(booking, timeZone),
         booking.CreatedAt);
 
     /// <summary>
-    /// The open move requests for these bookings, by booking.
+    /// Whether the first hour has begun, on the venue's clock.
     ///
-    /// One at a time is enforced when a request is raised, so a booking has at
-    /// most one of these; reading them together keeps the list to one query
-    /// rather than one per card.
+    /// A booking in play can still change court but not change when it is, so
+    /// this is what the move screen reads to decide whether to offer dates at
+    /// all. The venue's clock rather than the server's: in Manila they are
+    /// eight hours apart, and the answer would be wrong for a third of the day.
     /// </summary>
-    private async Task<Dictionary<Guid, PendingMove>> PendingMovesAsync(
-        Guid[] bookingIds,
-        CancellationToken ct)
+    private bool HasStarted(Booking booking, string timeZone)
     {
-        var open = await db.BookingMoveRequests
-            .AsNoTracking()
-            .Where(request => bookingIds.Contains(request.BookingId) &&
-                (request.Status == MoveRequestStatus.AwaitingPayment ||
-                    request.Status == MoveRequestStatus.AwaitingConfirmation))
-            .Select(request => new
-            {
-                request.BookingId,
-                request.Status,
-                request.ToCourtName,
-                request.BalanceDue,
-                request.HoldsUntil,
-                request.Initiator,
-                request.Reason,
-                request.CreatedAt
-            })
-            .ToListAsync(ct);
+        var first = booking.Slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .FirstOrDefault();
 
-        return open.ToDictionary(
-            request => request.BookingId,
-            request => new PendingMove(
-                request.Status,
-                request.ToCourtName,
-                request.BalanceDue,
-                request.HoldsUntil,
-                // An attendant acts for the venue, which is what the customer sees.
-                request.Initiator == MoveInitiator.Attendant,
-                request.Reason,
-                request.CreatedAt));
+        if (first is null)
+        {
+            return false;
+        }
+
+        var venueNow = Offering.LocalNowIn(timeZone, timeProvider.GetUtcNow());
+
+        return first.Date.ToDateTime(first.StartsAt) <= venueNow.DateTime;
     }
 
     /// <summary>

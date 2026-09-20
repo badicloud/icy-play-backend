@@ -43,21 +43,37 @@ public interface IBookingService
         CancellationToken ct);
 
     /// <summary>
-    /// What moving this booking to another court would cost, before anybody
-    /// commits to it. "Move this booking" and "move it and pay another twelve
-    /// hundred pesos" are different questions, and only one can be answered
-    /// with a tap.
+    /// Everything that has happened to this booking, newest first.
+    ///
+    /// Read from the platform's audit trail, which the venue's desk already
+    /// writes to — one booking, one account of itself. What the trail keeps and
+    /// this does not is who did it and from where: that is for the platform to
+    /// answer questions with, not for the person whose booking it is.
+    /// </summary>
+    Task<BookingResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// What moving this booking onto that court, at those hours, would come to
+    /// — asked before anything is committed to.
+    ///
+    /// It also answers whether the hours still to be played fall on the venue's
+    /// today, which is what the move screen needs to know before it can offer
+    /// dates: a booking today can change its hours but not its day.
     /// </summary>
     Task<BookingResult<MoveQuoteResponse>> QuoteMoveAsync(
         Guid bookingId,
         Guid customerUserId,
         Guid toBookableCourtId,
+        IReadOnlyCollection<BookingSlotInput>? wanted,
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Asks to move a booking onto another court, keeping its hours.
+    /// Moves a booking onto another court, and optionally onto other hours.
     ///
-    /// Raises a request rather than moving anything. A dearer court has to be
+    /// It happens at once: nobody is asked to approve it. A dearer court has to be
     /// paid for, anything waiting to be paid for needs a clock, and putting a
     /// settled booking back into a paying state would let that clock expire
     /// something the customer has already paid. The booking moves when the
@@ -72,37 +88,74 @@ public interface IBookingService
         MoveBookingRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>The GCash receipt for the difference. The hold's clock stops here.</summary>
-    Task<BookingResult<BookingDetail>> AttachMoveReceiptAsync(
+    /// <summary>
+    /// Asks to move onto hours that cost more, and offers to pay the
+    /// difference.
+    ///
+    /// The booking does not move. It is written down as a request, the new
+    /// hours are held on a clock, and the customer is sent to pay — because
+    /// this is the one move where money has to change hands, and a venue
+    /// should see it arrive before it gives up the better court.
+    ///
+    /// A move that costs the same or less does not come through here at all:
+    /// that one happens at once, through <see cref="MoveAsync" />.
+    /// </summary>
+    Task<BookingResult<UpgradeRequestResponse>> RequestUpgradeAsync(
         Guid bookingId,
         Guid customerUserId,
-        string receiptUrl,
+        MoveBookingRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>The customer thought better of it. The held court goes back.</summary>
-    Task<BookingResult<BookingDetail>> WithdrawMoveAsync(
+    /// <summary>
+    /// The upgrade still open on this booking, or nothing when there is none.
+    ///
+    /// What the upgrade screen reads on every visit to decide which step to
+    /// show, so a refresh or a second tab lands where the customer actually is
+    /// rather than back at the beginning.
+    /// </summary>
+    Task<BookingResult<UpgradeRequestResponse?>> OpenUpgradeAsync(
         Guid bookingId,
         Guid customerUserId,
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Records the GCash receipt the customer uploaded. Confirms nothing: a
-    /// person at the venue still has to look at it.
+    /// Records the receipt for an upgrade the customer has paid.
+    ///
+    /// Confirms nothing. What it does do is stop the clock: from here the hours
+    /// are held until the venue answers, because somebody who has paid must not
+    /// lose them to a queue they are not in.
+    /// </summary>
+    Task<BookingResult<UpgradeRequestResponse>> AttachUpgradeReceiptAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        AttachReceiptRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Hands the upgrade to the venue to check. From here it is their turn, and
+    /// the booking still has not moved.
+    /// </summary>
+    Task<BookingResult<UpgradeRequestResponse>> SubmitUpgradeAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Takes the GCash receipt and hands the booking to the venue, in one go.
+    ///
+    /// One action, because they were two and the gap between them was a hole:
+    /// attaching a receipt stops the hold's clock, so a booking that was never
+    /// submitted held its court indefinitely while sitting in neither of the
+    /// desk's queues. Confirms nothing — a person at the venue still has to
+    /// look at it.
+    ///
+    /// Also takes a replacement while the venue is still looking, so a wrong
+    /// picture can be corrected without ringing anybody.
     /// </summary>
     Task<BookingResult<BookingDetail>> AttachReceiptAsync(
         Guid bookingId,
         Guid customerUserId,
         AttachReceiptRequest request,
-        CancellationToken ct);
-
-    /// <summary>
-    /// Hands the booking to the venue to check, and tells both sides by email.
-    /// From here the hold stops mattering — somebody who has paid must not lose
-    /// their court because the venue was asleep.
-    /// </summary>
-    Task<BookingResult<BookingDetail>> SubmitForVerificationAsync(
-        Guid bookingId,
-        Guid customerUserId,
         CancellationToken ct);
 
     /// <summary>

@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260918065635_DropBookingMoveRequests")]
+    partial class DropBookingMoveRequests
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -228,119 +231,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("CourtId", "Date");
 
                     b.ToTable("BookingSlots", "dbo");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingUpgradeRequest", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<decimal>("BalanceDue")
-                        .HasColumnType("decimal(10,2)");
-
-                    b.Property<Guid>("BookingId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("DeclineReason")
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<DateTimeOffset>("HoldsUntil")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset?>("ReceiptUploadedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("ReceiptUrl")
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<decimal>("RentalNew")
-                        .HasColumnType("decimal(10,2)");
-
-                    b.Property<decimal>("RentalNow")
-                        .HasColumnType("decimal(10,2)");
-
-                    b.Property<Guid>("RequestedByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset?>("SettledAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid?>("SettledByUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("nvarchar(30)");
-
-                    b.Property<Guid>("ToBookableCourtId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("ToCourtName")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("nvarchar(200)");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BookingId", "Status");
-
-                    b.HasIndex("ToBookableCourtId", "Status");
-
-                    b.ToTable("BookingUpgradeRequests", "dbo");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingUpgradeSlot", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<decimal>("Amount")
-                        .HasColumnType("decimal(10,2)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateOnly>("Date")
-                        .HasColumnType("date");
-
-                    b.Property<TimeOnly>("EndsAt")
-                        .HasColumnType("time");
-
-                    b.Property<decimal>("PlatformFee")
-                        .HasColumnType("decimal(10,2)");
-
-                    b.Property<string>("RateKind")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)");
-
-                    b.Property<Guid>("RequestId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<TimeOnly>("StartsAt")
-                        .HasColumnType("time");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Date");
-
-                    b.HasIndex("RequestId");
-
-                    b.ToTable("BookingUpgradeSlots", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Email.EmailTemplate", b =>
@@ -2110,36 +2000,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("Booking");
                 });
 
-            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingUpgradeRequest", b =>
-                {
-                    b.HasOne("IcyPlay.Domain.Bookings.Booking", "Booking")
-                        .WithMany()
-                        .HasForeignKey("BookingId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("IcyPlay.Domain.Facilities.BookableCourt", "ToBookableCourt")
-                        .WithMany()
-                        .HasForeignKey("ToBookableCourtId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Booking");
-
-                    b.Navigation("ToBookableCourt");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingUpgradeSlot", b =>
-                {
-                    b.HasOne("IcyPlay.Domain.Bookings.BookingUpgradeRequest", "Request")
-                        .WithMany("Slots")
-                        .HasForeignKey("RequestId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Request");
-                });
-
             modelBuilder.Entity("IcyPlay.Domain.Facilities.BookableCourt", b =>
                 {
                     b.HasOne("IcyPlay.Domain.Facilities.Court", "Court")
@@ -2414,11 +2274,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Bookings.Booking", b =>
-                {
-                    b.Navigation("Slots");
-                });
-
-            modelBuilder.Entity("IcyPlay.Domain.Bookings.BookingUpgradeRequest", b =>
                 {
                     b.Navigation("Slots");
                 });

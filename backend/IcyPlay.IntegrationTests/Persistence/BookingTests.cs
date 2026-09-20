@@ -2,6 +2,7 @@ using FluentAssertions.Execution;
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Facilities;
+using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
@@ -36,6 +37,11 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     /// <summary>The day the Sunday-closed fixture below sells nothing at all.</summary>
     private static readonly DateOnly Sunday = new(2026, 9, 20);
     private static readonly DateOnly Monday = new(2026, 9, 21);
+
+    // A link on the platform's own Cloudinary account, which is the only kind
+    // a receipt is allowed to be.
+    private const string Receipt =
+        "https://res.cloudinary.com/icyplay-test/image/upload/v1/upgrade-receipt.jpg";
 
     private static readonly TimeOnly SevenAm = new(7, 0);
     private static readonly TimeOnly EightAm = new(8, 0);
@@ -452,7 +458,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldTakeWhatIsLeftOfADaySomebodyElseHasStarted()
+    public async Task CreateAsync_ShouldRefuseARunThroughADaySomebodyElseHasStarted()
     {
         // Arrange: somebody takes 7am on the Thursday.
         await using var context = database.CreateContext();
@@ -477,14 +483,13 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             floor.Customer,
             CancellationToken.None);
 
-        // Assert: 16 + 15 + 16. One booked hour on the Thursday should not cost
-        // the customer the other fifteen, nor split their week in two.
-        using (new AssertionScope())
-        {
-            booking.Succeeded.Should().BeTrue();
-            booking.Value!.BookedHours.Should().Be(47);
-            booking.Value.Slots.Count(slot => slot.Date == Thursday).Should().Be(15);
-        }
+        // Assert: refused. This used to sell — 16 + 15 + 16 — on the reasoning
+        // that one booked hour should not cost the customer the other fifteen
+        // nor split their week in two. What it sold instead was a "week" with
+        // an hour missing from the middle of it, at the price of three whole
+        // days. A run is whole days; a week with a hole in it is two bookings
+        // that say what they are, and the hour itself is still there to book.
+        booking.Failure.Should().Be(BookingFailure.DayNotWhollyAvailable);
     }
 
     [Fact]
@@ -753,64 +758,54 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task ListForCustomerAsync_ShouldSayWhenAMoveIsWaitingOnTheVenue()
+    public async Task ListForCustomerAsync_ShouldSayABookingStillToComeIsNotInPlay()
     {
-        // Arrange: a booking with a move asked for and nothing to pay, so it is
-        // sitting with the venue.
+        // Arrange: a booking on a day that has not arrived.
         await using var context = database.CreateContext();
-        var floor = await FloorAsync(context, "Waiting Courts");
+        var floor = await FloorAsync(context, "Not Yet Courts");
         var sut = CreateService(context);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
-
-        await sut.MoveAsync(
-            booking,
-            floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
-            CancellationToken.None);
 
         // Act
         var mine = await sut.ListForCustomerAsync(floor.Customer, CancellationToken.None);
 
-        // Assert: the card still shows the old court, because the booking has
-        // not moved. Without this the customer sees the court they asked to
-        // leave and no sign the request landed — and asks again.
+        // Assert: the move screen reads this to decide whether to offer dates
+        // at all, so saying a booking is in play when it has not started takes
+        // away a choice the customer is entitled to.
         var card = mine.Single(row => row.Id == booking);
 
         using (new AssertionScope())
         {
-            card.PendingMove.Should().NotBeNull();
-            card.PendingMove!.Status.Should().Be(MoveRequestStatus.AwaitingConfirmation);
-            card.PendingMove.BalanceDue.Should().Be(0m);
-            card.PendingMove.RaisedByVenue.Should().BeFalse();
-            card.PendingMove.ToCourtName.Should().NotBeNullOrWhiteSpace();
-
-            // And it cannot be moved again while one is open, so the button
-            // does not offer what the server would refuse.
-            card.CanBeMoved.Should().BeFalse();
+            card.IsInPlay.Should().BeFalse();
+            card.CanBeMoved.Should().BeTrue();
         }
     }
 
     [Fact]
-    public async Task ListForCustomerAsync_ShouldCarryNoPendingMoveForAnUntouchedBooking()
+    public async Task ListForCustomerAsync_ShouldSayABookingUnderWayIsInPlay()
     {
-        // Arrange
+        // Arrange: a booking whose hour has begun. Seven in the morning on the
+        // venue's clock, read at eight.
         await using var context = database.CreateContext();
-        var floor = await FloorAsync(context, "Untouched Courts");
+        var floor = await FloorAsync(context, "Under Way Courts");
         var sut = CreateService(context);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
 
-        // Act
-        var mine = await sut.ListForCustomerAsync(floor.Customer, CancellationToken.None);
+        // Wednesday at 08:00 in Manila is 00:00 UTC on the same day.
+        var duringTheGame = new DateTimeOffset(
+            Wednesday.ToDateTime(new TimeOnly(0, 0)),
+            TimeSpan.Zero);
 
-        // Assert: a panel that says "waiting" over a booking nobody has touched
-        // is worse than no panel at all.
+        var later = CreateService(context, duringTheGame);
+
+        // Act
+        var mine = await later.ListForCustomerAsync(floor.Customer, CancellationToken.None);
+
+        // Assert: the game is on. The court can still change — a floodlight
+        // fails and they carry on next door — but when it is cannot.
         var card = mine.Single(row => row.Id == booking);
 
-        using (new AssertionScope())
-        {
-            card.PendingMove.Should().BeNull();
-            card.CanBeMoved.Should().BeTrue();
-        }
+        card.IsInPlay.Should().BeTrue();
     }
 
     [Fact]
@@ -839,9 +834,6 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         {
             asked.Succeeded.Should().BeFalse();
             asked.Failure.Should().Be(BookingFailure.NotTheSameOffering);
-
-            (await context.BookingMoveRequests.CountAsync(row => row.BookingId == booking))
-                .Should().Be(0);
         }
     }
 
@@ -873,7 +865,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task MoveAsync_ShouldRaiseARequestRatherThanMoveTheBooking()
+    public async Task MoveAsync_ShouldMoveTheBookingAtOnce()
     {
         // Arrange: a confirmed booking on one part of the floor.
         await using var context = database.CreateContext();
@@ -881,42 +873,481 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var sut = CreateService(context);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
 
-        // Act: ask to move to another part of the same floor.
+        // Act: move to another part of the same floor.
         var asked = await sut.MoveAsync(
             booking,
             floor.Customer,
             new MoveBookingRequest(floor.Pickleball2),
             CancellationToken.None);
 
-        // Assert: the booking has not moved. A move that wants paying for needs
-        // a clock on it, and putting a settled booking back into a paying state
-        // would let that clock expire something already paid for.
+        // Assert: it has moved, and the move is counted. Nobody is asked to
+        // approve it — a customer waiting on an answer that never comes is the
+        // complaint this replaced.
+        context.ChangeTracker.Clear();
+
         var stored = await context.Bookings
             .AsNoTracking()
             .Include(row => row.Slots)
             .SingleAsync(row => row.Id == booking);
 
-        var request = await context.BookingMoveRequests
-            .AsNoTracking()
-            .SingleAsync(row => row.BookingId == booking);
-
         using (new AssertionScope())
         {
             asked.Succeeded.Should().BeTrue();
-            stored.BookableCourtId.Should().Be(floor.Pickleball1);
-            stored.MoveCount.Should().Be(0);
-            request.ToBookableCourtId.Should().Be(floor.Pickleball2);
-            // Same floor, same sport, same hour: nothing to pay.
-            request.BalanceDue.Should().Be(0m);
-            request.Status.Should().Be(MoveRequestStatus.AwaitingConfirmation);
+            stored.BookableCourtId.Should().Be(floor.Pickleball2);
+            stored.MoveCount.Should().Be(1);
+            asked.Value!.MovesLeft.Should().Be(BookingMove.DefaultLimit - 1);
+
+            // The hours are the same ones, on the new court.
+            stored.Slots.Should().ContainSingle();
+            stored.Slots.Single().BookableCourtId.Should().Be(floor.Pickleball2);
         }
     }
 
     [Fact]
-    public async Task MoveAsync_ShouldChargeTheDifferenceForADearerCourt()
+    public async Task MoveAsync_ShouldMoveOntoTheHoursItIsGiven()
     {
-        // Arrange: the same floor sold as basketball costs more per hour than
-        // one of the three pickleball courts marked out on it.
+        // Arrange: a booking at seven, moving to eleven on the same court.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Rescheduled Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(
+                floor.Pickleball2,
+                [new BookingSlotInput(Wednesday, new TimeOnly(11, 0))]),
+            CancellationToken.None);
+
+        // Assert: a move changes when a booking is as well as where, so the
+        // hour it lands on is the one asked for and not the one it came from.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeTrue();
+            stored.BookableCourtId.Should().Be(floor.Pickleball2);
+            stored.Slots.Should().ContainSingle();
+            stored.Slots.Single().StartsAt.Should().Be(new TimeOnly(11, 0));
+            stored.Slots.Single().Date.Should().Be(Wednesday);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldMoveOntoAnotherDay()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Another Day Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var thursday = Wednesday.AddDays(1);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball1, [new BookingSlotInput(thursday, SevenAm)]),
+            CancellationToken.None);
+
+        // Assert: the dates the booking spans follow the hours it now holds,
+        // or the card would go on naming the day it used to be.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeTrue();
+            stored.Slots.Single().Date.Should().Be(thursday);
+            stored.StartDate.Should().Be(thursday);
+            stored.EndDate.Should().Be(thursday);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseMoreHoursThanTheBookingHas()
+    {
+        // Arrange: one hour booked.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "No Free Hours Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: move it onto two.
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(
+                floor.Pickleball2,
+                [
+                    new BookingSlotInput(Wednesday, new TimeOnly(11, 0)),
+                    new BookingSlotInput(Wednesday, new TimeOnly(12, 0))
+                ]),
+            CancellationToken.None);
+
+        // Assert: a move changes when and where a booking is, never how much of
+        // it there is. Without this a second hour could be had by moving, which
+        // is buying one without paying for it.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeFalse();
+            stored.Slots.Should().ContainSingle();
+        }
+    }
+
+    [Fact]
+    public async Task QuoteMoveAsync_ShouldSayWhetherTheBookingIsOnTheVenuesToday()
+    {
+        // Arrange: one booking on the venue's today and one still to come.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Today Or Not Courts");
+        var sut = CreateService(context);
+
+        var later = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Six in the morning on Wednesday at the venue, which is ten at night
+        // on Tuesday in UTC. The whole point: the server's day and the venue's
+        // are different days at that moment, and the venue's is the one that
+        // counts.
+        var onTheDay = new DateTimeOffset(
+            Tuesday.ToDateTime(new TimeOnly(22, 0)),
+            TimeSpan.Zero);
+
+        var thatMorning = CreateService(context, onTheDay);
+
+        // Act
+        var asLater = await sut.QuoteMoveAsync(
+            later,
+            floor.Customer,
+            floor.Pickleball2,
+            null,
+            CancellationToken.None);
+
+        var asToday = await thatMorning.QuoteMoveAsync(
+            later,
+            floor.Customer,
+            floor.Pickleball2,
+            null,
+            CancellationToken.None);
+
+        // Assert: this is what the move screen reads to decide whether to offer
+        // dates at all, and it is asked per request because "today" turns over
+        // while the screen is open.
+        using (new AssertionScope())
+        {
+            asLater.Value!.StartsToday.Should().BeFalse();
+            asToday.Value!.StartsToday.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task QuoteMoveAsync_ShouldLeaveThePlatformFeeOutOfBothSides()
+    {
+        // Arrange: two courts at the same rate, so a move between them changes
+        // nothing about the money.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Same Rate Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var quoted = await sut.QuoteMoveAsync(
+            booking,
+            floor.Customer,
+            floor.Pickleball2,
+            null,
+            CancellationToken.None);
+
+        // Assert: the platform fee is charged per hour booked and a move buys
+        // no hours — the same one ends up somewhere else. Counting it would
+        // put a price on a move that costs nothing, and refuse it.
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            quoted.Succeeded.Should().BeTrue();
+            quoted.Value!.BalanceDue.Should().Be(0m);
+
+            // Court rental on both sides, and the fee on neither.
+            quoted.Value.RentalNow.Should().Be(stored.Slots.Sum(slot => slot.Amount));
+            quoted.Value.RentalNew.Should().Be(quoted.Value.RentalNow);
+            stored.Slots.Sum(slot => slot.PlatformFee).Should().BeGreaterThan(0m);
+        }
+    }
+
+    [Fact]
+    public async Task QuoteMoveAsync_ShouldPriceTheUpgradeOnCourtRentalAlone()
+    {
+        // Arrange: a dearer court, at nine hundred an hour against five.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Rental Only Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var quoted = await sut.QuoteMoveAsync(
+            booking,
+            floor.Customer,
+            dearer,
+            null,
+            CancellationToken.None);
+
+        // Assert: 900 against the 500 the booking's own hour costs, and the
+        // platform fee on neither side of it. Measured against the booking's
+        // own rates rather than against what has been settled, so a booking
+        // paid in a way this does not know about still quotes honestly.
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            quoted.Succeeded.Should().BeTrue();
+            quoted.Value!.RentalNow.Should().Be(500m);
+            quoted.Value.RentalNew.Should().Be(900m);
+            quoted.Value.BalanceDue.Should().Be(400m);
+
+            // 400, not 400 plus a fee on 900 less a fee on 500.
+            stored.Slots.Sum(slot => slot.PlatformFee).Should().BeGreaterThan(0m);
+        }
+    }
+
+    [Fact]
+    public async Task HistoryAsync_ShouldKeepAnAccountOfWhatHappenedToTheBooking()
+    {
+        // Arrange: made, paid for, then moved to another court.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Remembered Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Moved five minutes later, on a clock that has actually moved. With a
+        // frozen one both entries share a timestamp, and the order they come
+        // back in would be the order they were written rather than the order
+        // this asks for — which would make the assertion below pass without
+        // testing anything.
+        var later = CreateService(context, Now.AddMinutes(5));
+
+        await later.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball2),
+            CancellationToken.None);
+
+        // Act
+        var history = await sut.HistoryAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: a booking says where it ended up and never how it got there.
+        // Without this the move that just happened leaves no trace at all.
+        using (new AssertionScope())
+        {
+            history.Succeeded.Should().BeTrue();
+
+            var entries = history.Value!.ToArray();
+            entries.Select(entry => entry.Action).Should().Contain(AuditAction.BookingCreated);
+            entries.Select(entry => entry.Action).Should().Contain(AuditAction.BookingMoved);
+
+            // Newest first: what just happened is what somebody opens a
+            // history for, so it goes at the top rather than at the bottom of
+            // everything they already knew.
+            entries.Should().BeInDescendingOrder(entry => entry.At);
+            entries[0].Action.Should().Be(AuditAction.BookingMoved);
+
+            // And the move says where it came from, which the booking itself
+            // can no longer answer.
+            var moved = entries.Single(entry => entry.Action == AuditAction.BookingMoved);
+            moved.Description.Should().Contain("Moved from");
+            moved.Description.Should().NotBeNullOrWhiteSpace();
+        }
+    }
+
+    [Fact]
+    public async Task HistoryAsync_ShouldSayWhenAHoldRanOut()
+    {
+        // Arrange: a booking made and never paid for, read back long after its
+        // hold would have ended.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Lapsed History Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act: asked a day later, by which time the hold is long gone.
+        var later = CreateService(context, Now.AddDays(1));
+        var history = await later.HistoryAsync(
+            created.Value!.Id,
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: nothing writes this entry, because nothing notices a hold
+        // ending — a booking does not change, it simply stops holding. Without
+        // it the history says the booking was made and then stops, at the exact
+        // moment the reader wants to know what became of it.
+        using (new AssertionScope())
+        {
+            var entries = history.Value!.ToArray();
+
+            entries.Select(entry => entry.Action).Should().Contain(AuditAction.BookingHoldExpired);
+
+            // Newest first, and the expiry is the newest thing that happened.
+            entries[0].Action.Should().Be(AuditAction.BookingHoldExpired);
+            entries[0].Description.Should().Contain("back on sale");
+
+            // Timed at the moment the hold ended, not at the moment somebody
+            // happened to open the page.
+            entries[0].At.Should().BeCloseTo(Now.AddMinutes(PaymentHold.DefaultMinutes), TimeSpan.FromMinutes(1));
+        }
+    }
+
+    [Fact]
+    public async Task HistoryAsync_ShouldNotSayAHoldRanOutWhenTheReceiptIsIn()
+    {
+        // Arrange: paid for, so the clock stopped mattering.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Paid History Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: read a day later, well past when an unpaid hold would have gone.
+        var later = CreateService(context, Now.AddDays(1));
+        var history = await later.HistoryAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: somebody who paid did not lose their court to a clock, and
+        // their history must not tell them they did.
+        history.Value!.Select(entry => entry.Action)
+            .Should().NotContain(AuditAction.BookingHoldExpired);
+    }
+
+    [Fact]
+    public async Task HistoryAsync_ShouldNotShowOneCustomerAnothersBooking()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Private History Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: somebody else's sign-in against this booking's id.
+        var history = await sut.HistoryAsync(booking, Guid.NewGuid(), CancellationToken.None);
+
+        // Assert: the same answer as a booking that is not there, so an id
+        // cannot be probed for whose it is.
+        using (new AssertionScope())
+        {
+            history.Succeeded.Should().BeFalse();
+            history.Failure.Should().Be(BookingFailure.CourtNotFound);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseABookingTheVenueHasNotConfirmed()
+    {
+        // Arrange: paid for and handed over, but nobody at the venue has looked
+        // at the receipt yet.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Unconfirmed Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        var waiting = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        waiting.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        waiting.SubmitForVerification(Now);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+
+        // Act
+        var asked = await sut.MoveAsync(
+            waiting.Id,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball2),
+            CancellationToken.None);
+
+        // Assert: this one might still be turned down. Moving it takes hours
+        // off one court and puts them on another for an agreement that may
+        // never stand, and the hours it left are back on sale in the meantime.
+        var card = await sut.GetAsync(waiting.Id, floor.Customer, CancellationToken.None);
+
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeFalse();
+            asked.Failure.Should().Be(BookingFailure.NotMovable);
+
+            // And the screen is told, so the link is never offered.
+            card.Value!.CanBeMoved.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldStopAtTheVenuesLimit()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Counted Move Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var courts = new[] { floor.Pickleball2, floor.Pickleball3, floor.Pickleball1 };
+
+        foreach (var court in courts)
+        {
+            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court), CancellationToken.None))
+                .Succeeded.Should().BeTrue();
+        }
+
+        // Act: a fourth, against a limit of three.
+        var again = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball2),
+            CancellationToken.None);
+
+        // Assert: the limit is the venue's own dial, and it is the only thing
+        // standing between a court and somebody moving around it all afternoon.
+        using (new AssertionScope())
+        {
+            again.Succeeded.Should().BeFalse();
+            again.Failure.Should().Be(BookingFailure.MoveLimitReached);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldRefuseACourtThatCostsMoreThanWasPaid()
+    {
+        // Arrange: a second pickleball court in the same building, at nine
+        // hundred an hour against the five already paid.
         await using var context = database.CreateContext();
         var floor = await FloorAsync(context, "Upgrade Courts");
         var sut = CreateService(context);
@@ -930,17 +1361,22 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new MoveBookingRequest(dearer),
             CancellationToken.None);
 
-        // Assert: 900 against the 500 already paid, and the platform fee is not
-        // charged twice because the hours have not changed.
-        var request = await context.BookingMoveRequests
+        // Assert: the move lands the moment it is asked for, and nothing on
+        // that path collects money. Letting it through would hand the customer
+        // a better court and hand the venue the bill, with neither of them
+        // asked.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
             .AsNoTracking()
-            .SingleAsync(row => row.BookingId == booking);
+            .SingleAsync(row => row.Id == booking);
 
         using (new AssertionScope())
         {
-            asked.Succeeded.Should().BeTrue();
-            request.BalanceDue.Should().Be(400m);
-            request.Status.Should().Be(MoveRequestStatus.AwaitingPayment);
+            asked.Succeeded.Should().BeFalse();
+            asked.Failure.Should().Be(BookingFailure.MoveCostsMore);
+            stored.BookableCourtId.Should().Be(floor.Pickleball1);
+            stored.MoveCount.Should().Be(0);
         }
     }
 
@@ -954,6 +1390,12 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var cheaper = await SecondCourtAsync(context, floor, pickleballRate: 300m);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
 
+        var paidBefore = await context.Bookings
+            .AsNoTracking()
+            .Where(row => row.Id == booking)
+            .Select(row => row.PaidTotal)
+            .SingleAsync();
+
         // Act
         await sut.MoveAsync(
             booking,
@@ -961,69 +1403,20 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new MoveBookingRequest(cheaper),
             CancellationToken.None);
 
-        // Assert: nothing owed, and nothing given back either. There are no
-        // refunds — the customer keeps the booking and pays no more.
-        var request = await context.BookingMoveRequests
+        // Assert: it moves, and nothing is given back. There are no refunds —
+        // the customer keeps the booking and pays no more, which is what the
+        // booking policy says and what the move screen repeats.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
             .AsNoTracking()
-            .SingleAsync(row => row.BookingId == booking);
+            .SingleAsync(row => row.Id == booking);
 
         using (new AssertionScope())
         {
-            request.BalanceDue.Should().Be(0m);
-            request.Status.Should().Be(MoveRequestStatus.AwaitingConfirmation);
+            stored.BookableCourtId.Should().Be(cheaper);
+            stored.PaidTotal.Should().Be(paidBefore);
         }
-    }
-
-    [Fact]
-    public async Task MoveAsync_ShouldHoldTheCourtItIsMovingOnto()
-    {
-        // Arrange: a booking asking to move onto the whole floor.
-        await using var context = database.CreateContext();
-        var floor = await FloorAsync(context, "Held Move Courts");
-        var sut = CreateService(context);
-        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
-
-        await sut.MoveAsync(
-            booking,
-            floor.Customer,
-            new MoveBookingRequest(floor.Basketball),
-            CancellationToken.None);
-
-        // Act: somebody else tries for the same hour on that floor.
-        var day = await sut.AvailabilityAsync(floor.Volleyball, Wednesday, CancellationToken.None);
-
-        // Assert: a move waiting to land holds its hours exactly as an unpaid
-        // booking holds the hours it is waiting to pay for. Without this the
-        // court somebody is part way through paying an upgrade for is still on
-        // sale to the next person.
-        day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
-    }
-
-    [Fact]
-    public async Task MoveAsync_ShouldRefuseASecondRequestWhileOneIsWaiting()
-    {
-        // Arrange
-        await using var context = database.CreateContext();
-        var floor = await FloorAsync(context, "One At A Time Courts");
-        var sut = CreateService(context);
-        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
-
-        await sut.MoveAsync(
-            booking,
-            floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
-            CancellationToken.None);
-
-        // Act
-        var again = await sut.MoveAsync(
-            booking,
-            floor.Customer,
-            new MoveBookingRequest(floor.Pickleball3),
-            CancellationToken.None);
-
-        // Assert: two at once and the customer and the venue can be sending the
-        // same booking to different courts.
-        again.Failure.Should().Be(BookingFailure.MoveAlreadyRequested);
     }
 
     [Fact]
@@ -1096,6 +1489,608 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     /// pickleball court has to be a different court — repricing the sport this
     /// booking is already on would move the booking's own price with it.
     /// </summary>
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldWriteItDownAndLeaveTheBookingWhereItIs()
+    {
+        // Arrange: a second pickleball court at nine hundred an hour, against
+        // the five hundred already paid.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Asked Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert: the request stands on its own and the booking has not budged.
+        // A venue that has not seen the money must not have given up its court,
+        // and a customer who has not paid must not have lost theirs.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == booking);
+
+        var upgrade = await context.BookingUpgradeRequests
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.BookingId == booking);
+
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeTrue();
+            asked.Value!.BalanceDue.Should().Be(400m);
+            asked.Value.Status.Should().Be(UpgradeStatus.AwaitingPayment);
+            asked.Value.Slots.Should().ContainSingle();
+
+            upgrade.ToBookableCourtId.Should().Be(dearer);
+            upgrade.RentalNow.Should().Be(500m);
+            upgrade.RentalNew.Should().Be(900m);
+            upgrade.BalanceDue.Should().Be(400m);
+            upgrade.Slots.Should().ContainSingle(slot => slot.StartsAt == SevenAm);
+
+            // The booking itself: untouched, and no move counted. Nothing has
+            // happened to it yet but a piece of paper.
+            stored.BookableCourtId.Should().Be(floor.Pickleball1);
+            stored.MoveCount.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldHoldTheHoursOnAClock()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Hold Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert: hours nobody has paid for cannot be held for ever, so the
+        // request carries the venue's own hold, timed from the server's clock.
+        using (new AssertionScope())
+        {
+            asked.Value!.HoldsUntil.Should().BeAfter(Now);
+            asked.Value.HasLapsed.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldRefuseHoursThatCostTheSameOrLess()
+    {
+        // Arrange: a cheaper court. Moving onto it is free and immediate, so
+        // there is nothing for a checkout to collect.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Cheaper Courts");
+        var sut = CreateService(context);
+        var cheaper = await SecondCourtAsync(context, floor, pickleballRate: 300m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(cheaper),
+            CancellationToken.None);
+
+        // Assert: refused, and nothing written down. Sending somebody to pay
+        // nought pesos is a step whose only effect is to make them wonder what
+        // they are being charged for.
+        context.ChangeTracker.Clear();
+
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeFalse();
+            asked.Failure.Should().Be(BookingFailure.NothingToUpgrade);
+            (await context.BookingUpgradeRequests.AsNoTracking().AnyAsync(row => row.BookingId == booking))
+                .Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldRefuseASecondOneWhileTheFirstIsOpen()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Twice Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Act
+        var again = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert: one at a time. Two open requests and the customer can be
+        // paying for hours while the venue is approving different ones.
+        context.ChangeTracker.Clear();
+
+        using (new AssertionScope())
+        {
+            again.Succeeded.Should().BeFalse();
+            again.Failure.Should().Be(BookingFailure.MoveAlreadyRequested);
+            (await context.BookingUpgradeRequests.AsNoTracking().CountAsync(row => row.BookingId == booking))
+                .Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldRefuseABookingTheVenueHasNotConfirmed()
+    {
+        // Arrange: a booking still waiting to be paid for. Only a booking the
+        // venue has confirmed can move at all, and paying does not buy a way
+        // around that.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Unconfirmed Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+
+        var created = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeFalse();
+            asked.Failure.Should().Be(BookingFailure.NotMovable);
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldCountAgainstTheVenuesMoveLimit()
+    {
+        // Arrange: a booking that has spent every move the venue allows.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Limit Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Three free moves, which is what this venue allows.
+        foreach (var court in new[] { floor.Pickleball2, floor.Pickleball3, floor.Pickleball1 })
+        {
+            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court), CancellationToken.None))
+                .Succeeded.Should().BeTrue();
+        }
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert: an upgrade is still a move. Paying for one must not be a way
+        // around the dial the venue set.
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeFalse();
+            asked.Failure.Should().Be(BookingFailure.MoveLimitReached);
+        }
+    }
+
+    [Fact]
+    public async Task OpenUpgradeAsync_ShouldAnswerNothingWhenNoneIsWaiting()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade None Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var open = await sut.OpenUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: nothing waiting is an ordinary answer, not a not-found. The
+        // question the upgrade screen asks is what is open, and "nothing" is a
+        // complete reply to it.
+        using (new AssertionScope())
+        {
+            open.Succeeded.Should().BeTrue();
+            open.Value.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task OpenUpgradeAsync_ShouldReadBackTheOneThatIsWaiting()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Read Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Act
+        var open = await sut.OpenUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: this is what a refresh reads, so it has to carry enough to
+        // rebuild the page the customer left.
+        using (new AssertionScope())
+        {
+            open.Value.Should().NotBeNull();
+            open.Value!.Id.Should().Be(asked.Value!.Id);
+            open.Value.BalanceDue.Should().Be(400m);
+            open.Value.Slots.Should().ContainSingle();
+        }
+    }
+
+    [Fact]
+    public async Task OpenUpgradeAsync_ShouldAnswerNothingForAnotherCustomersBooking()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Stranger Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var open = await sut.OpenUpgradeAsync(booking, Guid.NewGuid(), CancellationToken.None);
+
+        // Assert: another customer's booking answers the same as one that is
+        // not there, so an id cannot be probed for whether it belongs to
+        // somebody.
+        using (new AssertionScope())
+        {
+            open.Succeeded.Should().BeFalse();
+            open.Failure.Should().Be(BookingFailure.CourtNotFound);
+        }
+    }
+
+    [Fact]
+    public async Task AttachUpgradeReceiptAsync_ShouldStopTheClock()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Receipt Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Act
+        var attached = await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Assert: the receipt is in, and from here the hold stops mattering.
+        // Somebody who has paid must not lose their hours to a queue they are
+        // not in — which is exactly what a booking's own receipt does.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.BookingUpgradeRequests
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == asked.Value!.Id);
+
+        using (new AssertionScope())
+        {
+            attached.Succeeded.Should().BeTrue();
+            attached.Value!.ReceiptUrl.Should().Be(Receipt);
+            stored.ReceiptUrl.Should().Be(Receipt);
+            stored.ReceiptUploadedAt.Should().NotBeNull();
+
+            // Still the customer's turn: uploading is not sending.
+            stored.Status.Should().Be(UpgradeStatus.AwaitingPayment);
+            stored.HoldsTheCourtAt(stored.HoldsUntil.AddHours(1)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task AttachUpgradeReceiptAsync_ShouldRefuseALinkOffTheseCloudinaryAccount()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Untrusted Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Act
+        var attached = await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest("https://example.com/image/upload/v1/anything.jpg"),
+            CancellationToken.None);
+
+        // Assert: the browser reports where it put the file, so the link is the
+        // customer's word for it. A venue must never be shown a picture nobody
+        // here can vouch for.
+        using (new AssertionScope())
+        {
+            attached.Succeeded.Should().BeFalse();
+            attached.Failure.Should().Be(BookingFailure.UntrustedReceiptUrl);
+        }
+    }
+
+    [Fact]
+    public async Task SubmitUpgradeAsync_ShouldHandItToTheVenueAndLeaveTheBookingWhereItIs()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Submit Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Act
+        var sent = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: it is the venue's turn, and the booking has still not moved.
+        // Sending money is not the same as being given the court.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            sent.Succeeded.Should().BeTrue();
+            sent.Value!.Status.Should().Be(UpgradeStatus.AwaitingApproval);
+            stored.BookableCourtId.Should().Be(floor.Pickleball1);
+            stored.MoveCount.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task SubmitUpgradeAsync_ShouldRefuseWhenNoReceiptHasBeenUploaded()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade No Receipt Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Act
+        var sent = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: there is nothing for the venue to look at, so handing them
+        // the queue entry would only waste somebody's afternoon.
+        using (new AssertionScope())
+        {
+            sent.Succeeded.Should().BeFalse();
+            sent.Failure.Should().Be(BookingFailure.NoReceipt);
+        }
+    }
+
+    [Fact]
+    public async Task SubmitUpgradeAsync_ShouldRefuseASecondSending()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Resend Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Act
+        var again = await sut.SubmitUpgradeAsync(booking, floor.Customer, CancellationToken.None);
+
+        // Assert: it is out of the customer's hands. Changing a receipt the
+        // venue is already looking at would change it while they look.
+        using (new AssertionScope())
+        {
+            again.Succeeded.Should().BeFalse();
+            again.Failure.Should().Be(BookingFailure.NotAwaitingPayment);
+        }
+    }
+
+    [Fact]
+    public async Task AttachUpgradeReceiptAsync_ShouldSayWhenNoUpgradeIsWaiting()
+    {
+        // Arrange: a booking nobody has asked to upgrade.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Missing Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var attached = await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            attached.Succeeded.Should().BeFalse();
+            attached.Failure.Should().Be(BookingFailure.MoveRequestNotFound);
+        }
+    }
+
+    [Fact]
+    public async Task AttachReceiptAsync_ShouldRefuseAVenueWithNoWayOfBeingPaid()
+    {
+        // Arrange: a venue that has set up neither a GCash number nor a QR
+        // code, which is how every venue starts.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Unpayable Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var attached = await sut.AttachReceiptAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Assert: refused, and the booking is left waiting to be paid rather
+        // than handed to a desk with no account to check it against. Taking the
+        // receipt would also have stopped the hold's clock, so the court would
+        // sit held for ever on the strength of a payment nobody could receive.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == created.Value.Id);
+
+        using (new AssertionScope())
+        {
+            attached.Succeeded.Should().BeFalse();
+            attached.Failure.Should().Be(BookingFailure.VenueCannotBePaid);
+            stored.ReceiptUrl.Should().BeNull();
+            stored.Status.Should().Be(BookingStatus.PendingPayment);
+        }
+    }
+
+    [Fact]
+    public async Task AttachReceiptAsync_ShouldSendItOnceTheVenueCanBePaid()
+    {
+        // Arrange: the same venue, now with a GCash number.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Payable Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+
+        var created = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, Wednesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var attached = await sut.AttachReceiptAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Assert: taken, and handed straight to the venue. Sending the receipt
+        // IS the submission — there is no step in between for a booking to get
+        // stuck in, holding its court where no desk can see it.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .SingleAsync(row => row.Id == created.Value.Id);
+
+        using (new AssertionScope())
+        {
+            attached.Succeeded.Should().BeTrue();
+            stored.ReceiptUrl.Should().Be(Receipt);
+            stored.Status.Should().Be(BookingStatus.PendingVerification);
+        }
+    }
+
+    /// <summary>
+    /// Gives the venue a GCash number.
+    ///
+    /// A receipt is evidence of a payment, and a venue with no account has none
+    /// to have been paid into — so anything that sends one has to set this up
+    /// first, exactly as a real venue would before taking a booking.
+    /// </summary>
+    private static async Task PayableAsync(AppDbContext context, Floor floor)
+    {
+        var ownerId = await context.BookableCourts
+            .AsNoTracking()
+            .Where(unit => unit.Id == floor.Pickleball1)
+            .Select(unit => unit.Court.Facility.FacilityOwnerId)
+            .SingleAsync();
+
+        var owner = await context.FacilityOwners.SingleAsync(row => row.Id == ownerId);
+
+        owner.SetPaymentDetails(
+            "0917 555 0101",
+            "Demo Sports Center",
+            null,
+            owner.PartialBookingExpiryMinutes,
+            Now);
+
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+    }
+
     private static async Task<Guid> SecondCourtAsync(
         AppDbContext context,
         Floor floor,
@@ -1285,11 +2280,18 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         Guid Pickleball3,
         Guid Customer);
 
-    private static BookingService CreateService(AppDbContext context) => new(
+    /// <param name="now">
+    /// For a test that has to read the booking at a different moment than it was
+    /// made — whether a game is under way is a question about the clock.
+    /// </param>
+    private static BookingService CreateService(
+        AppDbContext context,
+        DateTimeOffset? now = null) => new(
         context,
         Assets(),
         new SilentNotifier(),
-        new FixedTimeProvider(Now),
+        new AuditLogger(context, new FixedTimeProvider(now ?? Now)),
+        new FixedTimeProvider(now ?? Now),
         NullLogger<BookingService>.Instance);
 
     private static CloudinaryAssetService Assets() => new(

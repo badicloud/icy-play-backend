@@ -124,15 +124,40 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
-    /// What moving onto that court would cost. Answered before anybody commits
-    /// to anything, because a move that wants paying for is a different
-    /// proposition from one that does not.
+    /// Everything that has happened to this booking, newest first — what just
+    /// happened is what somebody opens a history for, and putting it at the
+    /// bottom makes them scroll past everything they already knew.
     /// </summary>
-    [HttpGet("{bookingId:guid}/move-quote")]
+    [HttpGet("{bookingId:guid}/history")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> History(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.HistoryAsync(bookingId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<BookingHistoryEntry>>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// What moving onto that court, at those hours, would come to — and whether
+    /// the booking falls on the venue's today, which is what the move screen
+    /// needs before it can offer dates.
+    ///
+    /// A POST for something that changes nothing, because the hours being asked
+    /// about are a list: a quote for a whole proposed booking belongs in a body
+    /// rather than strung through a query.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/move-quote")]
     [Authorize(Roles = UserRoleName.Customer)]
     public async Task<IActionResult> MoveQuote(
         Guid bookingId,
-        [FromQuery] Guid toBookableCourtId,
+        MoveBookingRequest request,
         CancellationToken ct)
     {
         if (CurrentUserId() is not Guid userId)
@@ -140,7 +165,12 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             return Unauthorized();
         }
 
-        var result = await bookings.QuoteMoveAsync(bookingId, userId, toBookableCourtId, ct);
+        var result = await bookings.QuoteMoveAsync(
+            bookingId,
+            userId,
+            request.ToBookableCourtId,
+            request.Slots,
+            ct);
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<MoveQuoteResponse>(result.Value!))
@@ -148,8 +178,8 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
-    /// Asks to move a booking onto another court, keeping its hours. Raises a
-    /// request; the booking itself does not move until the venue confirms.
+    /// Moves a booking onto another court, and onto other hours when they are
+    /// given. It happens at once — nobody is asked to approve it.
     /// </summary>
     [HttpPost("{bookingId:guid}/move")]
     [Authorize(Roles = UserRoleName.Customer)]
@@ -171,12 +201,64 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
-    /// The GCash receipt for the difference an upgrade came to. The hold's
-    /// clock stops here: from now on the wait is the venue's.
+    /// Asks to move onto hours that cost more, and offers to pay the
+    /// difference. The booking does not move: this writes the request down,
+    /// holds the hours on a clock, and sends the customer to pay.
     /// </summary>
-    [HttpPost("{bookingId:guid}/move/receipt")]
+    [HttpPost("{bookingId:guid}/upgrade")]
     [Authorize(Roles = UserRoleName.Customer)]
-    public async Task<IActionResult> AttachMoveReceipt(
+    public async Task<IActionResult> RequestUpgrade(
+        Guid bookingId,
+        MoveBookingRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.RequestUpgradeAsync(bookingId, userId, request, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<UpgradeRequestResponse>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// The upgrade still open on this booking, or nothing when there is none.
+    ///
+    /// What the upgrade screen reads on every visit, so a refresh or a second
+    /// tab lands on the step the customer is actually at. Nothing open is an
+    /// ordinary answer rather than a not-found: the question is what is
+    /// waiting, and "nothing" is a complete reply.
+    /// </summary>
+    [HttpGet("{bookingId:guid}/upgrade")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> OpenUpgrade(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        // A hold is counted in minutes. A cached answer is a customer watching
+        // a clock that stopped.
+        Response.Headers.CacheControl = "no-store";
+
+        var result = await bookings.OpenUpgradeAsync(bookingId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<UpgradeRequestResponse?>(result.Value))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Records the receipt for an upgrade the customer has paid. The file never
+    /// passes through here — only the link to it, which is checked.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/upgrade/receipt")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> AttachUpgradeReceipt(
         Guid bookingId,
         AttachReceiptRequest request,
         CancellationToken ct)
@@ -186,27 +268,30 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             return Unauthorized();
         }
 
-        var result = await bookings.AttachMoveReceiptAsync(bookingId, userId, request.ReceiptUrl, ct);
+        var result = await bookings.AttachUpgradeReceiptAsync(bookingId, userId, request, ct);
 
         return result.Succeeded
-            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            ? Ok(new ApiEnvelope<UpgradeRequestResponse>(result.Value!))
             : Failure(result.Failure);
     }
 
-    /// <summary>Thought better of it. The held court goes back on sale.</summary>
-    [HttpPost("{bookingId:guid}/move/withdraw")]
+    /// <summary>
+    /// Hands the upgrade to the venue to check. The booking still does not
+    /// move: that happens when somebody there says yes.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/upgrade/submit")]
     [Authorize(Roles = UserRoleName.Customer)]
-    public async Task<IActionResult> WithdrawMove(Guid bookingId, CancellationToken ct)
+    public async Task<IActionResult> SubmitUpgrade(Guid bookingId, CancellationToken ct)
     {
         if (CurrentUserId() is not Guid userId)
         {
             return Unauthorized();
         }
 
-        var result = await bookings.WithdrawMoveAsync(bookingId, userId, ct);
+        var result = await bookings.SubmitUpgradeAsync(bookingId, userId, ct);
 
         return result.Succeeded
-            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
+            ? Ok(new ApiEnvelope<UpgradeRequestResponse>(result.Value!))
             : Failure(result.Failure);
     }
 
@@ -227,25 +312,6 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
         }
 
         var result = await bookings.AttachReceiptAsync(bookingId, userId, request, ct);
-
-        return result.Succeeded
-            ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
-            : Failure(result.Failure);
-    }
-
-    /// <summary>
-    /// Hands the booking to the venue to check, and writes to both sides.
-    /// </summary>
-    [HttpPost("{bookingId:guid}/submit-payment")]
-    [Authorize(Roles = UserRoleName.Customer)]
-    public async Task<IActionResult> SubmitPayment(Guid bookingId, CancellationToken ct)
-    {
-        if (CurrentUserId() is not Guid userId)
-        {
-            return Unauthorized();
-        }
-
-        var result = await bookings.SubmitForVerificationAsync(bookingId, userId, ct);
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<BookingDetail>(result.Value!))
@@ -319,7 +385,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             BookingFailure.NotMovable => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
-                "Only a booking the venue is holding or has confirmed can be moved."),
+                "Only a booking the venue has confirmed can be moved."),
             BookingFailure.MoveLimitReached => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
@@ -336,10 +402,26 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "A booking can only move to another court for the same sport at the same venue."),
+            BookingFailure.VenueCannotBePaid => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This venue has not set up a way to be paid yet, so a receipt cannot be sent. " +
+                "Please contact them to arrange payment."),
+            BookingFailure.NothingToUpgrade => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Those hours cost the same or less, so there is nothing to pay. " +
+                "You can move onto them straight away."),
+            BookingFailure.MoveCostsMore => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That court costs more than this booking has been paid for. " +
+                "Ask the venue if you would like to move onto it."),
             BookingFailure.MoveRequestNotFound => (
                 StatusCodes.Status404NotFound,
                 ErrorCodes.NotFound,
-                "No move is waiting on this booking."),
+                "No upgrade is waiting on this booking. The hold may have run out, " +
+                "in which case those hours are back on sale."),
             BookingFailure.MoveNotPaid => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,

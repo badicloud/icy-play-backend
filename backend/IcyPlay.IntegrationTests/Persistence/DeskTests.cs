@@ -807,6 +807,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         context,
         Assets(),
         new RecordingNotifier(),
+        new AuditLogger(context, new FixedTimeProvider(now ?? Now)),
         new FixedTimeProvider(now ?? Now),
         NullLogger<BookingService>.Instance);
 

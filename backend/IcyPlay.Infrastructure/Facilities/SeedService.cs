@@ -267,10 +267,6 @@ public sealed class SeedService(
         // a cascade from the top would stop halfway and leave a venue in
         // pieces. Going the other way round, every row pointing at a thing has
         // already gone by the time that thing does.
-        await db.BookingMoveRequests
-            .Where(request => bookingIds.Contains(request.BookingId))
-            .ExecuteDeleteAsync(ct);
-
         await db.BookingSlots
             .Where(slot => bookingIds.Contains(slot.BookingId))
             .ExecuteDeleteAsync(ct);

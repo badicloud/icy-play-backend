@@ -99,6 +99,31 @@ public static class AuditAction
     public const string FacilityAttendantAdded = "FacilityAttendantAdded";
     public const string FacilityAttendantRemoved = "FacilityAttendantRemoved";
     public const string FacilityAttendantInvitationSent = "FacilityAttendantInvitationSent";
+    /// <summary>
+    /// What happens to a booking, in the customer's own words.
+    ///
+    /// The desk already wrote the two it gives; the rest were happening with
+    /// nothing recorded at all — a booking could be made, paid for and moved
+    /// to another court, and the only trace was the booking's own state, which
+    /// says where it ended up and never how it got there.
+    /// </summary>
+    public const string BookingCreated = "BookingCreated";
+    public const string BookingPaymentSubmitted = "BookingPaymentSubmitted";
+    public const string BookingMoved = "BookingMoved";
+    public const string BookingUpgradeRequested = "BookingUpgradeRequested";
+    public const string BookingUpgradePaymentSubmitted = "BookingUpgradePaymentSubmitted";
+    public const string BookingUpgradeApproved = "BookingUpgradeApproved";
+    public const string BookingUpgradeDeclined = "BookingUpgradeDeclined";
+
+    /// <summary>
+    /// A hold that ran out with nothing paid.
+    ///
+    /// Never written to the trail, because nothing notices it happening: a
+    /// booking does not change when its hold ends, it simply stops holding.
+    /// The name exists so a history can still say it, worked out from the
+    /// booking the same way the badge on the card is.
+    /// </summary>
+    public const string BookingHoldExpired = "BookingHoldExpired";
     public const string BookingConfirmed = "BookingConfirmed";
     public const string BookingRejected = "BookingRejected";
     public const string ContractCommenced = "ContractCommenced";

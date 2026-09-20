@@ -153,11 +153,42 @@ public sealed record BookingDetail(
     string? GcashNumber,
     string? GcashAccountName,
     string? GcashQrCodeUrl,
+    /// <summary>
+    /// How to reach the venue, when reaching them is the only way forward.
+    ///
+    /// A venue that has set up no way of being paid cannot take a receipt, and
+    /// telling somebody to get in touch without saying how leaves them to go
+    /// and find the venue themselves. Null on both when the venue has given
+    /// neither.
+    /// </summary>
+    string? ContactPhone,
+    string? ContactEmail,
+    /// <summary>
+    /// Why it ended, when it did: the venue's words on a refusal, or the
+    /// customer's own on a cancellation.
+    ///
+    /// The desk is made to write one before it can refuse anything, and this is
+    /// what that was for. "Not accepted" on its own tells somebody their money
+    /// is coming back and not why, which is the one question they will ring up
+    /// to ask.
+    /// </summary>
+    string? CancellationReason,
     IReadOnlyCollection<BookedSlot> Slots,
     /// <summary>
-    /// How many moves are left of the three. Zero once it is settled.
+    /// How many moves this booking has left. Zero once they are used up, and
+    /// the booking then stays where it is.
     /// </summary>
     int MovesLeft,
+    /// <summary>
+    /// How many it was allowed in all, which is the venue's own dial.
+    ///
+    /// Sent alongside the remainder so the customer can be told what the
+    /// number means. "3 more times" on its own invites the question "three of
+    /// how many, and what happens at the end of them" — and the answer to the
+    /// second is that the booking can no longer be moved, which somebody ought
+    /// to hear before they spend their last one.
+    /// </summary>
+    int MoveLimit,
     /// <summary>
     /// Whether it can be moved right now — which is more than having moves
     /// left, because the last day before it starts closes the door. Answered
@@ -166,39 +197,36 @@ public sealed record BookingDetail(
     /// </summary>
     bool CanBeMoved,
     /// <summary>
-    /// The move this booking is waiting on, or null when it is not waiting on
-    /// one.
+    /// Whether the booking has started, on the venue's clock.
     ///
-    /// Carried on the booking because it is the booking's own state: a card
-    /// that shows the old court and no explanation reads as though the request
-    /// went nowhere, and a customer who thinks that asks again.
+    /// A booking in play can still change court — a floodlight fails and the
+    /// game carries on next door — but it cannot change when it is. The hours
+    /// are being played as they are read. Answered here rather than worked out
+    /// in the browser, because the reader's clock is not the venue's and this
+    /// decides what the move screen is allowed to offer.
     /// </summary>
-    PendingMove? PendingMove,
+    bool IsInPlay,
     DateTimeOffset CreatedAt);
 
 /// <summary>
-/// A move that has been asked for and not yet settled.
+/// One thing that happened to a booking.
 ///
-/// What the customer needs is the answer to three questions: where it is
-/// going, whether they owe anything, and who they are waiting on.
+/// Read from the platform's audit trail rather than from a record of its own:
+/// the venue's desk already writes what it does there, and two accounts of one
+/// booking are two accounts that will one day disagree.
+///
+/// What the trail keeps and this does not: who did it, from which address, on
+/// which browser. That is for the platform to answer questions with, not for
+/// the person whose booking it is.
 /// </summary>
-public sealed record PendingMove(
-    /// <summary>AwaitingPayment or AwaitingConfirmation.</summary>
-    string Status,
-    /// <summary>The court as it was named when the move was asked for.</summary>
-    string ToCourtName,
-    /// <summary>What is still owed for it, and never less than nothing.</summary>
-    decimal BalanceDue,
-    /// <summary>When the held court goes back on sale, if it is unpaid.</summary>
-    DateTimeOffset HoldsUntil,
-    /// <summary>
-    /// True when the venue moved the booking rather than the customer asking.
-    /// The two read very differently to the person holding the booking.
-    /// </summary>
-    bool RaisedByVenue,
-    /// <summary>Why, when an attendant moved it. Null when the customer asked.</summary>
+public sealed record BookingHistoryEntry(
+    /// <summary>The stable name of what happened, for picking wording and artwork.</summary>
+    string Action,
+    /// <summary>Said plainly, because this is read by the person it happened to.</summary>
+    string Description,
+    /// <summary>Why, when whoever did it gave a reason. Null when they did not.</summary>
     string? Reason,
-    DateTimeOffset RequestedAt);
+    DateTimeOffset At);
 
 public sealed record BookedSlot(
     DateOnly Date,
@@ -258,10 +286,28 @@ public enum BookingFailure
     MoveNotPaid,
     /// <summary>The receipt has to be a picture. A PDF or a video is not one.</summary>
     ReceiptNotAnImage,
+    /// <summary>
+    /// The venue has set up no way to be paid, so there is no payment a receipt
+    /// could be of.
+    ///
+    /// Taking one anyway would put a picture in front of a desk that has no
+    /// account to check it against, and tell the customer their money is on its
+    /// way to somebody who never asked for it.
+    /// </summary>
+    VenueCannotBePaid,
     /// <summary>Nothing to submit: no receipt has been uploaded.</summary>
     NoReceipt,
     /// <summary>The booking is not waiting to be paid for, so this step does not apply.</summary>
     NotAwaitingPayment,
+    /// <summary>
+    /// The court asked for costs more than the booking has been settled for.
+    ///
+    /// A move happens at once now, and nothing collects money on the way: the
+    /// venue is not asked to approve it and the customer is not sent to a
+    /// checkout. So a dearer court cannot be moved onto without somebody
+    /// quietly paying the difference, and that somebody would be the venue.
+    /// </summary>
+    MoveCostsMore,
     /// <summary>
     /// The court offered is not the same sport, or is not at the same venue.
     ///
@@ -270,7 +316,12 @@ public enum BookingFailure
     /// priced when the agreement was made, and moving pickleball onto a
     /// badminton court would leave a record of a thing that never happened.
     /// </summary>
-    NotTheSameOffering
+    NotTheSameOffering,
+    /// <summary>
+    /// The hours asked for cost the same or less, so there is nothing to
+    /// upgrade. That move happens at once and free, through the move screen.
+    /// </summary>
+    NothingToUpgrade
 }
 
 /// <summary>
@@ -310,7 +361,19 @@ public sealed record AttachReceiptRequest(string ReceiptUrl);
 /// wants the same slot on another floor, and a venue moving somebody off a
 /// failed court has no interest in rescheduling them as well.
 /// </summary>
-public sealed record MoveBookingRequest(Guid ToBookableCourtId);
+/// <summary>
+/// Where a booking is going, and optionally when.
+/// </summary>
+/// <param name="Slots">
+/// The hours to move onto. Null keeps the ones the booking already has, which
+/// is what a game under way needs: the court changes and the clock does not.
+/// Given, they replace the hours still to be played — the same number of them,
+/// because a move changes when and where a booking is, never how much of it
+/// there is.
+/// </param>
+public sealed record MoveBookingRequest(
+    Guid ToBookableCourtId,
+    IReadOnlyCollection<BookingSlotInput>? Slots = null);
 
 /// <summary>
 /// What a move would cost before anybody commits to it.
@@ -325,15 +388,85 @@ public sealed record MoveQuoteResponse(
     /// <summary>Hours already played. They stay where they were, at what they cost.</summary>
     int HoursStaying,
     int HoursMoving,
-    decimal PaidAlready,
-    decimal NewTotal,
-    /// <summary>The shortfall, and never less than nothing: a cheaper court is not a refund.</summary>
+    /// <summary>
+    /// What this booking's hours come to now, in court rental alone.
+    ///
+    /// The platform fee is left out of both sides of this comparison. It is
+    /// charged per hour booked, and a move buys no hours — the same number of
+    /// them end up somewhere else. Counting it would make an identical move
+    /// look like it cost something.
+    ///
+    /// Taken from the booking's own hours rather than from what was settled:
+    /// what was settled can be nothing at all on a booking still being paid
+    /// for, and comparing against nothing makes every move look like a bill.
+    /// </summary>
+    decimal RentalNow,
+    /// <summary>What they would come to on the new court, at the new hours.</summary>
+    decimal RentalNew,
+    /// <summary>The shortfall, and never less than nothing: cheaper is not a refund.</summary>
     decimal BalanceDue,
     /// <summary>Minutes the new court is held for while the difference is paid.</summary>
-    int HoldMinutes)
+    int HoldMinutes,
+    /// <summary>
+    /// Whether the hours still to be played fall on the venue's today.
+    ///
+    /// What the move screen reads to decide whether to offer dates at all: a
+    /// booking today can change its hours but not its day, and one still to
+    /// come can change both. Answered per request rather than once with the
+    /// booking, because "today" turns over while the screen is open — opened
+    /// at two minutes to midnight and answered at one minute past, the honest
+    /// answer is a different one.
+    /// </summary>
+    bool StartsToday)
 {
     public bool IsUpgrade => BalanceDue > 0m;
 }
+
+/// <summary>
+/// An upgrade a customer has asked for, and how far it has got.
+///
+/// Read back on every visit rather than held on the screen that created it, so
+/// a refresh, a second tab, or somebody coming back after paying all land on
+/// the step they are actually at.
+/// </summary>
+public sealed record UpgradeRequestResponse(
+    Guid Id,
+    Guid BookingId,
+    Guid ToBookableCourtId,
+    string ToCourtName,
+    /// <summary>What the booking's hours come to now, in court rental alone.</summary>
+    decimal RentalNow,
+    /// <summary>What the asked-for hours come to, at the price quoted.</summary>
+    decimal RentalNew,
+    /// <summary>
+    /// The difference, fixed when the upgrade was asked for.
+    ///
+    /// Not worked out again when it is paid: a rate the venue changes in
+    /// between must not change what somebody has already been asked for.
+    /// </summary>
+    decimal BalanceDue,
+    string Status,
+    /// <summary>When the hours being asked for go back on sale.</summary>
+    DateTimeOffset HoldsUntil,
+    /// <summary>
+    /// Whether that clock has run out with nothing paid.
+    ///
+    /// Answered here rather than left to the browser, because the browser's
+    /// clock is not the one this was timed against.
+    /// </summary>
+    bool HasLapsed,
+    string? ReceiptUrl,
+    /// <summary>Why the venue said no, when it did.</summary>
+    string? DeclineReason,
+    IReadOnlyCollection<UpgradeSlotResponse> Slots);
+
+/// <summary>One hour an upgrade is asking for, at the price it was quoted.</summary>
+public sealed record UpgradeSlotResponse(
+    DateOnly Date,
+    TimeOnly StartsAt,
+    TimeOnly EndsAt,
+    /// <summary>The court rental for this hour. The platform fee is not charged again.</summary>
+    decimal Amount);
 
 public sealed class AttachReceiptRequestValidator : AbstractValidator<AttachReceiptRequest>
 {

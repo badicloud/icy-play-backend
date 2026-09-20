@@ -41,7 +41,8 @@ public sealed class AppDbContext : DbContext
     public DbSet<FacilityAttendant> FacilityAttendants => Set<FacilityAttendant>();
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<BookingSlot> BookingSlots => Set<BookingSlot>();
-    public DbSet<BookingMoveRequest> BookingMoveRequests => Set<BookingMoveRequest>();
+    public DbSet<BookingUpgradeRequest> BookingUpgradeRequests => Set<BookingUpgradeRequest>();
+    public DbSet<BookingUpgradeSlot> BookingUpgradeSlots => Set<BookingUpgradeSlot>();
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
@@ -670,25 +671,24 @@ public sealed class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.NoAction);
         });
 
-        modelBuilder.Entity<BookingMoveRequest>(entity =>
+        modelBuilder.Entity<BookingUpgradeRequest>(entity =>
         {
-            entity.ToTable("BookingMoveRequests");
+            entity.ToTable("BookingUpgradeRequests");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.ToCourtName).HasMaxLength(200).IsRequired();
-            entity.Property(x => x.Initiator).HasMaxLength(20).IsRequired();
             entity.Property(x => x.Status).HasMaxLength(30).IsRequired();
-            entity.Property(x => x.Reason).HasMaxLength(500);
-            entity.Property(x => x.WaiverReason).HasMaxLength(500);
-            entity.Property(x => x.DeclineReason).HasMaxLength(500);
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
-            entity.Property(x => x.PaidBefore).HasColumnType("decimal(10,2)");
-            entity.Property(x => x.NewTotal).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.DeclineReason).HasMaxLength(500);
+            // Money, so a fixed scale rather than a float: two decimal places
+            // is what a peso amount is.
+            entity.Property(x => x.RentalNow).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.RentalNew).HasColumnType("decimal(10,2)");
             entity.Property(x => x.BalanceDue).HasColumnType("decimal(10,2)");
             entity.Ignore(x => x.IsOpen);
-            // Availability asks this of every court it draws: is there a move
-            // waiting to land here.
-            entity.HasIndex(x => new { x.ToBookableCourtId, x.Status });
+            // The two questions asked of this table: what is open on this
+            // booking, and what is waiting on this court.
             entity.HasIndex(x => new { x.BookingId, x.Status });
+            entity.HasIndex(x => new { x.ToBookableCourtId, x.Status });
             entity.HasOne(x => x.Booking)
                 .WithMany()
                 .HasForeignKey(x => x.BookingId)
@@ -696,7 +696,30 @@ public sealed class AppDbContext : DbContext
             entity.HasOne(x => x.ToBookableCourt)
                 .WithMany()
                 .HasForeignKey(x => x.ToBookableCourtId)
+                // A court somebody is part way through paying to move onto is
+                // retired, never removed. The cascade from the booking already
+                // reaches these rows, and a second path is one more than SQL
+                // Server allows.
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<BookingUpgradeSlot>(entity =>
+        {
+            entity.ToTable("BookingUpgradeSlots");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.RateKind)
+                .HasConversion<string>()
+                .HasMaxLength(20)
+                .IsRequired();
+            entity.Property(x => x.Amount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
+            // Availability asks one question of these: what is held on this
+            // date while somebody pays for it.
+            entity.HasIndex(x => x.Date);
+            entity.HasOne(x => x.Request)
+                .WithMany(x => x.Slots)
+                .HasForeignKey(x => x.RequestId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<CourtOperatingHour>(entity =>
