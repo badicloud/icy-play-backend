@@ -18,6 +18,46 @@ public sealed record CatalogActivity(
     int FacilityCount);
 
 /// <summary>
+/// One venue, as the landing page lists it.
+///
+/// A venue rather than a court, because that is the unit somebody chooses
+/// first: they pick where they are going, and only then what they are playing.
+/// Everything here is what you would want before deciding to travel — what it
+/// looks like, what it has, and where it is.
+/// </summary>
+public sealed record CatalogFacility(
+    Guid Id,
+    /// <summary>The stable public URL for this venue, and how its page is found.</summary>
+    string Slug,
+    string Name,
+    string AddressLine1,
+    string City,
+    string Province,
+    string? PostalCode,
+    /// <summary>Null until the venue has pinned itself. A map link needs both.</summary>
+    decimal? Latitude,
+    decimal? Longitude,
+    string? CoverPhotoUrl,
+    /// <summary>
+    /// How many separate things can be booked here.
+    ///
+    /// Not how many floors the venue has: one hall marked out for three sports,
+    /// each divisible in two, is six of these and still one hall. What a
+    /// customer is choosing between is the six.
+    /// </summary>
+    int CourtCount,
+    /// <summary>What this venue is set up for, busiest first.</summary>
+    IReadOnlyCollection<CatalogFacilitySport> Sports);
+
+/// <summary>One thing a venue is set up for, and how much of it there is.</summary>
+public sealed record CatalogFacilitySport(
+    string Key,
+    string Name,
+    /// <summary>"Sport" or "Event". An occasion is quoted rather than priced by the hour.</summary>
+    string Kind,
+    int CourtCount);
+
+/// <summary>
 /// One thing a customer can book: a court, or one marked-out part of a court.
 /// A floor divided three ways for pickleball is three of these, because three
 /// separate games can run on it at once and each is booked on its own.
@@ -133,12 +173,28 @@ public interface IActivityCatalog
     Task<IReadOnlyCollection<CatalogActivity>> ListAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Every venue on offer, with what it has and where it is.
+    ///
+    /// What the landing page lists, because a venue is what somebody chooses
+    /// first: they decide where they are going before they decide what they
+    /// are playing.
+    /// </summary>
+    Task<IReadOnlyCollection<CatalogFacility>> ListFacilitiesAsync(
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Every bookable court, with divided courts listed part by part. Pass a
     /// sport key to narrow it, or nothing at all for everything on offer — a
     /// visitor should see what is available before being asked to choose.
     /// </summary>
+    /// <param name="facilityId">
+    /// One venue, for its own page. By id rather than by name: a name can be
+    /// edited and two venues can share one, and neither should change or
+    /// widen what a filter matches.
+    /// </param>
     Task<IReadOnlyCollection<CatalogCourt>> ListCourtsAsync(
         string? sportKey,
+        Guid? facilityId,
         CancellationToken cancellationToken);
 
     /// <summary>

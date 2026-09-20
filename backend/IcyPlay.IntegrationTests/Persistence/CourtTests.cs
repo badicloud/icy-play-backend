@@ -525,8 +525,8 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var browsingTheSecond = await catalog.ListCourtsAsync(keys[1], CancellationToken.None);
-        var browsingTheFirst = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+        var browsingTheSecond = await catalog.ListCourtsAsync(keys[1], null, CancellationToken.None);
+        var browsingTheFirst = await catalog.ListCourtsAsync(keys[0], null, CancellationToken.None);
 
         // Assert: the tag wins for the sport it was taken of, and every other
         // sport falls back to the cover — which is what every court showed
@@ -577,7 +577,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var offerings = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var offerings = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
         var mine = offerings.Where(row => row.CourtId == created.Value!.CourtId).ToArray();
 
         // Assert: the card is priced by the hour or quoted, and it cannot tell
@@ -636,7 +636,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
 
         // Act
-        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+        var browsing = await catalog.ListCourtsAsync(keys[0], null, CancellationToken.None);
 
         // Assert: somewhere the customer would actually be standing beats a
         // stock photograph of the sport, which could be anywhere on earth.
@@ -691,7 +691,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
 
         // Act
-        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+        var browsing = await catalog.ListCourtsAsync(keys[0], null, CancellationToken.None);
 
         // Assert
         browsing
@@ -725,7 +725,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
 
         // Act
-        var browsing = await catalog.ListCourtsAsync(keys[0], CancellationToken.None);
+        var browsing = await catalog.ListCourtsAsync(keys[0], null, CancellationToken.None);
 
         // Assert: last in the order, and only reached because the venue has
         // neither a photo of this sport nor a cover.
@@ -1220,7 +1220,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         async Task<decimal?> ListedRateAsync() =>
-            (await catalog.ListCourtsAsync(null, CancellationToken.None))
+            (await catalog.ListCourtsAsync(null, null, CancellationToken.None))
                 .First(row => row.CourtId == created.Value!.CourtId)
                 .StandardHourlyRate;
 
@@ -1804,7 +1804,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var listed = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var listed = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
         var parts = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
 
         // Assert: three games can run at once, so a customer is offered three
@@ -1845,7 +1845,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var listed = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var listed = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
         var court = listed.Single(candidate => candidate.CourtId == created.Value!.CourtId);
 
         // Assert: numbering one of one only invites the question of where the
@@ -1885,7 +1885,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act: nothing named, so everything on offer.
-        var listed = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var listed = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
         var mine = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
 
         // Assert: one offering per sport, and the divided one twice. Each is
@@ -1907,7 +1907,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
         var catalog = CreateCatalog(context);
 
         // Act
-        var listed = await catalog.ListCourtsAsync("squash", CancellationToken.None);
+        var listed = await catalog.ListCourtsAsync("squash", null, CancellationToken.None);
 
         // Assert: the page can say so plainly rather than showing an empty grid.
         listed.Should().BeEmpty();
@@ -2109,11 +2109,11 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             Admin(),
             CancellationToken.None);
 
-        var whileShut = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var whileShut = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
 
         // Act
         await sut.LiftMaintenanceAsync(closure.Value, Admin(), CancellationToken.None);
-        var afterLifting = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var afterLifting = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
 
         // Assert: a reopened court still reading as shut turns customers away
         // from a court that is free.
@@ -2146,7 +2146,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             Admin(),
             CancellationToken.None);
 
-        var whileOpen = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var whileOpen = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
 
         // Act: the whole venue is shut, which takes every court in it down.
         await sut.SetFacilityMaintenanceAsync(
@@ -2155,7 +2155,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             Admin(),
             CancellationToken.None);
 
-        var afterClosing = await catalog.ListCourtsAsync(sportKey, CancellationToken.None);
+        var afterClosing = await catalog.ListCourtsAsync(sportKey, null, CancellationToken.None);
 
         // Assert: the other way round is worse — a booking taken for a court
         // nobody can get into.
@@ -2207,7 +2207,7 @@ public sealed class CourtTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var listed = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var listed = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
         var mine = listed.Where(court => court.CourtId == created.Value!.CourtId).ToArray();
 
         // Assert: five things a customer can book, in a fixed order.

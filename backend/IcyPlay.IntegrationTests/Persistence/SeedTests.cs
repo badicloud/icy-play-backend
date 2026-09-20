@@ -43,7 +43,7 @@ public sealed class SeedTests(SqlServerDatabaseFixture database)
         // Assert: the point of seeding through the ordinary court service is
         // that what comes out is sellable. A venue built by writing rows can
         // look right in the database and be invisible to a customer.
-        var offered = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var offered = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
         var mine = offered.Where(row => row.FacilityId == seeded.FacilityId).ToArray();
 
         using (new AssertionScope())
@@ -81,7 +81,7 @@ public sealed class SeedTests(SqlServerDatabaseFixture database)
         var seeded = await sut.BuildVenueAsync(Admin(), null, CancellationToken.None);
 
         // Assert
-        var offered = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var offered = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
         var mine = offered.Where(row => row.FacilityId == seeded.FacilityId).ToArray();
 
         using (new AssertionScope())
@@ -291,7 +291,7 @@ public sealed class SeedTests(SqlServerDatabaseFixture database)
         // courts keep answering and the bookings behind them point at nothing.
         context.ChangeTracker.Clear();
 
-        var offered = await catalog.ListCourtsAsync(null, CancellationToken.None);
+        var offered = await catalog.ListCourtsAsync(null, null, CancellationToken.None);
 
         using (new AssertionScope())
         {
