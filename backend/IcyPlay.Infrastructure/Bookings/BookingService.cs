@@ -1096,6 +1096,13 @@ public sealed class BookingService(
                 candidate.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
                 candidate.BookableCourt.Court.Facility.ContactPhone,
                 candidate.BookableCourt.Court.Facility.ContactEmail,
+                Upgrade = db.BookingUpgradeRequests
+                    .Where(request => request.BookingId == candidate.Id
+                        && (request.Status == UpgradeStatus.AwaitingPayment
+                            || request.Status == UpgradeStatus.AwaitingApproval))
+                    .OrderByDescending(request => request.CreatedAt)
+                    .Select(request => new { request.Status, request.ToCourtName })
+                    .FirstOrDefault(),
                 candidate.BookableCourt.Court.Facility.TimeZone,
                 candidate.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
                 candidate.BookableCourt.Court.FacilityId
@@ -1114,6 +1121,8 @@ public sealed class BookingService(
                 row.GcashQrCodeUrl,
                 row.ContactPhone,
                 row.ContactEmail,
+                row.Upgrade?.Status,
+                row.Upgrade?.ToCourtName,
                 row.TimeZone,
                 row.MoveLimit,
                 row.FacilityId));
@@ -1137,6 +1146,13 @@ public sealed class BookingService(
                 booking.BookableCourt.Court.Facility.FacilityOwner.GcashQrCodeUrl,
                 booking.BookableCourt.Court.Facility.ContactPhone,
                 booking.BookableCourt.Court.Facility.ContactEmail,
+                Upgrade = db.BookingUpgradeRequests
+                    .Where(request => request.BookingId == booking.Id
+                        && (request.Status == UpgradeStatus.AwaitingPayment
+                            || request.Status == UpgradeStatus.AwaitingApproval))
+                    .OrderByDescending(request => request.CreatedAt)
+                    .Select(request => new { request.Status, request.ToCourtName })
+                    .FirstOrDefault(),
                 booking.BookableCourt.Court.Facility.TimeZone,
                 booking.BookableCourt.Court.Facility.FacilityOwner.MoveLimit,
                 booking.BookableCourt.Court.FacilityId
@@ -1153,6 +1169,8 @@ public sealed class BookingService(
                 row.GcashQrCodeUrl,
                 row.ContactPhone,
                 row.ContactEmail,
+                row.Upgrade?.Status,
+                row.Upgrade?.ToCourtName,
                 row.TimeZone,
                 row.MoveLimit,
                 row.FacilityId))
@@ -1761,6 +1779,8 @@ public sealed class BookingService(
         string? gcashQrCodeUrl,
         string? contactPhone,
         string? contactEmail,
+        string? upgradeStatus,
+        string? upgradeToCourtName,
         string timeZone,
         int moveLimit,
         Guid facilityId) => new(
@@ -1788,6 +1808,8 @@ public sealed class BookingService(
         contactPhone,
         contactEmail,
         booking.CancellationReason,
+        upgradeStatus,
+        upgradeToCourtName,
         [
             .. booking.Slots
                 .OrderBy(slot => slot.Date)

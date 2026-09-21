@@ -173,6 +173,16 @@ public sealed record BookingDetail(
     /// to ask.
     /// </summary>
     string? CancellationReason,
+    /// <summary>
+    /// The upgrade still open on this booking, if there is one, and which
+    /// court it is asking for.
+    ///
+    /// A booking with one is settled and about to change at the same time, and
+    /// the status on its own cannot say both: "Confirmed" is true and hides
+    /// the fact that a move is waiting. Null when nothing is open.
+    /// </summary>
+    string? UpgradeStatus,
+    string? UpgradeToCourtName,
     IReadOnlyCollection<BookedSlot> Slots,
     /// <summary>
     /// How many moves this booking has left. Zero once they are used up, and
