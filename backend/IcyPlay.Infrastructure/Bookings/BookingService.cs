@@ -309,6 +309,16 @@ public sealed class BookingService(
             booking.MoveCount,
             limit);
 
+        // After the save, and best effort. A free move needs nobody's
+        // permission and has already happened, so a mail provider being down
+        // must not report it as failed — but the venue's diary has changed
+        // without anybody at the venue touching it, and this is the only thing
+        // that says so.
+        await notifier.BookingMovedAsync(
+            booking,
+            new BookingMoveNotice(wasOn, wasFor, Hours(booking)),
+            ct);
+
         return await GetAsync(bookingId, customerUserId, ct);
     }
 

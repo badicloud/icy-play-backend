@@ -229,6 +229,48 @@ public sealed class BookingNotifier(
             ct);
     }
 
+    public async Task BookingMovedAsync(
+        Booking booking,
+        BookingMoveNotice notice,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(booking);
+        ArgumentNullException.ThrowIfNull(notice);
+
+        var parties = await PartiesAsync(booking.Id, ct);
+
+        if (parties is null)
+        {
+            return;
+        }
+
+        // The venue only. The customer just did this and is looking at the
+        // screen that did it; a letter telling them what they have this second
+        // done is noise.
+        await SendAsync(
+            new TransactionalEmailMessage(
+                EmailTemplateKey.BookingMoved,
+                parties.AdministratorEmail,
+                parties.AdministratorName,
+                new Dictionary<string, object>
+                {
+                    ["recipient_name"] = parties.AdministratorName,
+                    ["business_name"] = parties.BusinessName,
+                    ["customer_name"] = parties.CustomerName,
+                    ["customer_email"] = parties.CustomerEmail,
+                    ["from_court_name"] = notice.FromCourtName,
+                    ["to_court_name"] = booking.CourtName,
+                    ["sport_name"] = booking.SportName,
+                    ["was_when"] = notice.WasWhen,
+                    ["now_when"] = notice.NowWhen,
+                    ["bookings_url"] = Settings.CourtBookingsUrl,
+                    ["support_email"] = Settings.SupportEmail,
+                    ["current_year"] = timeProvider.GetUtcNow().Year
+                }),
+            booking.Id,
+            ct);
+    }
+
     /// <summary>
     /// Who is on each side of an upgrade, and what the booking is leaving.
     ///

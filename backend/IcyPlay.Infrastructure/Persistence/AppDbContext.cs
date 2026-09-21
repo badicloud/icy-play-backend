@@ -260,6 +260,20 @@ public sealed class AppDbContext : DbContext
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("7b3c05e1-9d46-4a28-83f7-1e5a2c904db6"),
+                    Key = EmailTemplateKey.BookingMoved,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8365353L,
+                    // "No action needed" in the subject line, because the desk
+                    // has two queues that do want action and this letter does
+                    // not. Without it, it gets opened as though it were work.
+                    Subject = "{{var:customer_name}} moved to {{var:to_court_name}} — no action needed",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
                 });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>

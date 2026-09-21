@@ -23,5 +23,11 @@ public sealed class BookingNotificationOptions
     /// </summary>
     public string UpgradesUrl { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The desk's court bookings page. Where somebody goes to see a diary that
+    /// has changed without them.
+    /// </summary>
+    public string CourtBookingsUrl { get; init; } = string.Empty;
+
     public string SupportEmail { get; init; } = string.Empty;
 }

@@ -52,4 +52,15 @@ public static class EmailTemplateKey
     /// one letter in this flow that is a confirmation.
     /// </summary>
     public const string BookingUpgradeApproved = "booking-upgrade-approved";
+
+    /// <summary>
+    /// Tells the venue a booking has moved itself.
+    ///
+    /// A move onto hours costing the same or less is free and happens at once,
+    /// so nobody is asked and nobody was told — the floor changed under the
+    /// desk. This is the only thing that says so, and the hours the booking
+    /// vacated matter more than the ones it took: those are back on sale, and
+    /// the desk is the one turning people away from them.
+    /// </summary>
+    public const string BookingMoved = "booking-moved";
 }

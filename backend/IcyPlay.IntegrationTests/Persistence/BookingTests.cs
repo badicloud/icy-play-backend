@@ -2350,6 +2350,11 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         public Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct) =>
             Task.CompletedTask;
+
+        public Task BookingMovedAsync(
+            Booking booking,
+            BookingMoveNotice notice,
+            CancellationToken ct) => Task.CompletedTask;
     }
 
     private static CourtService CreateCourtService(AppDbContext context) => new(

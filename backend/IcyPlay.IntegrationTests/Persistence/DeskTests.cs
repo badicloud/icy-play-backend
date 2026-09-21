@@ -891,6 +891,11 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             UpgradesApproved.Add(upgrade.Id);
             return Task.CompletedTask;
         }
+
+        public Task BookingMovedAsync(
+            Booking booking,
+            BookingMoveNotice notice,
+            CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

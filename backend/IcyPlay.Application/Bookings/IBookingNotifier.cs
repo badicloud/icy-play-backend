@@ -7,6 +7,15 @@ namespace IcyPlay.Application.Bookings;
 /// booking service, because sending mail fails in ways taking a booking does
 /// not — a mail provider being down must not look like a court not being held.
 /// </summary>
+/// <summary>
+/// What a booking looked like before it moved, and what it looks like now.
+///
+/// Both said in words rather than handed over as slots, because the caller is
+/// the one that owns how a booking's hours are phrased, and two places
+/// phrasing the same thing drift apart.
+/// </summary>
+public sealed record BookingMoveNotice(string FromCourtName, string WasWhen, string NowWhen);
+
 public interface IBookingNotifier
 {
     /// <summary>
@@ -38,6 +47,19 @@ public interface IBookingNotifier
     /// safely say which court to walk to.
     /// </summary>
     Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct);
+
+    /// <summary>
+    /// Tells the venue a booking has moved itself.
+    ///
+    /// A free move needs nobody's permission and takes effect at once, so the
+    /// desk's diary changed without anybody at the desk doing anything. This
+    /// is the only thing that tells them.
+    ///
+    /// The before state is passed in because it no longer exists: a booking
+    /// only ever knows where it is now, and by the time this is called it has
+    /// already moved.
+    /// </summary>
+    Task BookingMovedAsync(Booking booking, BookingMoveNotice notice, CancellationToken ct);
 
     /// <summary>
     /// Thanks the customer and confirms their court. The one letter they get,
