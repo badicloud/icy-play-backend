@@ -1335,6 +1335,75 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task MoveAsync_ShouldRefuseTheCourtAndHoursItAlreadyHas()
+    {
+        // Arrange: a booking, asked to move to exactly where it is.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Unchanged Move Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: its own court, and no hours named, which keeps its own.
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball1),
+            CancellationToken.None);
+
+        // Assert: refused, and crucially the venue's limit is untouched. This
+        // used to succeed — the booking was rewritten with what it already had
+        // and charged a move for it, so three presses of a button that did
+        // nothing left a customer unable to move at all.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeFalse();
+            moved.Failure.Should().Be(BookingFailure.NothingWouldChange);
+            stored.MoveCount.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldAllowTheSameCourtAtDifferentHours()
+    {
+        // Arrange: the court is fine, the time is not — which is the move that
+        // had no way of being asked for at all until the court list started
+        // offering the booking's own court.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Same Court New Hours");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var moved = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(
+                floor.Pickleball1,
+                [new BookingSlotInput(Wednesday, new TimeOnly(14, 0))]),
+            CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings
+            .AsNoTracking()
+            .Include(row => row.Slots)
+            .SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            moved.Succeeded.Should().BeTrue();
+            stored.BookableCourtId.Should().Be(floor.Pickleball1);
+            stored.Slots.Should().ContainSingle(slot => slot.StartsAt == new TimeOnly(14, 0));
+            stored.MoveCount.Should().Be(1);
+        }
+    }
+
+    [Fact]
     public async Task MoveAsync_ShouldStopAtTheVenuesLimit()
     {
         // Arrange

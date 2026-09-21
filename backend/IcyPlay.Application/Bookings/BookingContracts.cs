@@ -321,7 +321,16 @@ public enum BookingFailure
     /// The hours asked for cost the same or less, so there is nothing to
     /// upgrade. That move happens at once and free, through the move screen.
     /// </summary>
-    NothingToUpgrade
+    NothingToUpgrade,
+    /// <summary>
+    /// The same court, at the same hours. Nothing would change.
+    ///
+    /// It used to go through: the booking was rewritten with what it already
+    /// had, and the venue's move limit was charged for it. Three of those and
+    /// a customer had spent every move they were allowed without their booking
+    /// ever having moved.
+    /// </summary>
+    NothingWouldChange
 }
 
 /// <summary>

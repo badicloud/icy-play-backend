@@ -281,6 +281,29 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.MoveCostsMore);
         }
 
+        // The same court at the same hours is not a move, and charging the
+        // venue's limit for it would spend somebody's allowance on nothing.
+        // Checked here rather than in the quote: the quote answers what a move
+        // WOULD come to, and a screen asking that while the customer is still
+        // choosing should not be told off for it.
+        var before = booking.Slots
+            .Select(slot => (slot.Date, slot.StartsAt))
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        var after = quote.Kept
+            .Concat(quote.Moved)
+            .Select(slot => (slot.Date, slot.StartsAt))
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        if (quote.ToBookableCourtId == booking.BookableCourtId && after.SequenceEqual(before))
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.NothingWouldChange);
+        }
+
         var utcNow = timeProvider.GetUtcNow();
         var wasOn = booking.CourtName;
         var wasFor = Hours(booking);

@@ -387,6 +387,10 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 ErrorCodes.Conflict,
                 "This venue has not set up a way to be paid yet, so a receipt cannot be sent. " +
                 "Please contact them to arrange payment."),
+            BookingFailure.NothingWouldChange => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That is the court and the hours you already have, so there is nothing to move."),
             BookingFailure.NothingToUpgrade => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
