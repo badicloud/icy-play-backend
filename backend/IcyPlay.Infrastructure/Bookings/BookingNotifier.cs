@@ -84,6 +84,9 @@ public sealed class BookingNotifier(
                     ["booked_hours"] = booking.BookedHours,
                     ["total_amount"] = Money(booking.Total),
                     ["receipt_url"] = booking.ReceiptUrl ?? string.Empty,
+                    // The picture to look at, and the queue to act in. They
+                    // are different places and the letter needs both.
+                    ["confirmations_url"] = Settings.ConfirmationsUrl,
                     ["booking_url"] = BookingUrl(booking.Id),
                     ["support_email"] = Settings.SupportEmail,
                     ["current_year"] = timeProvider.GetUtcNow().Year

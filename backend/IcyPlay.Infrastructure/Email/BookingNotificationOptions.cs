@@ -29,5 +29,14 @@ public sealed class BookingNotificationOptions
     /// </summary>
     public string CourtBookingsUrl { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The desk's queue of payments waiting to be checked.
+    ///
+    /// The letter about a receipt used to offer only the receipt itself, which
+    /// is the thing to look at but not the place to act: confirming happens in
+    /// the queue, and an attendant who opened a picture had to go and find it.
+    /// </summary>
+    public string ConfirmationsUrl { get; init; } = string.Empty;
+
     public string SupportEmail { get; init; } = string.Empty;
 }
