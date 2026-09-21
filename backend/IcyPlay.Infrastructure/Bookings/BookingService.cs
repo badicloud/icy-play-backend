@@ -545,6 +545,17 @@ public sealed class BookingService(
 
         await db.SaveChangesAsync(ct);
 
+        if (waiting)
+        {
+            // After the save, and best effort: a mail provider having a bad
+            // afternoon must not undo a submission the customer has been told
+            // went through. The venue still sees it in their queue.
+            //
+            // Only on the first one. A replaced picture is not a second
+            // payment and must not read as one.
+            await notifier.UpgradeSubmittedAsync(upgrade, ct);
+        }
+
         return BookingResult<UpgradeRequestResponse>.Success(Upgraded(upgrade, utcNow));
     }
 

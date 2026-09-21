@@ -217,6 +217,49 @@ public sealed class AppDbContext : DbContext
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 14, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                // The three upgrade letters. Their HTML is in
+                // docs/email-templates, and these ids are the copies of it
+                // living in Mailjet.
+                new
+                {
+                    Id = Guid.Parse("f5a81c30-6b47-4e92-8d15-c9f3a207e64b"),
+                    Key = EmailTemplateKey.BookingUpgradeReceived,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8365287L,
+                    // Deliberately not "confirmed", the same as the booking's
+                    // own receipt letter: this goes out the moment the receipt
+                    // is sent, and a customer who reads only the subject must
+                    // not think they have the new court.
+                    Subject = "We have your payment — {{var:facility_name}} is checking your upgrade",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("a19d4f62-7c85-4b03-9e2a-58d1b6f04c37"),
+                    Key = EmailTemplateKey.BookingUpgradeSubmitted,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8365289L,
+                    // Both courts in the subject. An attendant working an inbox
+                    // needs to know which floor is being asked for before
+                    // opening anything.
+                    Subject = "{{var:customer_name}} has paid to move to {{var:to_court_name}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("c60e9b28-3af1-4d74-b85c-2e7a91d5c803"),
+                    Key = EmailTemplateKey.BookingUpgradeApproved,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8365290L,
+                    Subject = "Your booking has moved to {{var:to_court_name}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
                 });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>

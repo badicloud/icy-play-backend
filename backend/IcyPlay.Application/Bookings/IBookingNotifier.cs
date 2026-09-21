@@ -22,6 +22,24 @@ public interface IBookingNotifier
     Task PaymentSubmittedAsync(Booking booking, CancellationToken ct);
 
     /// <summary>
+    /// Two letters when an upgrade's receipt arrives: the customer is told the
+    /// venue is checking it, and the venue is told somebody is waiting.
+    ///
+    /// The customer's is careful in the same way the booking's is, and for a
+    /// sharper reason. Their booking has NOT moved, and somebody who reads it
+    /// as a confirmation turns up at the wrong court — one they can see is not
+    /// theirs, while the one that is sits taken.
+    /// </summary>
+    Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct);
+
+    /// <summary>
+    /// Tells the customer the venue said yes and the booking has moved. The one
+    /// letter in this flow that is a confirmation, and the only one that can
+    /// safely say which court to walk to.
+    /// </summary>
+    Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct);
+
+    /// <summary>
     /// Thanks the customer and confirms their court. The one letter they get,
     /// sent when a person at the venue has actually checked the payment.
     /// </summary>

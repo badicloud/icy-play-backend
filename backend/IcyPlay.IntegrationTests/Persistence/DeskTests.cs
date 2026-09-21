@@ -865,18 +865,30 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         []);
 
     /// <summary>
-    /// Records which bookings were confirmed to the customer, so a test can ask
-    /// whether the one letter went once rather than trusting that it did.
+    /// Records what was written to the customer, so a test can ask whether the
+    /// one letter went once rather than trusting that it did.
     /// </summary>
     private sealed class RecordingNotifier : IBookingNotifier
     {
         public List<Guid> Confirmed { get; } = [];
+
+        /// <summary>Upgrades the customer was told had gone through.</summary>
+        public List<Guid> UpgradesApproved { get; } = [];
 
         public Task PaymentSubmittedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct)
         {
             Confirmed.Add(booking.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct) =>
+            Task.CompletedTask;
+
+        public Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct)
+        {
+            UpgradesApproved.Add(upgrade.Id);
             return Task.CompletedTask;
         }
     }

@@ -29,4 +29,27 @@ public static class EmailTemplateKey
 
     /// <summary>Tells the venue somebody has paid and is waiting to be confirmed.</summary>
     public const string BookingPaymentSubmitted = "booking-payment-submitted";
+
+    /// <summary>
+    /// Tells the customer their upgrade payment is in and the venue is looking
+    /// at it. Its own letter rather than the booking's, and careful in the same
+    /// way: the booking has NOT moved yet, and somebody who reads this as a
+    /// confirmation walks onto a court that is still somebody else's.
+    /// </summary>
+    public const string BookingUpgradeReceived = "booking-upgrade-received";
+
+    /// <summary>
+    /// Tells the venue somebody has paid to move onto a dearer court.
+    ///
+    /// Separate from the booking's own letter because the job is different: a
+    /// booking asks whether the payment is real, and this asks that AND
+    /// whether the court being asked for is free.
+    /// </summary>
+    public const string BookingUpgradeSubmitted = "booking-upgrade-submitted";
+
+    /// <summary>
+    /// Tells the customer the venue said yes and their booking has moved. The
+    /// one letter in this flow that is a confirmation.
+    /// </summary>
+    public const string BookingUpgradeApproved = "booking-upgrade-approved";
 }

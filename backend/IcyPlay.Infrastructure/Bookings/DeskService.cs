@@ -567,6 +567,10 @@ public sealed class DeskService(
             booking.Id,
             target.Id);
 
+        // After the save, and best effort, the same as a confirmation: the
+        // booking has moved whether or not the letter goes.
+        await TellTheCustomerAboutAsync(upgrade, ct);
+
         return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
     }
 
@@ -608,6 +612,30 @@ public sealed class DeskService(
             upgradeId);
 
         return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
+    }
+
+    /// <summary>
+    /// Tells the customer their upgrade went through.
+    ///
+    /// Nothing here throws. The booking has moved and the money has changed
+    /// hands; a mail provider being down does not undo either, and reporting
+    /// the approval as failed would have somebody press it twice.
+    /// </summary>
+    private async Task TellTheCustomerAboutAsync(
+        BookingUpgradeRequest upgrade,
+        CancellationToken ct)
+    {
+        try
+        {
+            await notifier.UpgradeApprovedAsync(upgrade, ct);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(
+                exception,
+                "Could not tell the customer upgrade {UpgradeId} was approved. It was.",
+                upgrade.Id);
+        }
     }
 
     /// <summary>

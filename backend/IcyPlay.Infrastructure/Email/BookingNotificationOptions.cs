@@ -16,5 +16,12 @@ public sealed class BookingNotificationOptions
     /// <summary>The bookings page, without an id. One is appended.</summary>
     public string BookingUrl { get; init; } = string.Empty;
 
+    /// <summary>
+    /// The desk's upgrade queue. A whole URL rather than one built from a
+    /// booking id: the attendant is being sent to a list of work, not to one
+    /// customer's booking, and the list is what they will work down.
+    /// </summary>
+    public string UpgradesUrl { get; init; } = string.Empty;
+
     public string SupportEmail { get; init; } = string.Empty;
 }

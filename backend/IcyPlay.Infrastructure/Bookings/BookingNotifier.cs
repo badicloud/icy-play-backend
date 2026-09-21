@@ -11,9 +11,10 @@ using Microsoft.Extensions.Options;
 namespace IcyPlay.Infrastructure.Bookings;
 
 /// <summary>
-/// The three letters a booking sends: when a receipt arrives, one to the
-/// customer saying the court is held while it is checked and one to the venue
-/// asking them to check it; then one to the customer when they do.
+/// The letters a booking sends: when a receipt arrives, one to the customer
+/// saying the court is held while it is checked and one to the venue asking
+/// them to check it; then one to the customer when they do. An upgrade sends
+/// the same three, about the change rather than the booking.
 ///
 /// Nothing here throws. A booking that is already saved must not be reported as
 /// failed because a mail provider was having a bad afternoon: the venue still
@@ -125,6 +126,191 @@ public sealed class BookingNotifier(
             booking.Id,
             ct);
     }
+
+    public async Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(upgrade);
+
+        var about = await UpgradeAsync(upgrade.Id, ct);
+
+        if (about is null)
+        {
+            return;
+        }
+
+        if (about.Parties.CustomerEmail.Length > 0)
+        {
+            await SendAsync(
+                new TransactionalEmailMessage(
+                    EmailTemplateKey.BookingUpgradeReceived,
+                    about.Parties.CustomerEmail,
+                    about.Parties.CustomerName,
+                    new Dictionary<string, object>
+                    {
+                        ["recipient_name"] = about.Parties.CustomerName,
+                        ["from_court_name"] = about.FromCourtName,
+                        ["to_court_name"] = upgrade.ToCourtName,
+                        ["facility_name"] = about.FacilityName,
+                        ["sport_name"] = about.SportName,
+                        ["upgrade_dates"] = Dates(upgrade),
+                        ["upgrade_hours"] = Hours(upgrade),
+                        ["balance_due"] = Money(upgrade.BalanceDue),
+                        ["booking_url"] = BookingUrl(upgrade.BookingId),
+                        ["support_email"] = Settings.SupportEmail,
+                        ["current_year"] = timeProvider.GetUtcNow().Year
+                    }),
+                upgrade.BookingId,
+                ct);
+        }
+
+        await SendAsync(
+            new TransactionalEmailMessage(
+                EmailTemplateKey.BookingUpgradeSubmitted,
+                about.Parties.AdministratorEmail,
+                about.Parties.AdministratorName,
+                new Dictionary<string, object>
+                {
+                    ["recipient_name"] = about.Parties.AdministratorName,
+                    ["business_name"] = about.Parties.BusinessName,
+                    ["customer_name"] = about.Parties.CustomerName,
+                    ["customer_email"] = about.Parties.CustomerEmail,
+                    ["from_court_name"] = about.FromCourtName,
+                    ["to_court_name"] = upgrade.ToCourtName,
+                    ["facility_name"] = about.FacilityName,
+                    ["sport_name"] = about.SportName,
+                    ["upgrade_dates"] = Dates(upgrade),
+                    ["upgrade_hours"] = Hours(upgrade),
+                    // All three figures, because the desk is checking a bank
+                    // statement against one of them and the wrong one is the
+                    // obvious one. What landed is the difference.
+                    ["rental_now"] = Money(upgrade.RentalNow),
+                    ["rental_new"] = Money(upgrade.RentalNew),
+                    ["balance_due"] = Money(upgrade.BalanceDue),
+                    ["receipt_url"] = upgrade.ReceiptUrl ?? string.Empty,
+                    ["upgrades_url"] = Settings.UpgradesUrl,
+                    ["support_email"] = Settings.SupportEmail,
+                    ["current_year"] = timeProvider.GetUtcNow().Year
+                }),
+            upgrade.BookingId,
+            ct);
+    }
+
+    public async Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(upgrade);
+
+        var about = await UpgradeAsync(upgrade.Id, ct);
+
+        if (about is null || about.Parties.CustomerEmail.Length == 0)
+        {
+            return;
+        }
+
+        await SendAsync(
+            new TransactionalEmailMessage(
+                EmailTemplateKey.BookingUpgradeApproved,
+                about.Parties.CustomerEmail,
+                about.Parties.CustomerName,
+                new Dictionary<string, object>
+                {
+                    ["recipient_name"] = about.Parties.CustomerName,
+                    ["from_court_name"] = about.FromCourtName,
+                    ["to_court_name"] = upgrade.ToCourtName,
+                    ["facility_name"] = about.FacilityName,
+                    ["sport_name"] = about.SportName,
+                    ["upgrade_dates"] = Dates(upgrade),
+                    ["upgrade_hours"] = Hours(upgrade),
+                    ["balance_due"] = Money(upgrade.BalanceDue),
+                    ["booking_url"] = BookingUrl(upgrade.BookingId),
+                    ["support_email"] = Settings.SupportEmail,
+                    ["current_year"] = timeProvider.GetUtcNow().Year
+                }),
+            upgrade.BookingId,
+            ct);
+    }
+
+    /// <summary>
+    /// Who is on each side of an upgrade, and what the booking is leaving.
+    ///
+    /// The court it is moving FROM is read here rather than taken from the
+    /// request, because the request only ever carried where it was going. On
+    /// the approved letter it has already changed, so it is read before the
+    /// caller saves — which is why both letters go out after the save and read
+    /// their own copy.
+    /// </summary>
+    private async Task<AboutUpgrade?> UpgradeAsync(Guid upgradeId, CancellationToken ct)
+    {
+        var row = await db.BookingUpgradeRequests
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == upgradeId)
+            .Select(candidate => new
+            {
+                candidate.BookingId,
+                FromCourtName = candidate.Booking.CourtName,
+                candidate.Booking.FacilityName,
+                candidate.Booking.SportName,
+                Customer = db.Users
+                    .Where(user => user.Id == candidate.RequestedByUserId)
+                    .Select(user => new { user.Email, user.FullName })
+                    .FirstOrDefault(),
+                Owner = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner,
+                Administrator = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner.User
+            })
+            .SingleOrDefaultAsync(ct);
+
+        return row is null
+            ? null
+            : new AboutUpgrade(
+                row.FromCourtName,
+                row.FacilityName,
+                row.SportName,
+                new Parties(
+                    row.Customer?.FullName ?? "A customer",
+                    row.Customer?.Email ?? string.Empty,
+                    row.Owner.BusinessName,
+                    row.Administrator.FullName,
+                    row.Administrator.Email));
+    }
+
+    private sealed record AboutUpgrade(
+        string FromCourtName,
+        string FacilityName,
+        string SportName,
+        Parties Parties);
+
+    /// <summary>The dates an upgrade is asking for, one day or a range.</summary>
+    private static string Dates(BookingUpgradeRequest upgrade)
+    {
+        var ordered = upgrade.Slots.OrderBy(slot => slot.Date).ToArray();
+
+        if (ordered.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var first = ordered[0].Date;
+        var last = ordered[^1].Date;
+
+        return first == last
+            ? first.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)
+            : $"{first.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)} – " +
+                $"{last.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// The hours themselves, not a count.
+    ///
+    /// A booking's letter says "3 hours" because the dates carry the rest. An
+    /// upgrade is often the same day at a different time, so "3 hours" would
+    /// leave the reader unable to tell what changed.
+    /// </summary>
+    private static string Hours(BookingUpgradeRequest upgrade) =>
+        string.Join(
+            ", ",
+            upgrade.Slots
+                .OrderBy(slot => slot.Date)
+                .ThenBy(slot => slot.StartsAt)
+                .Select(slot => slot.StartsAt.ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture)));
 
     private string BookingUrl(Guid bookingId) =>
         Settings.BookingUrl.Length == 0
