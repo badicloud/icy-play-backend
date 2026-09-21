@@ -992,91 +992,13 @@ public sealed class BookingService(
                 BookingFailure.CourtNotFound);
         }
 
-        var entries = await db.AuditLogs
-            .AsNoTracking()
-            .Where(entry => entry.EntityType == AuditEntityType.Booking && entry.EntityId == bookingId)
-            .OrderByDescending(entry => entry.CreatedAt)
-            .Select(entry => new
-            {
-                entry.Action,
-                entry.NewValuesJson,
-                entry.Reason,
-                entry.CreatedAt
-            })
-            .ToListAsync(ct);
-
-        var told = entries
-            .Select(entry => new BookingHistoryEntry(
-                entry.Action,
-                Describe(entry.Action, entry.NewValuesJson),
-                entry.Reason,
-                entry.CreatedAt))
-            .ToList();
-
-        // An expiry leaves no row, because nothing is there to write one: a
-        // booking does not change when its hold ends, it simply stops holding.
-        // So it is worked out here, from the booking, by the same rule the card
-        // uses to call itself expired. Without it the history of a booking that
-        // lapsed says only that it was made — and stops, at the exact moment
-        // the reader wants to know what became of it.
-        if (booking.HasLapsedAt(timeProvider.GetUtcNow()))
-        {
-            told.Add(new BookingHistoryEntry(
-                AuditAction.BookingHoldExpired,
-                "The hold ran out before payment arrived, so the hours went back on sale.",
-                null,
-                booking.HoldsUntil));
-        }
-
-        // Newest first. The entry somebody opens this for is almost always the
-        // last one — what just happened to my booking — and a list that puts it
-        // at the bottom makes them scroll past everything they already knew.
+        // The reading is shared with the venue desk's own history. One
+        // booking has one account of itself, and two readers of the same
+        // events that disagreed would be worse than either being wrong.
         return BookingResult<IReadOnlyCollection<BookingHistoryEntry>>.Success(
-            [.. told.OrderByDescending(entry => entry.At)]);
+            await BookingHistory.ReadAsync(db, booking, timeProvider.GetUtcNow(), ct));
     }
 
-    /// <summary>
-    /// What to show for one entry.
-    ///
-    /// The description written at the time is preferred, because it says what
-    /// the booking looked like then rather than now. The fallbacks cover the
-    /// entries the desk wrote before any of this existed — an old booking
-    /// should still read as a history rather than as a row of blanks.
-    /// </summary>
-    private static string Describe(string action, string? detailsJson)
-    {
-        if (!string.IsNullOrWhiteSpace(detailsJson))
-        {
-            try
-            {
-                var details = System.Text.Json.JsonSerializer
-                    .Deserialize<Dictionary<string, string?>>(detailsJson);
-
-                if (details?.GetValueOrDefault("description") is string written
-                    && !string.IsNullOrWhiteSpace(written))
-                {
-                    return written;
-                }
-            }
-            catch (System.Text.Json.JsonException)
-            {
-                // An entry nobody can read is still an entry: it happened, and
-                // the action and the time are worth more than nothing.
-            }
-        }
-
-        return action switch
-        {
-            AuditAction.BookingCreated => "Booking made.",
-            AuditAction.BookingPaymentSubmitted => "Payment sent to the venue to check.",
-            AuditAction.BookingMoved => "Moved to another court.",
-            AuditAction.BookingConfirmed => "The venue confirmed your booking.",
-            AuditAction.BookingRejected => "The venue could not accept the payment.",
-            AuditAction.BookingHoldExpired =>
-                "The hold ran out before payment arrived, so the hours went back on sale.",
-            _ => "Updated."
-        };
-    }
 
     public async Task<BookingResult<BookingDetail>> GetAsync(
         Guid bookingId,

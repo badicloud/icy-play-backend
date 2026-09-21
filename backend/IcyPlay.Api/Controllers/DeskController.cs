@@ -160,6 +160,25 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// Everything that has happened to one booking, newest first — the same
+    /// account the customer reads of it.
+    /// </summary>
+    [HttpGet("bookings/{bookingId:guid}/history")]
+    public async Task<IActionResult> History(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.HistoryAsync(userId, bookingId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<BookingHistoryEntry>>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// Says the payment is good. The customer is emailed their confirmation.
     /// </summary>
     [HttpPost("bookings/{bookingId:guid}/confirm")]

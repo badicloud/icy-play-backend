@@ -327,6 +327,25 @@ public sealed class DeskService(
             : DeskResult<DeskBooking>.Fail(DeskFailure.BookingNotFound);
     }
 
+    public async Task<DeskResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryAsync(
+        Guid userId,
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        // A booking at somebody else's venue answers the same as one that is
+        // not there, so the desk cannot be used to read what it cannot see.
+        var booking = await ForDeskAsync(userId, bookingId, ct);
+
+        if (booking is null)
+        {
+            return DeskResult<IReadOnlyCollection<BookingHistoryEntry>>.Fail(
+                DeskFailure.BookingNotFound);
+        }
+
+        return DeskResult<IReadOnlyCollection<BookingHistoryEntry>>.Success(
+            await BookingHistory.ReadAsync(db, booking, timeProvider.GetUtcNow(), ct));
+    }
+
     public async Task<DeskResult<DeskBooking>> ConfirmAsync(
         Guid userId,
         Guid bookingId,

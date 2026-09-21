@@ -53,6 +53,18 @@ public interface IDeskService
         CourtBookingQuery query,
         CancellationToken ct);
 
+    /// <summary>
+    /// Everything that has happened to one booking, newest first.
+    ///
+    /// The same account the customer reads, because it is the same booking. A
+    /// desk that could not see a move or an upgrade would be working from a
+    /// diary that changed without explanation.
+    /// </summary>
+    Task<DeskResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryAsync(
+        Guid userId,
+        Guid bookingId,
+        CancellationToken cancellationToken);
+
     /// <summary>One booking in full, for an hour somebody has clicked.</summary>
     Task<DeskResult<DeskBooking>> BookingAsync(
         Guid userId,
