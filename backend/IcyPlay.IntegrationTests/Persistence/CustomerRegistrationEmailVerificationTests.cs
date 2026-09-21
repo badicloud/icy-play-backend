@@ -385,6 +385,7 @@ public sealed class CustomerRegistrationEmailVerificationTests(SqlServerDatabase
             new PasswordHasher<User>(),
             emailVerificationService,
             new NoOpPasswordResetEmailService(),
+            new NoOpSignInAlertEmailService(),
             new FixedTimeProvider(now ?? RegistrationTime),
             new ConfigurationBuilder().Build(),
             NullLogger<AuthService>.Instance);
@@ -418,6 +419,21 @@ public sealed class CustomerRegistrationEmailVerificationTests(SqlServerDatabase
 
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+/// <summary>
+    /// Letters about new devices are not what these tests are about, and a
+    /// real one here would make them depend on a mail provider being up.
+    /// </summary>
+    private sealed class NoOpSignInAlertEmailService : ISignInAlertEmailService
+    {
+        public Task SendIfNewDeviceAsync(
+            Guid userId,
+            string recipientEmail,
+            string recipientName,
+            string? userAgent,
+            string? ipAddress,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+    }
 
     private sealed class NoOpPasswordResetEmailService : IPasswordResetEmailService
     {

@@ -20,6 +20,7 @@ public sealed class AuthService(
     IPasswordHasher<User> passwordHasher,
     IEmailVerificationService emailVerificationService,
     IPasswordResetEmailService passwordResetEmailService,
+    ISignInAlertEmailService signInAlertEmailService,
     TimeProvider timeProvider,
     IConfiguration configuration,
     ILogger<AuthService> logger) : IAuthService
@@ -113,6 +114,22 @@ public sealed class AuthService(
         var response = IssueTokens(user, now, request.RememberMe, client);
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Login succeeded. UserId: {UserId}", user.Id);
+
+        // After the save, so the session this sign-in just made is on record
+        // before anything counts the devices — otherwise the very first
+        // sign-in from a familiar laptop would look new all over again.
+        //
+        // Sends nothing when the device is one this account has used before,
+        // and swallows its own failures: somebody who has just signed in
+        // correctly must not be turned away because a mail provider is down.
+        await signInAlertEmailService.SendIfNewDeviceAsync(
+            user.Id,
+            user.Email,
+            user.FullName,
+            client.UserAgent,
+            client.IpAddress,
+            ct);
+
         return AuthResult<TokenResponse>.Success(response);
     }
 

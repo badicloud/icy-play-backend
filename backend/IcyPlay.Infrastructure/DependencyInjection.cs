@@ -49,6 +49,9 @@ public static class DependencyInjection
         services.AddScoped<IEmailTemplateStore, EmailTemplateStore>();
         services.AddScoped<IEmailVerificationService, EmailVerificationService>();
         services.AddScoped<IPasswordResetEmailService, PasswordResetEmailService>();
+        services.Configure<SignInAlertOptions>(
+            configuration.GetSection(SignInAlertOptions.SectionName));
+        services.AddScoped<ISignInAlertEmailService, SignInAlertEmailService>();
         services.Configure<AccountInvitationOptions>(
             configuration.GetSection(AccountInvitationOptions.SectionName));
         services.Configure<BookingNotificationOptions>(

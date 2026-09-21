@@ -4,6 +4,16 @@ public static class EmailTemplateKey
 {
     public const string AccountVerification = "account-verification";
     public const string PasswordReset = "password-reset";
+
+    /// <summary>
+    /// Tells somebody their account was signed in to from a device we have not
+    /// seen before, and offers the one remedy that works: change the password,
+    /// which signs every device out at once.
+    ///
+    /// Only on a new device. A letter on every sign-in becomes a letter nobody
+    /// reads, which costs the one that mattered.
+    /// </summary>
+    public const string AccountNewSignIn = "account-new-sign-in";
     public const string FacilityOwnerInvitation = "facility-owner-invitation";
 
     /// <summary>

@@ -563,9 +563,25 @@ public sealed class PasswordResetTests(SqlServerDatabaseFixture database)
                 }),
                 timeProvider,
                 NullLogger<PasswordResetEmailService>.Instance),
+            new NoOpSignInAlertEmailService(),
             timeProvider,
             TestConfiguration(),
             NullLogger<AuthService>.Instance);
+    }
+
+    /// <summary>
+    /// Letters about new devices are not what these tests are about, and a
+    /// real one here would make them depend on a mail provider being up.
+    /// </summary>
+    private sealed class NoOpSignInAlertEmailService : ISignInAlertEmailService
+    {
+        public Task SendIfNewDeviceAsync(
+            Guid userId,
+            string recipientEmail,
+            string recipientName,
+            string? userAgent,
+            string? ipAddress,
+            CancellationToken cancellationToken) => Task.CompletedTask;
     }
 
     /// <summary>

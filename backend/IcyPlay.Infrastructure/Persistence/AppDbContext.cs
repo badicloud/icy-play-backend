@@ -263,6 +263,21 @@ public sealed class AppDbContext : DbContext
                 },
                 new
                 {
+                    Id = Guid.Parse("e4a72d18-5c93-4f06-a1b7-6d20e893f5ca"),
+                    Key = EmailTemplateKey.AccountNewSignIn,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8365643L,
+                    // The device in the subject line, because that is the whole
+                    // decision. "Chrome on Windows" and it was you, so the
+                    // letter never needs opening; something you do not own, and
+                    // you open it immediately.
+                    Subject = "New sign-in to your IcyPlay account from {{var:device}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
                     Id = Guid.Parse("7b3c05e1-9d46-4a28-83f7-1e5a2c904db6"),
                     Key = EmailTemplateKey.BookingMoved,
                     Provider = EmailProviderName.Mailjet,
