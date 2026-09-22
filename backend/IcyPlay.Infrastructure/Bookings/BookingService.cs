@@ -163,7 +163,7 @@ public sealed class BookingService(
         var window = spanned.ToDictionary(date => date, date => Day(offering, date, holidays[date], taken));
         var days = dates.ToDictionary(date => date, date => window[date]);
 
-        if (request.Kind == BookingKind.MultiDay && !RunIsUnbroken(window, dates))
+        if (request.Kind == BookingKind.MultiDay && !SkipsOnlyWhatItCouldNotHave(window, dates))
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.DatesNotConsecutive);
         }
@@ -420,18 +420,28 @@ public sealed class BookingService(
         // Nothing to pay is nothing to upgrade. That move is free and immediate,
         // and sending somebody to a checkout for nought pesos is a step whose
         // only effect is to make them wonder what they are being charged for.
-        if (quote.RentalNew <= quote.RentalNow)
+        if (quote.MovingRentalNew <= quote.MovingRentalNow)
         {
             return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NothingToUpgrade);
         }
 
+        // The hours that are moving, not the whole booking.
+        //
+        // The difference between the two pairs is the hours already played,
+        // which sit on both sides and cancel — so the balance due is the same
+        // figure whichever is stored, and for a booking that has not started
+        // they ARE the same figure, because nothing has been played. What
+        // changes is what the checkout can put on the page. A customer moving
+        // the last hour of a long session is being asked for the difference on
+        // that hour, and a receipt that opens with the total of a session
+        // mostly behind them is a receipt for something else.
         var upgrade = new BookingUpgradeRequest(
             booking.Id,
             quote.ToBookableCourtId,
             quote.ToCourtName,
             customerUserId,
-            quote.RentalNow,
-            quote.RentalNew,
+            quote.MovingRentalNow,
+            quote.MovingRentalNew,
             quote.HoldMinutes,
             utcNow);
 
@@ -743,6 +753,20 @@ public sealed class BookingService(
         quote.Moved.Count,
         quote.RentalNow,
         quote.RentalNew,
+        quote.MovingRentalNow,
+        quote.MovingRentalNew,
+        [
+            .. quote.Moved
+                .OrderBy(slot => slot.Date)
+                .ThenBy(slot => slot.StartsAt)
+                .Select(slot => new BookedSlot(
+                    slot.Date,
+                    slot.StartsAt,
+                    slot.EndsAt,
+                    slot.RateKind.ToString(),
+                    slot.Amount,
+                    slot.PlatformFee))
+        ],
         Math.Max(0m, quote.RentalNew - quote.RentalNow),
         quote.HoldMinutes,
         quote.IsInPlay);
@@ -821,10 +845,30 @@ public sealed class BookingService(
         var utcNow = timeProvider.GetUtcNow();
         var venueNow = target.LocalNow(utcNow);
 
-        // Played, and so staying put. An hour counts as played once its last
-        // minute has gone on the venue's clock.
+        // Played, and so staying put. An hour counts as played once it has
+        // BEGUN, not once it has finished.
+        //
+        // The hour running as somebody presses Move is half spent on a court
+        // they are standing on. Carrying it to another floor would sell them
+        // the whole of it again somewhere they can only have the rest of it,
+        // and charge the new court's rate for minutes already played on the
+        // old one. So the hour in progress stays where it is, at what it cost,
+        // and the move takes the whole hours still ahead of it: a booking of
+        // one to four, moved at ten past two, moves the three o'clock.
+        //
+        // It also makes the quote answerable at all. Availability marks an
+        // hour that has begun as gone — correct, because such an hour cannot
+        // be SOLD — so an hour in progress in this list came back `!IsOpen`
+        // and the whole move was refused as "one of those hours has just been
+        // taken". Leaving it behind means every hour that reaches the pricing
+        // below is one that has not started, which is exactly what
+        // availability is willing to talk about.
+        //
+        // Nothing changes for a booking that has not begun: none of its hours
+        // have started, so none of them are held back and the move is the one
+        // it always was.
         var played = ordered
-            .Where(slot => slot.Date.ToDateTime(slot.EndsAt) <= venueNow.DateTime)
+            .Where(slot => slot.HasBegunAt(venueNow.DateTime))
             .ToArray();
         var toMove = ordered.Except(played).ToArray();
 
@@ -900,6 +944,18 @@ public sealed class BookingService(
         var rentalNow = booking.Slots.Sum(slot => slot.Amount);
         var rentalNew = played.Sum(slot => slot.Amount) + priced.Sum(slot => slot.Amount);
 
+        // The same comparison, narrowed to the hours actually going anywhere.
+        //
+        // The two totals above cover the whole booking, hours already played
+        // included — and because those appear on both sides they cancel, so
+        // the balance due is identical either way. What they cannot do is be
+        // shown to anybody: telling somebody moving their last hour that they
+        // are "paying 1,000 now" names a figure for a session mostly behind
+        // them, and invites them to work out which part of it is still in
+        // question. These name only the part that is.
+        var movingRentalNow = toMove.Sum(slot => slot.Amount);
+        var movingRentalNew = priced.Sum(slot => slot.Amount);
+
         return BookingResult<MoveQuote>.Success(new MoveQuote(
             target.BookableCourt.Id,
             target.CourtName,
@@ -907,6 +963,8 @@ public sealed class BookingService(
             priced,
             rentalNow,
             rentalNew,
+            movingRentalNow,
+            movingRentalNew,
             target.HoldMinutes,
             // Has the first hour begun, on the venue's clock. A booking under
             // way can change court but not when it is; one that has not
@@ -1550,6 +1608,10 @@ public sealed class BookingService(
         decimal RentalNow,
         /// <summary>What they would come to after the move, in court rental alone.</summary>
         decimal RentalNew,
+        /// <summary>What the hours actually moving cost on the court they are leaving.</summary>
+        decimal MovingRentalNow,
+        /// <summary>And what those same hours come to on the court they are going to.</summary>
+        decimal MovingRentalNew,
         int HoldMinutes,
         /// <summary>
         /// Whether the booking has begun on the venue's clock, which is what
@@ -1593,7 +1655,26 @@ public sealed class BookingService(
     /// Asked inside the transaction, because whether an hour was free is only
     /// true at a moment.
     /// </summary>
-    private static bool RunIsUnbroken(
+    /// <summary>
+    /// Whether a run passes over only the days it could not have had.
+    ///
+    /// A run is a stretch of the calendar, and a day inside it that cannot be
+    /// sold whole is passed over — not booked, not charged, and not quietly
+    /// swallowed either: the customer is shown which days they are getting and
+    /// pays for those. Somebody wanting the Thursday and the Saturday with the
+    /// Friday already gone gets one booking for two days instead of two
+    /// bookings with two holds, either of which they can lose.
+    ///
+    /// What it still refuses is reaching over a day that WAS free to book. That
+    /// is a set of days rather than a run, which is a different thing to sell
+    /// and a different thing to price, and nothing here offers it.
+    ///
+    /// The test is the day's own <see cref="AvailabilityDay.CanBeHiredWhole"/>,
+    /// which is the same question the picker asks before it greys a day out. It
+    /// used to be "has nothing open at all", which was stricter: a day with one
+    /// hour gone was unbookable AND uncrossable, so a run simply stopped there.
+    /// </summary>
+    private static bool SkipsOnlyWhatItCouldNotHave(
         IReadOnlyDictionary<DateOnly, AvailabilityDay> window,
         IReadOnlyList<DateOnly> dates)
     {
@@ -1601,7 +1682,7 @@ public sealed class BookingService(
         {
             for (var skipped = dates[i - 1].AddDays(1); skipped < dates[i]; skipped = skipped.AddDays(1))
             {
-                if (window[skipped].Slots.Any(slot => slot.IsOpen))
+                if (window[skipped].CanBeHiredWhole)
                 {
                     return false;
                 }
@@ -1748,6 +1829,7 @@ public sealed class BookingService(
         moveLimit,
         CanBeMoved(booking, timeZone, moveLimit),
         HasStarted(booking, timeZone),
+        IsPlayingNow(booking, timeZone),
         booking.CreatedAt);
 
     /// <summary>
@@ -1774,6 +1856,21 @@ public sealed class BookingService(
 
         return first.Date.ToDateTime(first.StartsAt) <= venueNow.DateTime;
     }
+
+    /// <summary>
+    /// Whether one of the booked hours is running at this moment.
+    ///
+    /// The rule itself is <see cref="Booking.IsPlayingAt"/>, on the booking,
+    /// where it can be read and tested without a database. All this adds is the
+    /// clock — and specifically the VENUE's clock, which is the only one the
+    /// slots mean anything against.
+    ///
+    /// <see cref="HasStarted"/> cannot stand in for this: it is true from the
+    /// first hour onwards and never goes back to false, so by that reading a
+    /// booking played last year is still in play now.
+    /// </summary>
+    private bool IsPlayingNow(Booking booking, string timeZone) =>
+        booking.IsPlayingAt(Offering.LocalNowIn(timeZone, timeProvider.GetUtcNow()).DateTime);
 
     /// <summary>
     /// Whether this booking could be moved if somebody asked right now.

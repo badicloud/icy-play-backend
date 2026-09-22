@@ -353,7 +353,7 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             BookingFailure.DatesNotConsecutive => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
-                "The days in a multi-day booking have to run one after another, apart from days the venue is closed."),
+                "A run of days can pass over days it cannot be sold, but not over a day that is free to book."),
             BookingFailure.KindDoesNotMatchSlots => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

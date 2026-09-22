@@ -115,4 +115,25 @@ public sealed class BookingSlot : Entity
     /// </summary>
     public bool Overlaps(DateOnly date, TimeOnly startsAt, TimeOnly endsAt) =>
         Date == date && StartsAt < endsAt && startsAt < EndsAt;
+
+    /// <summary>
+    /// Whether this hour has begun, on the venue's wall clock.
+    ///
+    /// What "already played, and so staying put" means everywhere a booking is
+    /// moved: the hour running as somebody presses Move is half spent on the
+    /// court they are standing on, and carrying it elsewhere would sell the
+    /// whole of it again somewhere they can only have the rest of it.
+    ///
+    /// Here rather than written out at each call site, because it was written
+    /// out twice and the two did not agree. One counted an hour played once it
+    /// had FINISHED, the other once it had BEGUN — so a customer's upgrade was
+    /// recorded against one set of hours and the desk checked it against a
+    /// different one, and every approval made mid-session was refused as no
+    /// longer adding up.
+    ///
+    /// <paramref name="venueNow"/> is wall-clock time AT THE VENUE. A slot is
+    /// "two o'clock on the 22nd" at that building; handing this UTC in Manila
+    /// would answer for eight hours ago.
+    /// </summary>
+    public bool HasBegunAt(DateTime venueNow) => Date.ToDateTime(StartsAt) <= venueNow;
 }

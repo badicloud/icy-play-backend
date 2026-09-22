@@ -73,7 +73,20 @@ public sealed record AvailabilityDay(
     TimeOnly? PeakEndsAt,
     bool PeakOnWeekdays,
     bool PeakOnWeekends,
-    IReadOnlyCollection<AvailabilitySlot> Slots);
+    IReadOnlyCollection<AvailabilitySlot> Slots)
+{
+    /// <summary>
+    /// Whether this day can be sold open to close.
+    ///
+    /// The same rule <see cref="DayOutlook.CanBeHiredWhole"/> states from a
+    /// count of hours, said here from the hours themselves. Both exist because
+    /// the strip and the grid ask at different depths; they must never
+    /// disagree, because a day picker that offers a day the booking refuses is
+    /// a customer told no after choosing.
+    /// </summary>
+    public bool CanBeHiredWhole =>
+        !IsClosed && !IsUnderMaintenance && Slots.Count > 0 && Slots.All(slot => slot.IsOpen);
+}
 
 /// <summary>
 /// One bookable hour. It carries its own price because the hours of a day do
@@ -216,6 +229,28 @@ public sealed record BookingDetail(
     /// decides what the move screen is allowed to offer.
     /// </summary>
     bool IsInPlay,
+    /// <summary>
+    /// Whether one of the booked hours is running right now, on the venue's
+    /// clock.
+    ///
+    /// Not the same question as <see cref="IsInPlay"/>, which asks only whether
+    /// the first hour has begun and stays true for ever afterwards — a booking
+    /// played last March is still "in play" by that reading. This one ends when
+    /// the hours do, which is what a customer's list means by a booking being
+    /// on: the court is theirs at this moment and they should be at it.
+    ///
+    /// Inside an hour rather than merely between the first and the last, so a
+    /// booking of one o'clock and four o'clock does not claim the customer is
+    /// on court at three, when they were sold nothing.
+    ///
+    /// Confirmed only. Hours passing on a booking the venue has not accepted is
+    /// not a session in progress, it is a booking about to be refused.
+    ///
+    /// Answered here for the same reason as the two above it: the reader's
+    /// clock is not the venue's, and a browser eight hours out would light this
+    /// up on the wrong third of the day.
+    /// </summary>
+    bool IsInProgress,
     DateTimeOffset CreatedAt);
 
 /// <summary>
@@ -262,7 +297,14 @@ public enum BookingFailure
     BelowMinimumDuration,
     /// <summary>A whole day was asked for, but not every open hour of it is free.</summary>
     DayNotWhollyAvailable,
-    /// <summary>The dates in a multi-day booking have to run one after another.</summary>
+    /// <summary>
+    /// A multi-day run reached over a day it could have had.
+    ///
+    /// A run passes over days it cannot be sold — a day somebody else has part
+    /// of, a day the venue is shut — and those are neither booked nor charged.
+    /// Reaching over a day that was free is a different thing: that is a set of
+    /// days rather than a run, and it is not what this sells.
+    /// </summary>
     DatesNotConsecutive,
     /// <summary>The hours asked for do not match the kind of booking claimed.</summary>
     KindDoesNotMatchSlots,
@@ -422,6 +464,31 @@ public sealed record MoveQuoteResponse(
     decimal RentalNow,
     /// <summary>What they would come to on the new court, at the new hours.</summary>
     decimal RentalNew,
+    /// <summary>
+    /// The same comparison, narrowed to the hours that are actually going
+    /// somewhere — <see cref="HoursMoving"/> of them.
+    ///
+    /// The two totals above cover the whole booking. Hours already played sit
+    /// on both sides of them and cancel, so the balance due is the same figure
+    /// either way; what those totals cannot do is be shown to anybody. A
+    /// customer moving the last hour of a booking that ran from one o'clock
+    /// does not recognise "you are paying 1,000 now" — most of that thousand
+    /// is behind them and not in question. This pair names only the part that
+    /// is, which is what the move screen puts on the page.
+    /// </summary>
+    decimal MovingRentalNow,
+    decimal MovingRentalNew,
+    /// <summary>
+    /// Those same hours, named, on the court they would move to and at the
+    /// price quoted for them.
+    ///
+    /// Sent because the checkout has to show what is being paid for, and on a
+    /// booking under way it cannot work that out for itself: which hours are
+    /// still to play is a question about the venue's clock, and the browser
+    /// asking its own would list an hour the customer is standing through. The
+    /// server has already decided; this is the decision.
+    /// </summary>
+    IReadOnlyCollection<BookedSlot> MovingSlots,
     /// <summary>The shortfall, and never less than nothing: cheaper is not a refund.</summary>
     decimal BalanceDue,
     /// <summary>Minutes the new court is held for while the difference is paid.</summary>

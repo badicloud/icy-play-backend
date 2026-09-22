@@ -216,6 +216,32 @@ public sealed class Booking : Entity
     public bool HasLapsedAt(DateTimeOffset moment) =>
         Status == BookingStatus.PendingPayment && ReceiptUrl is null && moment >= HoldsUntil;
 
+    /// <summary>
+    /// Whether one of these hours is being played at this moment.
+    ///
+    /// <paramref name="venueNow"/> is wall-clock time AT THE VENUE, because
+    /// that is what the slots are: a slot is "two o'clock on the 22nd" at that
+    /// building, not an instant on a server in another country. Handing this
+    /// UTC in Manila would answer for eight hours ago.
+    ///
+    /// Asked of each hour rather than of the span from the first to the last,
+    /// because hourly bookings need not run back to back. Somebody who bought
+    /// one o'clock and four o'clock is not on court at three, and saying they
+    /// are sends them to a court somebody else has.
+    ///
+    /// The end is exclusive, matching <see cref="BookingSlot.Overlaps"/>: at
+    /// exactly two o'clock the one o'clock hour is over, or two consecutive
+    /// hours would both claim the same instant.
+    ///
+    /// Confirmed only. Hours passing on a booking the venue has not accepted is
+    /// not a session in progress — the court is not theirs yet, and may never
+    /// be.
+    /// </summary>
+    public bool IsPlayingAt(DateTime venueNow) =>
+        Status == BookingStatus.Confirmed
+        && Slots.Any(slot =>
+            slot.HasBegunAt(venueNow) && venueNow < slot.Date.ToDateTime(slot.EndsAt));
+
     public void AddSlot(BookingSlot slot)
     {
         ArgumentNullException.ThrowIfNull(slot);

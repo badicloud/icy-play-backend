@@ -177,6 +177,39 @@ public sealed class DeskService(
             return DeskResult<IReadOnlyCollection<ScheduleEntry>>.Fail(DeskFailure.NotAttended);
         }
 
+        return await ScheduleForCourtAsync(courtId, from, to, ct);
+    }
+
+    /// <summary>
+    /// The same diary, for a reader who is allowed to open any court's.
+    ///
+    /// A platform admin does not work at a venue, so <see cref="WorksThisCourtAsync"/>
+    /// answers no for every court and the desk door is shut to them. They still
+    /// have to be able to look — the court inventory is theirs to police, and
+    /// "who is on this court" is the question behind closing one for
+    /// maintenance.
+    ///
+    /// The gate is what differs and the only thing that differs: the query
+    /// below is already scoped to one court and knows nothing about who is
+    /// asking. Copying it into an admin service of its own would be two
+    /// answers to one question, waiting to disagree.
+    ///
+    /// Read only, deliberately. Confirming payments and approving upgrades are
+    /// the venue's, and they stay behind the desk's own door.
+    /// </summary>
+    public Task<DeskResult<IReadOnlyCollection<ScheduleEntry>>> ScheduleForPlatformAsync(
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct) =>
+        ScheduleForCourtAsync(courtId, from, to, ct);
+
+    private async Task<DeskResult<IReadOnlyCollection<ScheduleEntry>>> ScheduleForCourtAsync(
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct)
+    {
         if (to < from || to.DayNumber - from.DayNumber > WidestWindowInDays)
         {
             // A diary is drawn a month at a time. Anything wider is a report,
@@ -248,6 +281,28 @@ public sealed class DeskService(
             return DeskResult<PagedResult<DeskBooking>>.Fail(DeskFailure.NotAttended);
         }
 
+        return await CourtBookingsForCourtAsync(query, ct);
+    }
+
+    /// <summary>
+    /// The same list, for a reader who is allowed to open any court's.
+    ///
+    /// See <see cref="ScheduleForPlatformAsync"/> for why this door exists and
+    /// why it is only a door: the gate differs, the query does not.
+    /// </summary>
+    public Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsForPlatformAsync(
+        CourtBookingQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        return CourtBookingsForCourtAsync(query, ct);
+    }
+
+    private async Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsForCourtAsync(
+        CourtBookingQuery query,
+        CancellationToken ct)
+    {
         BookingStatus? wanted = null;
 
         if (query.Status is not null)
@@ -335,6 +390,47 @@ public sealed class DeskService(
         // A booking at somebody else's venue answers the same as one that is
         // not there, so the desk cannot be used to read what it cannot see.
         var booking = await ForDeskAsync(userId, bookingId, ct);
+
+        if (booking is null)
+        {
+            return DeskResult<IReadOnlyCollection<BookingHistoryEntry>>.Fail(
+                DeskFailure.BookingNotFound);
+        }
+
+        return DeskResult<IReadOnlyCollection<BookingHistoryEntry>>.Success(
+            await BookingHistory.ReadAsync(db, booking, timeProvider.GetUtcNow(), ct));
+    }
+
+    /// <summary>
+    /// One booking in full, for a reader allowed to open any venue's.
+    ///
+    /// The two above it are the pages a platform admin reaches from a court —
+    /// the diary and the list — and both lead here: an hour on the calendar is
+    /// clicked to see whose it is, and a row in the list opens its own account
+    /// of itself. Stopping at the court would be a page whose every link is a
+    /// refusal.
+    ///
+    /// Still read only, and still a different door from the desk's.
+    /// </summary>
+    public async Task<DeskResult<DeskBooking>> BookingForPlatformAsync(
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        var here = await db.Bookings.AsNoTracking().AnyAsync(row => row.Id == bookingId, ct);
+
+        return here
+            ? DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct))
+            : DeskResult<DeskBooking>.Fail(DeskFailure.BookingNotFound);
+    }
+
+    /// <inheritdoc cref="BookingForPlatformAsync" />
+    public async Task<DeskResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryForPlatformAsync(
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        var booking = await db.Bookings
+            .Include(row => row.Slots)
+            .SingleOrDefaultAsync(row => row.Id == bookingId, ct);
 
         if (booking is null)
         {
@@ -529,8 +625,17 @@ public sealed class DeskService(
         // here rather than trusted from the quote, because time has passed
         // since — and if it has passed far enough that the swap no longer adds
         // up, saying so beats guessing which hours the customer meant.
+        //
+        // Through the booking's own rule, which is the point. This asked
+        // whether an hour had FINISHED while the upgrade that created these
+        // slots asked whether it had BEGUN, so any approval made while an hour
+        // was running compared a count against a different count and refused a
+        // sound upgrade as stale. The staleness check still bites, and now on
+        // the thing it was meant for: if the hour being paid for has itself
+        // begun on the old court since the customer asked, the sums really
+        // have stopped adding up.
         var played = booking.Slots
-            .Where(slot => slot.Date.ToDateTime(slot.EndsAt) <= venueNow.DateTime)
+            .Where(slot => slot.HasBegunAt(venueNow.DateTime))
             .ToArray();
 
         if (played.Length + upgrade.Slots.Count != booking.Slots.Count)

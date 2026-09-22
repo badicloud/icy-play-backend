@@ -2,6 +2,7 @@ using System.Security.Claims;
 using FluentValidation;
 using IcyPlay.Api.Common;
 using IcyPlay.Application.Audit;
+using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Identity;
 using Microsoft.AspNetCore.Authorization;
@@ -14,6 +15,7 @@ namespace IcyPlay.Api.Controllers;
 [Route("api/v1/admin")]
 public sealed class AdminCourtsController(
     ICourtService courts,
+    IDeskService desk,
     IValidator<CreateCourtRequest> createValidator,
     IValidator<UpdateCourtRequest> updateValidator,
     IValidator<UpdateCourtPricingRequest> pricingValidator,
@@ -98,6 +100,125 @@ public sealed class AdminCourtsController(
         return court is null
             ? Failure(CourtFailure.CourtNotFound)
             : Ok(new ApiEnvelope<CourtListItem>(court));
+    }
+
+    /// <summary>
+    /// Every booked hour on one court between two dates, for the admin's own
+    /// view of it.
+    ///
+    /// The venue desk answers the same question at its own address, and this
+    /// calls the same code — the difference is who is let in. A platform admin
+    /// works at no venue, so the desk's gate turns them away from every court
+    /// on the platform, and the court inventory is exactly what they are here
+    /// to police.
+    ///
+    /// Read only. The desk's own door still holds everything that changes a
+    /// booking: confirming a payment and approving an upgrade are the venue's
+    /// to do, and putting them on an admin's page would be handing somebody
+    /// else's till to a passer-by.
+    /// </summary>
+    [HttpGet("courts/{courtId:guid}/schedule")]
+    public async Task<IActionResult> Schedule(
+        Guid courtId,
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        CancellationToken ct)
+    {
+        var result = await desk.ScheduleForPlatformAsync(courtId, from, to, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<ScheduleEntry>>(result.Value!))
+            : DeskFailureResult(result.Failure);
+    }
+
+    /// <summary>
+    /// One court's bookings as a list, a page at a time.
+    ///
+    /// Unlike the diary this will answer for what fell through, which is what
+    /// anybody comes to a list to find. <inheritdoc cref="Schedule" />
+    /// </summary>
+    [HttpGet("courts/{courtId:guid}/bookings")]
+    public async Task<IActionResult> Bookings(
+        Guid courtId,
+        [FromQuery] DateOnly? from = null,
+        [FromQuery] DateOnly? to = null,
+        [FromQuery] string? status = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        CancellationToken ct = default)
+    {
+        var result = await desk.CourtBookingsForPlatformAsync(
+            new CourtBookingQuery(courtId, from, to, status, page, pageSize),
+            ct);
+
+        if (!result.Succeeded)
+        {
+            return DeskFailureResult(result.Failure);
+        }
+
+        var paged = result.Value!;
+
+        return Ok(new ApiListEnvelope<DeskBooking>(
+            paged.Items,
+            new PaginationMeta(paged.Page, paged.PageSize, paged.TotalItems, paged.TotalPages)));
+    }
+
+    /// <summary>
+    /// One booking in full, for an hour clicked on the diary or a row opened in
+    /// the list. <inheritdoc cref="Schedule" />
+    /// </summary>
+    [HttpGet("bookings/{bookingId:guid}")]
+    public async Task<IActionResult> Booking(Guid bookingId, CancellationToken ct)
+    {
+        var result = await desk.BookingForPlatformAsync(bookingId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskBooking>(result.Value!))
+            : DeskFailureResult(result.Failure);
+    }
+
+    /// <summary>Everything that has happened to one booking, newest first.</summary>
+    [HttpGet("bookings/{bookingId:guid}/history")]
+    public async Task<IActionResult> BookingHistory(Guid bookingId, CancellationToken ct)
+    {
+        var result = await desk.HistoryForPlatformAsync(bookingId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<BookingHistoryEntry>>(result.Value!))
+            : DeskFailureResult(result.Failure);
+    }
+
+    /// <summary>
+    /// The few desk refusals these can actually produce.
+    ///
+    /// Not the desk's whole map: most of it is about attending a venue or
+    /// deciding a payment, neither of which can happen here. A shorter switch
+    /// that says so beats importing a long one whose other arms are
+    /// unreachable.
+    /// </summary>
+    private IActionResult DeskFailureResult(DeskFailure failure)
+    {
+        var (status, code, message) = failure switch
+        {
+            DeskFailure.BookingNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "There is no booking with that id."),
+            DeskFailure.UnknownStatus => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "That is not a booking status."),
+            DeskFailure.WindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for a stretch of six weeks or less."),
+            _ => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "The request could not be completed.")
+        };
+
+        return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
     }
 
     [HttpPut("courts/{courtId:guid}")]

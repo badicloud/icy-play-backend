@@ -40,6 +40,8 @@ public sealed class BookingNotifier(
             return;
         }
 
+        var days = await DaysAsync(booking.Id, ct);
+
         if (parties.CustomerEmail.Length > 0)
         {
             await SendAsync(
@@ -53,7 +55,7 @@ public sealed class BookingNotifier(
                         ["court_name"] = booking.CourtName,
                         ["facility_name"] = booking.FacilityName,
                         ["sport_name"] = booking.SportName,
-                        ["booking_dates"] = Dates(booking),
+                        ["booking_dates"] = Dates(days),
                         ["booked_hours"] = booking.BookedHours,
                         ["rental_amount"] = Money(booking.RentalTotal),
                         ["platform_fee"] = Money(booking.PlatformFeeTotal),
@@ -80,7 +82,7 @@ public sealed class BookingNotifier(
                     ["court_name"] = booking.CourtName,
                     ["facility_name"] = booking.FacilityName,
                     ["sport_name"] = booking.SportName,
-                    ["booking_dates"] = Dates(booking),
+                    ["booking_dates"] = Dates(days),
                     ["booked_hours"] = booking.BookedHours,
                     ["total_amount"] = Money(booking.Total),
                     ["receipt_url"] = booking.ReceiptUrl ?? string.Empty,
@@ -106,6 +108,8 @@ public sealed class BookingNotifier(
             return;
         }
 
+        var days = await DaysAsync(booking.Id, ct);
+
         await SendAsync(
             new TransactionalEmailMessage(
                 EmailTemplateKey.BookingConfirmed,
@@ -117,7 +121,7 @@ public sealed class BookingNotifier(
                     ["court_name"] = booking.CourtName,
                     ["facility_name"] = booking.FacilityName,
                     ["sport_name"] = booking.SportName,
-                    ["booking_dates"] = Dates(booking),
+                    ["booking_dates"] = Dates(days),
                     ["booked_hours"] = booking.BookedHours,
                     ["rental_amount"] = Money(booking.RentalTotal),
                     ["platform_fee"] = Money(booking.PlatformFeeTotal),
@@ -425,10 +429,50 @@ public sealed class BookingNotifier(
         }
     }
 
-    /// <summary>One day, or a range, said the way a person would say it.</summary>
-    private static string Dates(Booking booking) =>
-        booking.StartDate == booking.EndDate
-            ? booking.StartDate.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)
-            : $"{booking.StartDate.ToString("d MMM", System.Globalization.CultureInfo.InvariantCulture)} – " +
-                $"{booking.EndDate.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+    /// <summary>
+    /// The days a booking actually covers, read rather than inferred.
+    ///
+    /// Not taken from the booking handed in: whether its hours are loaded is
+    /// the caller's business, and a letter that prints nothing because somebody
+    /// forgot an Include is a letter nobody notices is wrong.
+    /// </summary>
+    private async Task<IReadOnlyList<DateOnly>> DaysAsync(Guid bookingId, CancellationToken ct) =>
+        await db.BookingSlots
+            .AsNoTracking()
+            .Where(slot => slot.BookingId == bookingId)
+            .Select(slot => slot.Date)
+            .Distinct()
+            .OrderBy(date => date)
+            .ToListAsync(ct);
+
+    /// <summary>
+    /// One day, a run of them, or a run with holes, said the way a person would.
+    ///
+    /// The span between the first day and the last is NOT the days booked: a
+    /// run passes over days it could not have, and "24 – 26 Sep" for a booking
+    /// of the 24th and the 26th is how somebody turns up on a day that was
+    /// never theirs. So a run with a hole in it lists its days.
+    /// </summary>
+    private static string Dates(IReadOnlyList<DateOnly> days)
+    {
+        if (days.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (days.Count == 1)
+        {
+            return days[0].ToString("d MMM yyyy", Culture);
+        }
+
+        var unbroken = days[^1].DayNumber - days[0].DayNumber + 1 == days.Count;
+
+        return unbroken
+            ? $"{days[0].ToString("d MMM", Culture)} – {days[^1].ToString("d MMM yyyy", Culture)}"
+            : string.Join(", ", days.Select((day, index) =>
+                day.ToString(index == days.Count - 1 ? "d MMM yyyy" : "d MMM", Culture)));
+    }
+
+    private static readonly System.Globalization.CultureInfo Culture =
+        System.Globalization.CultureInfo.InvariantCulture;
 }

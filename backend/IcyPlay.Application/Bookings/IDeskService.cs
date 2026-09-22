@@ -54,6 +54,47 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// The same diary and the same list, for a platform admin.
+    ///
+    /// They do not work at a venue, so the desk's own gate — does this person
+    /// attend this court — answers no for every court on the platform. They
+    /// still have to be able to look: the court inventory is theirs to police,
+    /// and "who is on this court" is the question behind closing one for
+    /// maintenance.
+    ///
+    /// Read only. Confirming a payment and approving an upgrade are the
+    /// venue's to do, and they stay behind the desk's door. These two are the
+    /// whole of what the platform may see, which is why they are named
+    /// separately rather than hidden behind a flag on the pair above: a
+    /// parameter that widens who may call something is a parameter somebody
+    /// passes by accident.
+    /// </summary>
+    Task<DeskResult<IReadOnlyCollection<ScheduleEntry>>> ScheduleForPlatformAsync(
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct);
+
+    /// <inheritdoc cref="ScheduleForPlatformAsync" />
+    Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsForPlatformAsync(
+        CourtBookingQuery query,
+        CancellationToken ct);
+
+    /// <summary>
+    /// One booking in full, and its account of itself, for a platform admin.
+    ///
+    /// Both pages above lead here — an hour on the diary is clicked to see
+    /// whose it is, a row in the list opens its own history — so stopping at
+    /// the court would leave a page whose every link is a refusal.
+    /// </summary>
+    Task<DeskResult<DeskBooking>> BookingForPlatformAsync(Guid bookingId, CancellationToken ct);
+
+    /// <inheritdoc cref="BookingForPlatformAsync" />
+    Task<DeskResult<IReadOnlyCollection<BookingHistoryEntry>>> HistoryForPlatformAsync(
+        Guid bookingId,
+        CancellationToken ct);
+
+    /// <summary>
     /// Everything that has happened to one booking, newest first.
     ///
     /// The same account the customer reads, because it is the same booking. A

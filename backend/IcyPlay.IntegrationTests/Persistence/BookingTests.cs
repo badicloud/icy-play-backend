@@ -493,7 +493,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRefuseARunThatLeavesHoursItCouldHaveHad()
+    public async Task CreateAsync_ShouldPassOverADaySomebodyElseHasPartOf()
     {
         // Arrange: 7am on the Thursday is gone, and the rest of it is not.
         await using var context = database.CreateContext();
@@ -514,9 +514,60 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             floor.Customer,
             CancellationToken.None);
 
-        // Assert: a day in a run is all of what it has left. Dropping the
-        // fifteen free hours makes this two bookings wearing one name.
-        booking.Failure.Should().Be(BookingFailure.DatesNotConsecutive);
+        // Assert: two days, and the Thursday is not among them.
+        //
+        // This was refused, on the reasoning that dropping the Thursday's
+        // fifteen free hours made the booking two bookings wearing one name.
+        // The reasoning held and the outcome was still wrong: what the
+        // customer got instead WAS two bookings — two holds, two clocks, two
+        // receipts — and paying one while the other lapsed left the venue with
+        // half a trip. A run may now pass over a day it could not have had
+        // whole. It is not booked and not charged for, and the screen that
+        // offers the run says which days it is selling.
+        //
+        // The Thursday's fifteen free hours are still there to book by the
+        // hour, which is the honest way to sell what is left of a day.
+        using (new AssertionScope())
+        {
+            booking.Succeeded.Should().BeTrue();
+            booking.Value!.BookedHours.Should().Be(32);
+            booking.Value.Slots.Select(slot => slot.Date).Distinct()
+                .Should().BeEquivalentTo([Wednesday, Friday]);
+        }
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldPassOverADayThatIsWhollyGone()
+    {
+        // Arrange: somebody has the whole Thursday.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Booking Gone Day Courts");
+        var sut = CreateService(context);
+
+        await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Thursday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var booking = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Wednesday), .. AllHours(Friday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: the same answer as a day with an hour gone, which is the
+        // point — the customer cannot see the difference between a day that is
+        // wholly taken and one that is merely unbuyable, and should not have to.
+        using (new AssertionScope())
+        {
+            booking.Succeeded.Should().BeTrue();
+            booking.Value!.BookedHours.Should().Be(32);
+            booking.Value.Slots.Select(slot => slot.Date).Distinct()
+                .Should().BeEquivalentTo([Wednesday, Friday]);
+        }
     }
 
     [Fact]

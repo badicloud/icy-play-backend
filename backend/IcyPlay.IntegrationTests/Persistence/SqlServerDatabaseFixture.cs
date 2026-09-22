@@ -13,7 +13,7 @@ public sealed class SqlServerDatabaseFixture : IAsyncLifetime
     public SqlServerDatabaseFixture()
     {
         var connectionString = Environment.GetEnvironmentVariable("ICYPLAY_TEST_DB_CONNECTION") ??
-            $"Server=localhost\\SQLEXPRESS;Database={TestDatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
+            $"Server=localhost;Database={TestDatabaseName};Trusted_Connection=True;TrustServerCertificate=True;";
         var connectionStringBuilder = new SqlConnectionStringBuilder(connectionString);
 
         if (!string.Equals(
