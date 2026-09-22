@@ -1068,12 +1068,19 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     [Fact]
     public async Task QuoteMoveAsync_ShouldSayWhetherTheBookingHasBegun()
     {
-        // Arrange: one booking, asked about from three moments.
+        // Arrange: one booking of two hours, asked about from three moments.
+        //
+        // Two rather than one, because the third moment is half an hour into
+        // it. An hour that has begun is being played on the court it was sold
+        // on and does not travel — so a booking of a single hour has nothing
+        // left to move once it starts, and the quote rightly says so instead
+        // of answering the question this test is asking. The eight oclock is
+        // what is still ahead at half past seven, and it is what moves.
         await using var context = database.CreateContext();
         var floor = await FloorAsync(context, "Today Or Not Courts");
         var sut = CreateService(context);
 
-        var later = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+        var later = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm, hours: 2);
 
         // Six in the morning on Wednesday at the venue, which is ten at night
         // on Tuesday in UTC. The whole point: the server's day and the venue's
@@ -2304,10 +2311,18 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         BookingService bookings,
         Floor floor,
         DateOnly date,
-        TimeOnly hour)
+        TimeOnly hour,
+        int hours = 1)
     {
         var created = await bookings.CreateAsync(
-            Hourly(floor.Pickleball1, date, hour),
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.Hourly,
+                [
+                    .. Enumerable
+                        .Range(0, hours)
+                        .Select(step => new BookingSlotInput(date, hour.AddHours(step)))
+                ]),
             floor.Customer,
             CancellationToken.None);
 
@@ -2320,6 +2335,353 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
 
         return booking.Id;
+    }
+
+    [Fact]
+    public async Task MoveWindowAsync_ShouldOfferTheBuildingsHoursBeforeACourtIsChosen()
+    {
+        // Arrange: the move screen asks for a date before it asks for a court,
+        // so the hours on offer cannot be any court's.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Hours First Courts");
+        var sut = CreateService(context);
+
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var window = await sut.MoveWindowAsync(
+            booking,
+            floor.Customer,
+            Wednesday,
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            window.Succeeded.Should().BeTrue();
+            window.Value!.IsClosed.Should().BeFalse();
+
+            // Six in the morning to ten at night, in hours. The venue's, not
+            // one floor's.
+            window.Value.Slots.Should().HaveCount(16);
+            window.Value.Slots.First().StartsAt.Should().Be(new TimeOnly(6, 0));
+            window.Value.Slots.Last().EndsAt.Should().Be(new TimeOnly(22, 0));
+
+            // One hour booked is one hour to place. A move changes when and
+            // where a booking is, never how much of it there is.
+            window.Value.SlotsNeeded.Should().Be(1);
+            window.Value.SlotLengthMinutes.Should().Be(60);
+
+            // A day two days out has none of it behind us.
+            window.Value.Slots.Should().OnlyContain(slot => !slot.HasPassed);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldOfferEveryCourtOfTheSameSportPriced()
+    {
+        // Arrange: pickleball runs three across on this floor, so a booking on
+        // one division has two others to go to — and its own, at another hour.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Three Across Courts");
+        var sut = CreateService(context);
+
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: the same day, an hour later.
+        var options = await sut.MoveOptionsAsync(
+            booking,
+            floor.Customer,
+            new MoveOptionsRequest(Slots: [new BookingSlotInput(Wednesday, EightAm)]),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+
+            // All three pickleball divisions, its own included: keeping the
+            // court and changing the hour is a move too. Basketball and
+            // volleyball are the same floor and the wrong sport, and a booking
+            // carries the sport it was sold as.
+            options.Value!.Courts.Should().HaveCount(3);
+            options.Value.Courts.Select(court => court.BookableCourtId)
+                .Should().BeEquivalentTo([floor.Pickleball1, floor.Pickleball2, floor.Pickleball3]);
+
+            options.Value.Courts.Should().ContainSingle(court => court.IsCurrentCourt);
+
+            // Nothing has started, so the whole booking is on the move.
+            options.Value.IsInPlay.Should().BeFalse();
+            options.Value.HoursStaying.Should().Be(0);
+            options.Value.HoursMoving.Should().Be(1);
+
+            // Seven in the morning and eight in the morning are both standard
+            // on this rate card, so every one of these is a free move.
+            options.Value.Courts.Should().OnlyContain(court => court.BalanceDue == 0m);
+            options.Value.Courts.Should().OnlyContain(court => !court.IsUpgrade);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldLeaveOutAnHourSomebodyElseHolds()
+    {
+        // Arrange: a booking at seven, and somebody else already on the
+        // division next door at the hour it wants.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Already Taken Courts");
+        var sut = CreateService(context);
+
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var neighbour = await sut.CreateAsync(
+            Hourly(floor.Pickleball2, Wednesday, EightAm),
+            Guid.NewGuid(),
+            CancellationToken.None);
+
+        neighbour.Succeeded.Should().BeTrue();
+
+        // Act
+        var options = await sut.MoveOptionsAsync(
+            booking,
+            floor.Customer,
+            new MoveOptionsRequest(Slots: [new BookingSlotInput(Wednesday, EightAm)]),
+            CancellationToken.None);
+
+        // Assert: the court that cannot have that hour is not offered. A card
+        // that ends in a refusal is a question asked twice.
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+            options.Value!.Courts.Select(court => court.BookableCourtId)
+                .Should().NotContain(floor.Pickleball2);
+            options.Value.Courts.Should().HaveCount(2);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldLeaveOutACourtClosedForWork()
+    {
+        // Arrange: the whole floor goes under maintenance, which takes every
+        // division on it with it.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Under Repair Courts");
+        var sut = CreateService(context);
+
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        var facilityId = await context.Courts
+            .Where(court => court.Id == floor.CourtId)
+            .Select(court => court.FacilityId)
+            .SingleAsync();
+
+        context.MaintenancePeriods.Add(new MaintenancePeriod(
+            facilityId,
+            floor.CourtId,
+            new DateTimeOffset(Wednesday.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+            new DateTimeOffset(Thursday.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero),
+            "Resurfacing",
+            Guid.NewGuid(),
+            Now));
+
+        await context.SaveChangesAsync();
+
+        // Act
+        var options = await sut.MoveOptionsAsync(
+            booking,
+            floor.Customer,
+            new MoveOptionsRequest(Slots: [new BookingSlotInput(Wednesday, EightAm)]),
+            CancellationToken.None);
+
+        // Assert: nowhere to go, said as an empty list rather than as a grid of
+        // courts that cannot be picked.
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+            options.Value!.Courts.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldRefuseADayBookingOnceItsDayHasBegun()
+    {
+        // Arrange: a whole day on Tuesday, asked about from Tuesday afternoon.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Day Already Started Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Tuesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        created.Succeeded.Should().BeTrue();
+
+        var booking = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        booking.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        booking.SubmitForVerification(Now);
+        booking.Confirm(Now);
+        await context.SaveChangesAsync();
+
+        // Noon on Tuesday at the venue, which is four in the morning in UTC.
+        var midday = CreateService(
+            context,
+            new DateTimeOffset(Tuesday.ToDateTime(new TimeOnly(4, 0)), TimeSpan.Zero));
+
+        // Act
+        var options = await midday.MoveOptionsAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new MoveOptionsRequest(Dates: [Thursday]),
+            CancellationToken.None);
+
+        // Assert: half a day on one court and half on another is not the thing
+        // that was bought, so the day it is on is the day it stays on.
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeFalse();
+            options.Failure.Should().Be(BookingFailure.DayBookingInPlay);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldCarryARunOfDaysToTheDatesItIsGiven()
+    {
+        // Arrange: two days, Tuesday and Wednesday, moved to two others.
+        //
+        // The two it is given do not run back to back. The picker names each
+        // date on its own and lets it be unchosen again, so a gap is a thing a
+        // customer can ask for — and a move is not a sale: the number of days
+        // cannot change and nothing is being bought that was not paid for.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Run Of Days Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Tuesday), .. AllHours(Wednesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        created.Succeeded.Should().BeTrue();
+
+        var booking = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        booking.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        booking.SubmitForVerification(Now);
+        booking.Confirm(Now);
+        await context.SaveChangesAsync();
+
+        // Act: Thursday and Monday, with the weekend left out between them.
+        var options = await sut.MoveOptionsAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new MoveOptionsRequest(Dates: [Thursday, Monday]),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+            options.Value!.Courts.Should().NotBeEmpty();
+
+            // Two days asked for, two days priced — on every court offered.
+            options.Value.Courts.Should().OnlyContain(court =>
+                court.Slots.Select(slot => slot.Date).Distinct().Count() == 2);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldRefuseFewerDatesThanTheBookingHas()
+    {
+        // Arrange: a run of two days, asked to land on one.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Wrong Count Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            new CreateBookingRequest(
+                floor.Pickleball1,
+                BookingKind.MultiDay,
+                [.. AllHours(Tuesday), .. AllHours(Wednesday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        created.Succeeded.Should().BeTrue();
+
+        var booking = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        booking.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        booking.SubmitForVerification(Now);
+        booking.Confirm(Now);
+        await context.SaveChangesAsync();
+
+        // Act
+        var options = await sut.MoveOptionsAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new MoveOptionsRequest(Dates: [Thursday]),
+            CancellationToken.None);
+
+        // Assert: said as a bad request rather than as an empty list. Left to
+        // the search it would fail every court in turn and come back with
+        // nothing, which reads as a full venue.
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeFalse();
+            options.Failure.Should().Be(BookingFailure.KindDoesNotMatchSlots);
+        }
+    }
+
+    [Fact]
+    public async Task MoveOptionsAsync_ShouldCarryAWholeDayToAnotherDate()
+    {
+        // Arrange: a whole day on Thursday, moved to Friday before it starts.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Whole Day Move Courts");
+        var sut = CreateService(context);
+
+        var created = await sut.CreateAsync(
+            new CreateBookingRequest(floor.Pickleball1, BookingKind.WholeDay, [.. AllHours(Thursday)]),
+            floor.Customer,
+            CancellationToken.None);
+
+        created.Succeeded.Should().BeTrue();
+
+        var booking = await context.Bookings.SingleAsync(row => row.Id == created.Value!.Id);
+        booking.AttachReceipt(
+            "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg",
+            Now);
+        booking.SubmitForVerification(Now);
+        booking.Confirm(Now);
+        await context.SaveChangesAsync();
+
+        // Act: a date and no hours. A day's hours are whatever the court is
+        // open for, so they cannot be named until a court is.
+        var options = await sut.MoveOptionsAsync(
+            created.Value!.Id,
+            floor.Customer,
+            new MoveOptionsRequest(Dates: [Friday]),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+
+            // All three divisions, its own included: the date changes, so this
+            // is a move even where the court does not.
+            options.Value!.Courts.Should().HaveCount(3);
+
+            // Thursday and Friday are both weekdays on this rate card, so the
+            // day costs what it cost and nobody is asked for anything.
+            options.Value.Courts.Should().OnlyContain(court => court.BalanceDue == 0m);
+        }
     }
 
     // ------------------------------------------------------------- the set-up

@@ -286,20 +286,7 @@ public sealed class BookingService(
         // Checked here rather than in the quote: the quote answers what a move
         // WOULD come to, and a screen asking that while the customer is still
         // choosing should not be told off for it.
-        var before = booking.Slots
-            .Select(slot => (slot.Date, slot.StartsAt))
-            .OrderBy(slot => slot.Date)
-            .ThenBy(slot => slot.StartsAt)
-            .ToArray();
-
-        var after = quote.Kept
-            .Concat(quote.Moved)
-            .Select(slot => (slot.Date, slot.StartsAt))
-            .OrderBy(slot => slot.Date)
-            .ThenBy(slot => slot.StartsAt)
-            .ToArray();
-
-        if (quote.ToBookableCourtId == booking.BookableCourtId && after.SequenceEqual(before))
+        if (NothingWouldChange(booking, quote))
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.NothingWouldChange);
         }
@@ -368,6 +355,292 @@ public sealed class BookingService(
         return quoted.Succeeded
             ? BookingResult<MoveQuoteResponse>.Success(Quoted(booking, quoted.Value!))
             : BookingResult<MoveQuoteResponse>.Fail(quoted.Failure);
+    }
+
+    public async Task<BookingResult<MoveWindow>> MoveWindowAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        DateOnly date,
+        CancellationToken ct)
+    {
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        if (booking is null)
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        // Only an hourly booking picks hours. A day taken open to close has no
+        // hours to choose — it is every hour there is — so a grid would be
+        // offering a choice that does not exist.
+        if (booking.Kind != BookingKind.Hourly)
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.KindDoesNotMatchSlots);
+        }
+
+        // Loaded against the booking's own court, which is not the court the
+        // hours will end up on: none has been chosen yet. What it is being
+        // asked for is the building — its clock, its opening hours, and the
+        // length its hours are cut to.
+        var offering = await LoadAsync(booking.BookableCourtId, date, ct);
+
+        if (offering is null)
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        var venueNow = offering.LocalNow(timeProvider.GetUtcNow());
+        var today = DateOnly.FromDateTime(venueNow.DateTime);
+
+        if (date < today)
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.DateInThePast);
+        }
+
+        if (date > today.AddDays(BookingWindow.DaysAhead))
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.TooFarAhead);
+        }
+
+        // How many hours have to be picked: the ones still ahead of the
+        // booking, not the ones it has. An hour that has begun is being played
+        // on the court it was sold on and does not travel.
+        var needed = booking.Slots.Count(slot => !slot.HasBegunAt(venueNow.DateTime));
+
+        if (needed == 0)
+        {
+            return BookingResult<MoveWindow>.Fail(BookingFailure.BookingFinished);
+        }
+
+        var length = offering.Court.SlotLengthMinutes;
+        var isHoliday = await IsHolidayAsync(date, ct);
+
+        if (BuildingHours(offering, date.DayOfWeek) is not (TimeOnly opensAt, TimeOnly closesAt))
+        {
+            return BookingResult<MoveWindow>.Success(
+                new MoveWindow(date, IsClosed: true, isHoliday, length, needed, []));
+        }
+
+        var slots = new List<MoveWindowSlot>();
+        var step = TimeSpan.FromMinutes(length);
+
+        for (var start = opensAt; start.Add(step) <= closesAt; start = start.Add(step))
+        {
+            // The same cut-off the hour grid uses: an hour that has begun
+            // cannot be moved onto, because it cannot be sold.
+            var gone = date < today
+                || (date == today && start <= TimeOnly.FromDateTime(venueNow.DateTime));
+
+            slots.Add(new MoveWindowSlot(start, start.Add(step), gone));
+        }
+
+        return BookingResult<MoveWindow>.Success(
+            new MoveWindow(date, IsClosed: false, isHoliday, length, needed, slots));
+    }
+
+    public async Task<BookingResult<MoveOptions>> MoveOptionsAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        MoveOptionsRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var booking = await db.Bookings
+            .Include(candidate => candidate.Slots)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == bookingId && candidate.CustomerUserId == customerUserId,
+                ct);
+
+        if (booking is null)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        // Asked ahead of the search rather than left to it. Every court would
+        // fail these for the same reason, and a search that comes back empty
+        // says "nowhere to go" when the truth is "this booking cannot move".
+        if (!BookingMove.IsMovable(booking.Status))
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.NotMovable);
+        }
+
+        var limit = await MoveLimitAsync(booking, ct);
+
+        if (booking.MoveCount >= limit)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.MoveLimitReached);
+        }
+
+        var from = await db.BookableCourts
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == booking.BookableCourtId)
+            .Select(candidate => new
+            {
+                candidate.CourtSport.SportId,
+                candidate.Court.FacilityId,
+                candidate.Court.Facility.TimeZone
+            })
+            .SingleOrDefaultAsync(ct);
+
+        if (from is null)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.CourtNotFound);
+        }
+
+        if (HasBegunByTheDay(booking, from.TimeZone))
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.DayBookingInPlay);
+        }
+
+        var venueNow = Offering.LocalNowIn(from.TimeZone, timeProvider.GetUtcNow());
+
+        var moving = booking.Slots
+            .Where(slot => !slot.HasBegunAt(venueNow.DateTime))
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        if (moving.Length == 0)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.BookingFinished);
+        }
+
+        // A booking sold by the day is searched by date; an hourly one by the
+        // hours themselves. The difference is that a day's hours are not a
+        // choice — they are whatever the court is open for — so they cannot be
+        // named until a court is, and each candidate has to be asked about its
+        // own day rather than about one list of hours.
+        var byTheDay = booking.Kind is BookingKind.WholeDay or BookingKind.MultiDay;
+
+        // How many days this booking is, which is how many it has to land on.
+        // Counted from the booking rather than from its hours: a run of three
+        // days is three days wherever it goes, however long each turns out to
+        // be.
+        var days = booking.Slots.Select(slot => slot.Date).Distinct().Count();
+
+        // The dates sent have to be as many as the booking has, and each one
+        // once. Checked here rather than left to the search: a miscount fails
+        // every court in turn and comes back as an empty list, which reads as
+        // a full venue rather than as a bad request.
+        var wantedDates = byTheDay
+            ? (request.Dates ?? []).Distinct().OrderBy(date => date).ToArray()
+            : [];
+
+        if (byTheDay && wantedDates.Length != days)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.KindDoesNotMatchSlots);
+        }
+
+        // The hours sent have to be as many as are moving. Left to the search,
+        // a miscount fails every court in turn and comes back as an empty list
+        // — which reads as a full venue rather than as a bad request.
+        if (!byTheDay && request.Slots is { Count: > 0 } asked && asked.Count != moving.Length)
+        {
+            return BookingResult<MoveOptions>.Fail(BookingFailure.KindDoesNotMatchSlots);
+        }
+
+
+        var candidates = await db.BookableCourts
+            .AsNoTracking()
+            .Where(candidate =>
+                candidate.IsActive
+                && candidate.Court.IsActive
+                && candidate.CourtSport.SportId == from.SportId
+                && candidate.Court.FacilityId == from.FacilityId)
+            .Select(candidate => new
+            {
+                candidate.Id,
+                candidate.CourtSport.StandardHourlyRate,
+                SportName = candidate.CourtSport.Sport.Name
+            })
+            .ToListAsync(ct);
+
+        var offers = new List<MoveOption>();
+
+        foreach (var candidate in candidates)
+        {
+            var wanted = byTheDay
+                ? await WholeDaysAsync(candidate.Id, booking.Id, wantedDates, ct)
+                : request.Slots;
+
+            // A court that cannot take the whole of those days is not an
+            // option, and there is nothing to quote it for.
+            if (byTheDay && wanted is null)
+            {
+                continue;
+            }
+
+            var quoted = await QuoteAsync(booking, candidate.Id, wanted, ct);
+
+            // Shut that day, closed for work, already spoken for, never priced
+            // — every reason a court cannot take this booking arrives as a
+            // refused quote, and a refused quote is why it is not on the list.
+            // The rules live in one place and the search reads them rather
+            // than restating them.
+            if (!quoted.Succeeded)
+            {
+                continue;
+            }
+
+            var quote = quoted.Value!;
+
+            // Its own court at its own hours. That is not a move — the move
+            // itself refuses it — so a card for it could only ever end in a
+            // refusal.
+            if (candidate.Id == booking.BookableCourtId && NothingWouldChange(booking, quote))
+            {
+                continue;
+            }
+
+            offers.Add(new MoveOption(
+                quote.ToBookableCourtId,
+                quote.ToCourtName,
+                candidate.SportName,
+                candidate.StandardHourlyRate,
+                candidate.Id == booking.BookableCourtId,
+                quote.MovingRentalNow,
+                quote.MovingRentalNew,
+                Math.Max(0m, quote.RentalNew - quote.RentalNow),
+                [
+                    .. quote.Moved
+                        .OrderBy(slot => slot.Date)
+                        .ThenBy(slot => slot.StartsAt)
+                        .Select(slot => new BookedSlot(
+                            slot.Date,
+                            slot.StartsAt,
+                            slot.EndsAt,
+                            slot.RateKind.ToString(),
+                            slot.Amount,
+                            slot.PlatformFee))
+                ],
+                quote.HoldMinutes));
+        }
+
+        return BookingResult<MoveOptions>.Success(new MoveOptions(
+            // Some hour of it has been played, so the booking is under way.
+            // The same thing the quote says, worked out here without needing a
+            // court to be chosen first.
+            moving.Length < booking.Slots.Count,
+            booking.Slots.Count - moving.Length,
+            moving.Length,
+            [
+                .. moving.Select(slot => new BookedSlot(
+                    slot.Date,
+                    slot.StartsAt,
+                    slot.EndsAt,
+                    slot.RateKind.ToString(),
+                    slot.Amount,
+                    slot.PlatformFee))
+            ],
+            // Cheapest first, so the free moves lead and the ones that want
+            // paying for follow. A list ordered by court name puts a bill at
+            // the top of the screen for no reason the reader can see.
+            [.. offers.OrderBy(offer => offer.BalanceDue).ThenBy(offer => offer.CourtName)]));
     }
 
     public async Task<BookingResult<UpgradeRequestResponse>> RequestUpgradeAsync(
@@ -845,6 +1118,18 @@ public sealed class BookingService(
         var utcNow = timeProvider.GetUtcNow();
         var venueNow = target.LocalNow(utcNow);
 
+        // A booking sold by the day, once that day has begun, does not move.
+        //
+        // Enforced here rather than at each of the three doors — the move, the
+        // quote and the upgrade all come through this method — so there is one
+        // place the rule lives and no way round it. An hourly booking under
+        // way is untouched by it: the whole hours ahead of it are exactly what
+        // a move is for.
+        if (HasBegunByTheDay(booking, target.TimeZone))
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.DayBookingInPlay);
+        }
+
         // Played, and so staying put. An hour counts as played once it has
         // BEGUN, not once it has finished.
         //
@@ -879,16 +1164,42 @@ public sealed class BookingService(
             return BookingResult<MoveQuote>.Fail(BookingFailure.BookingFinished);
         }
 
-        // Where the hours are going. Their own dates and times unless the
-        // customer picked others, in which case there have to be exactly as
-        // many: a move changes when and where a booking is, never how much of
-        // it there is, and a screen that could add an hour by moving would be
-        // a way of buying one without paying.
+        // Where the hours are going: their own dates and times unless the
+        // customer picked others. How many of them there may be is the rule
+        // below.
         var going = wanted is null
             ? [.. toMove.Select(slot => new BookingSlotInput(slot.Date, slot.StartsAt))]
             : wanted.OrderBy(slot => slot.Date).ThenBy(slot => slot.StartsAt).ToArray();
 
-        if (going.Length != toMove.Length)
+        // As many hours as are moving, on an hourly booking: a move changes
+        // when and where a booking is, never how much of it there is, and a
+        // screen that could add an hour by moving would be a way of buying one
+        // without paying.
+        //
+        // A booking sold by the day is a different thing, and the rule would
+        // be wrong on it. Its hours were never a number anybody chose — they
+        // are whatever the court is open for — and a Tuesday is under no
+        // obligation to be as long as the Saturday it replaces. Held to an
+        // equal count, a whole-day booking could only ever move to a day of
+        // exactly the same length, which on most rate cards means it could not
+        // move at all.
+        //
+        // What keeps that honest is the price rather than the count. A longer
+        // or dearer day comes out as a balance due, and a move that costs more
+        // does not go through: it becomes an upgrade the customer is asked to
+        // pay for and the venue is asked to accept. Nobody is handed hours
+        // they have not paid for, which is the thing the count was protecting.
+        if (booking.Kind == BookingKind.Hourly && going.Length != toMove.Length)
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.KindDoesNotMatchSlots);
+        }
+
+        // A run of days stays a run of the same length wherever it goes. The
+        // hours inside it may differ; the number of days may not, because that
+        // is what was bought.
+        if (booking.Kind != BookingKind.Hourly
+            && going.Select(slot => slot.Date).Distinct().Count()
+                != toMove.Select(slot => slot.Date).Distinct().Count())
         {
             return BookingResult<MoveQuote>.Fail(BookingFailure.KindDoesNotMatchSlots);
         }
@@ -1404,16 +1715,190 @@ public sealed class BookingService(
             [.. closed.Select(period => (period.StartsAt, period.EndsAt))]);
     }
 
+    /// <summary>
+    /// The building's hours for a day of the week.
+    ///
+    /// What the hour picker offers before a court has been chosen, which is a
+    /// step the move screen now has: a date, then hours, then the courts that
+    /// can take them. No court has been named at that point, so the hours
+    /// cannot be any court's.
+    ///
+    /// It falls back to the court's own when the facility keeps none for that
+    /// day. A venue whose courts all set their own hours would otherwise be
+    /// shown as shut every day of the week, and a window of nothing is a
+    /// harder thing to explain than a window that is slightly too generous —
+    /// an hour offered here that no court can take simply leaves the court
+    /// list empty, which is a true answer.
+    /// </summary>
+    private static (TimeOnly, TimeOnly)? BuildingHours(Offering offering, DayOfWeek day)
+    {
+        var shared = offering.Court.Facility.OperatingHours
+            .FirstOrDefault(hour => hour.DayOfWeek == day);
+
+        return shared is { OpensAt: TimeOnly opens, ClosesAt: TimeOnly closes }
+            ? (opens, closes)
+            : OpeningHours(offering, day);
+    }
+
+    /// <summary>
+    /// Whether a booking sold by the day has begun, on the venue's clock.
+    ///
+    /// An hourly booking under way still has whole hours ahead of it, and
+    /// carrying those to another court is the most useful thing a move does: a
+    /// floodlight fails at two and the afternoon is saved. A day taken open to
+    /// close has no such remainder to offer. Moving it at noon would leave a
+    /// customer with a morning on one court and an afternoon on another, which
+    /// is not the thing they bought — so the day it is on is the day it stays
+    /// on, and the button that offers otherwise is not shown.
+    ///
+    /// False for an hourly booking whatever the clock says. This is a question
+    /// about days, and asking it of an hourly booking would take away the move
+    /// that matters most.
+    /// </summary>
+    private bool HasBegunByTheDay(Booking booking, string timeZone)
+    {
+        if (booking.Kind is not (BookingKind.WholeDay or BookingKind.MultiDay))
+        {
+            return false;
+        }
+
+        var venueNow = Offering.LocalNowIn(timeZone, timeProvider.GetUtcNow());
+
+        var first = booking.Slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .FirstOrDefault();
+
+        return first is not null && first.Date.ToDateTime(first.StartsAt) <= venueNow.DateTime;
+    }
+
+    /// <summary>
+    /// Whether a move would leave the booking exactly where it is: the same
+    /// court, at the same hours.
+    ///
+    /// Said in one place because two ask it. The move refuses it — letting it
+    /// through rewrote a booking with what it already had and charged the
+    /// venue's limit for the privilege — and the court search leaves it off
+    /// the list, because a card whose only outcome is that refusal is a card
+    /// that should not be offered.
+    /// </summary>
+    private static bool NothingWouldChange(Booking booking, MoveQuote quote)
+    {
+        if (quote.ToBookableCourtId != booking.BookableCourtId)
+        {
+            return false;
+        }
+
+        var before = booking.Slots
+            .Select(slot => (slot.Date, slot.StartsAt))
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        var after = quote.Kept
+            .Concat(quote.Moved)
+            .Select(slot => (slot.Date, slot.StartsAt))
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .ToArray();
+
+        return after.SequenceEqual(before);
+    }
+
+    /// <summary>
+    /// Every hour of the given dates on one court, or null when that court
+    /// cannot take the whole of any one of them.
+    ///
+    /// What a booking sold by the day is searched with. Its hours are not a
+    /// choice anybody made — they are whatever the court is open for — so they
+    /// can only be named once a court is, which is why each candidate is asked
+    /// about its own days rather than about one list of hours.
+    ///
+    /// The dates arrive named rather than as a start and a length, because the
+    /// picker lets each be chosen and unchosen on its own. They need not run
+    /// back to back: what has to hold is that there are as many as the booking
+    /// has, which is settled before this is called.
+    ///
+    /// Null rather than a short list when a day cannot be had whole. A day
+    /// sold open to close with an hour missing from it is not the thing that
+    /// was sold, and handing back the hours that are left would quietly turn a
+    /// whole day into most of one.
+    /// </summary>
+    private async Task<IReadOnlyCollection<BookingSlotInput>?> WholeDaysAsync(
+        Guid bookableCourtId,
+        Guid exceptBooking,
+        IReadOnlyCollection<DateOnly> dates,
+        CancellationToken ct)
+    {
+        if (dates.Count == 0)
+        {
+            return null;
+        }
+
+        var offering = await LoadAsync(bookableCourtId, dates.Min(), ct);
+
+        if (offering is null)
+        {
+            return null;
+        }
+
+        // Not into the past, and not further ahead than the platform takes
+        // bookings. The same window the booking page offers, asked here
+        // because a move is a booking made again — and asked of every date,
+        // because they are picked one at a time and need not sit together.
+        var today = offering.Today(timeProvider.GetUtcNow());
+        var horizon = today.AddDays(BookingWindow.DaysAhead);
+
+        if (dates.Any(date => date < today || date > horizon))
+        {
+            return null;
+        }
+
+        var taken = await TakenAsync(offering, dates, ct, exceptBooking);
+        var built = new List<BookingSlotInput>();
+
+        foreach (var date in dates.OrderBy(date => date))
+        {
+            var day = Day(offering, date, await IsHolidayAsync(date, ct), taken);
+
+            // Shut, closed for work, or with an hour already gone. All three
+            // are the same answer here: this court cannot have that day.
+            if (!day.CanBeHiredWhole)
+            {
+                return null;
+            }
+
+            built.AddRange(day.Slots.Select(slot => new BookingSlotInput(date, slot.StartsAt)));
+        }
+
+        return built;
+    }
+
+    /// <summary>
+    /// The active holidays, read once for the life of this request.
+    ///
+    /// Held because the court search asks the same question over and over: one
+    /// holiday check per candidate court per date, which on a venue with eight
+    /// courts and a run of three days is two dozen reads of one small table to
+    /// learn one thing that cannot have changed between them. Holidays are set
+    /// at a console, not during a request, so the first answer is the right
+    /// one for all of them.
+    ///
+    /// Safe because the service is scoped: this lives as long as the request
+    /// does and is never shared with another.
+    /// </summary>
+    private IReadOnlyCollection<Holiday>? activeHolidays;
+
     private async Task<bool> IsHolidayAsync(DateOnly date, CancellationToken ct)
     {
         // The repeating ones cannot be matched on their stored date in SQL, so
         // the active rows are read and asked, the way the holiday console does.
-        var holidays = await db.Holidays
+        activeHolidays ??= await db.Holidays
             .AsNoTracking()
             .Where(holiday => holiday.IsActive)
             .ToArrayAsync(ct);
 
-        return holidays.Any(holiday => holiday.Covers(date));
+        return activeHolidays.Any(holiday => holiday.Covers(date));
     }
 
     /// <summary>
@@ -1888,6 +2373,18 @@ public sealed class BookingService(
         }
 
         if (booking.MoveCount >= moveLimit)
+        {
+            return false;
+        }
+
+        // A day sold open to close, once it has begun, stays where it is.
+        // There is no useful remainder to carry: moving it at noon leaves a
+        // customer with a morning on one court and an afternoon on another,
+        // which is not the thing they bought. Said here as well as in the
+        // move itself, because this is what decides whether the button is
+        // offered at all — and a button that only ever leads to a refusal is
+        // worse than no button.
+        if (HasBegunByTheDay(booking, timeZone))
         {
             return false;
         }

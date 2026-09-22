@@ -71,6 +71,43 @@ public interface IBookingService
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// The hours a move could be placed on, on one date, before a court is
+    /// chosen.
+    ///
+    /// The move screen asks for a date, then hours, then a court — so there is
+    /// a step where hours have to be offered and no court has been named. They
+    /// come from the building's opening hours rather than any floor's, cut to
+    /// the length this booking's hours already are.
+    /// </summary>
+    Task<BookingResult<MoveWindow>> MoveWindowAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        DateOnly date,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every court this booking could actually be moved onto, at those hours,
+    /// each priced.
+    ///
+    /// Only the ones it could: a court shut that day, one under maintenance,
+    /// one whose hours are already spoken for and one the venue has never
+    /// priced are all left out rather than listed and refused. A dearer court
+    /// stays in — that one is an upgrade rather than a refusal, and a customer
+    /// willing to pay for a better floor should be able to see it.
+    ///
+    /// An hourly booking is searched with the hours it wants; one sold by the
+    /// day with the date it wants, because a day's hours are whatever each
+    /// court is open for and cannot be named until a court is. A request
+    /// carrying neither keeps the booking's own hours, which is what a booking
+    /// under way needs.
+    /// </summary>
+    Task<BookingResult<MoveOptions>> MoveOptionsAsync(
+        Guid bookingId,
+        Guid customerUserId,
+        MoveOptionsRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Moves a booking onto another court, and optionally onto other hours.
     ///
     /// It happens at once: nobody is asked to approve it. A dearer court has to be

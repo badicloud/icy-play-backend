@@ -382,7 +382,19 @@ public enum BookingFailure
     /// a customer had spent every move they were allowed without their booking
     /// ever having moved.
     /// </summary>
-    NothingWouldChange
+    NothingWouldChange,
+    /// <summary>
+    /// A booking sold by the day, once that day has begun.
+    ///
+    /// An hourly booking under way still has whole hours ahead of it, and
+    /// moving those to another court is the most useful thing a move does: a
+    /// floodlight fails at two and the afternoon is saved. A day taken open to
+    /// close has no such remainder to speak of. What is left of it is the part
+    /// of a day nobody chose — a customer who booked Saturday and is moved at
+    /// noon has bought a morning on one court and an afternoon on another,
+    /// which is not the thing they bought.
+    /// </summary>
+    DayBookingInPlay
 }
 
 /// <summary>
@@ -434,6 +446,160 @@ public sealed record AttachReceiptRequest(string ReceiptUrl);
 /// </param>
 public sealed record MoveBookingRequest(
     Guid ToBookableCourtId,
+    IReadOnlyCollection<BookingSlotInput>? Slots = null);
+
+/// <summary>
+/// The hours a move may be placed on, on one date, before any court is chosen.
+///
+/// The move screen used to ask for a court first and draw that court's grid.
+/// It asks the other way round now — a date, then hours, then the courts that
+/// can actually take them — and that leaves a step with no court to ask about.
+/// So the hours come from the building rather than from any floor in it: the
+/// facility's own opening hours, cut into slots the length this booking's
+/// hours already are.
+///
+/// It prices nothing. What an hour costs depends on the court, and no court
+/// has been picked yet; the prices arrive with <see cref="MoveOption"/>, one
+/// per court, once the hours are known.
+/// </summary>
+public sealed record MoveWindow(
+    DateOnly Date,
+    /// <summary>The venue is shut that day. No slots follow.</summary>
+    bool IsClosed,
+    bool IsHoliday,
+    /// <summary>The length of this booking's hours, which the new ones must match.</summary>
+    int SlotLengthMinutes,
+    /// <summary>
+    /// How many slots have to be picked.
+    ///
+    /// The hours still to be played, not the hours the booking has: a move
+    /// changes when and where a booking is, never how much of it there is, and
+    /// on a booking under way the hours already played are not moving.
+    /// </summary>
+    int SlotsNeeded,
+    IReadOnlyCollection<MoveWindowSlot> Slots);
+
+/// <summary>
+/// One hour the building is open for, said without reference to any court.
+/// </summary>
+public sealed record MoveWindowSlot(
+    TimeOnly StartsAt,
+    TimeOnly EndsAt,
+    /// <summary>
+    /// The hour has begun on the venue's clock, so it cannot be moved onto.
+    ///
+    /// Said rather than left out, because a grid that silently starts at two
+    /// o'clock reads as a venue that opens at two.
+    /// </summary>
+    bool HasPassed);
+
+/// <summary>
+/// Which courts could take this booking, and what each would cost.
+///
+/// The answer to the question the move screen now asks third: the date and the
+/// hours are settled, and this says where they can go. Every court in the list
+/// is one the move would actually be allowed onto — shut courts, courts under
+/// maintenance and courts whose hours are already spoken for do not appear at
+/// all, because a card that cannot be clicked is a question the customer has
+/// to answer twice.
+/// </summary>
+public sealed record MoveOptions(
+    /// <summary>
+    /// Whether the booking has begun, on the venue's clock. A booking under
+    /// way keeps its hours — only the court can change.
+    /// </summary>
+    bool IsInPlay,
+    /// <summary>Hours already played. They stay where they were, at what they cost.</summary>
+    int HoursStaying,
+    int HoursMoving,
+    /// <summary>
+    /// The hours being placed, as the server counted them.
+    ///
+    /// Sent because on a booking under way the browser cannot work them out:
+    /// which hours are still to play is a question about the venue's clock,
+    /// and the browser's would name an hour the customer is standing through.
+    /// </summary>
+    IReadOnlyCollection<BookedSlot> MovingSlots,
+    IReadOnlyCollection<MoveOption> Courts);
+
+/// <summary>
+/// One court the booking could go to, priced for the hours asked about.
+///
+/// The price is on the card rather than fetched when a card is tapped. A
+/// customer choosing between four courts is choosing on price as much as on
+/// name, and four round trips to find that out is four chances to be shown a
+/// figure that has since moved.
+/// </summary>
+public sealed record MoveOption(
+    Guid BookableCourtId,
+    string CourtName,
+    string SportName,
+    /// <summary>What this court charges an hour, for the card's small print.</summary>
+    decimal? StandardHourlyRate,
+    /// <summary>
+    /// The court the booking is on now.
+    ///
+    /// It appears in the list when the hours would change — keeping the court
+    /// and changing the time is a real move — and is left out when they would
+    /// not, because that is not a move at all.
+    /// </summary>
+    bool IsCurrentCourt,
+    /// <summary>What the hours being moved come to now, in court rental alone.</summary>
+    decimal MovingRentalNow,
+    /// <summary>What they would come to here.</summary>
+    decimal MovingRentalNew,
+    /// <summary>The shortfall, and never less than nothing: cheaper is not a refund.</summary>
+    decimal BalanceDue,
+    /// <summary>
+    /// The hours this booking would land on here, priced on this court.
+    ///
+    /// Carried per court because on a booking sold by the day the browser
+    /// cannot work them out: a day is whatever THIS court is open for, and
+    /// two courts in one building need not keep the same hours. They are
+    /// what the move or the upgrade is then asked for, so what was priced
+    /// on the card is what gets sent.
+    /// </summary>
+    IReadOnlyCollection<BookedSlot> Slots,
+    /// <summary>Minutes this court is held for while a difference is paid.</summary>
+    int HoldMinutes)
+{
+    /// <summary>
+    /// Dearer than what has been paid, so it cannot simply be moved onto.
+    ///
+    /// The move itself refuses these — nothing collects money on the way — and
+    /// they go through the upgrade instead: the venue is asked, the difference
+    /// is paid, and the booking moves when that clears. They stay in the list
+    /// because a customer who would happily pay for a better court should be
+    /// able to see it and choose it.
+    /// </summary>
+    public bool IsUpgrade => BalanceDue > 0m;
+}
+
+/// <summary>
+/// Where to look for courts.
+/// </summary>
+/// <param name="Dates">
+/// The dates a booking sold by the day would move onto: one for a whole day,
+/// as many as it has now for a run of them.
+///
+/// Only day bookings send them. Their hours are not a choice but whatever
+/// each court is open for, so the dates are all there is to ask with and the
+/// hours are worked out per court.
+///
+/// Named one by one rather than as a start and a length, because the picker
+/// lets each be chosen and unchosen on its own. A run may therefore arrive
+/// with a gap in it. That is refused when a booking is first made -- a run
+/// with a hole is two bookings wearing one name -- but a move is not a sale,
+/// the number of days cannot change, and nothing is being bought that was
+/// not already paid for.
+/// </param>
+/// <param name="Slots">
+/// The hours wanted, which carry their own date. Null keeps the ones the
+/// booking already has — what a booking under way needs, since its hours are
+/// not moving in time, only in place.
+/// </param>
+public sealed record MoveOptionsRequest(
+    IReadOnlyCollection<DateOnly>? Dates = null,
     IReadOnlyCollection<BookingSlotInput>? Slots = null);
 
 /// <summary>

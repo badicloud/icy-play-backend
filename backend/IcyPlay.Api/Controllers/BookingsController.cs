@@ -145,6 +145,66 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
     }
 
     /// <summary>
+    /// The hours a move could be placed on, on one date, before any court has
+    /// been chosen.
+    ///
+    /// The move screen asks date, then hours, then court — which leaves a step
+    /// with no court to ask about, so the hours come from the building rather
+    /// than from any floor in it.
+    /// </summary>
+    [HttpGet("{bookingId:guid}/move-window")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> MoveWindow(
+        Guid bookingId,
+        [FromQuery] DateOnly date,
+        CancellationToken ct)
+    {
+        // Same reason as the hour grid: a window a minute stale offers an hour
+        // that has just gone.
+        Response.Headers.CacheControl = "no-store";
+
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.MoveWindowAsync(bookingId, userId, date, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MoveWindow>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Every court this booking could be moved onto at those hours, priced.
+    ///
+    /// A POST for something that changes nothing, for the same reason the
+    /// quote is one: the hours being asked about are a list, and a list
+    /// belongs in a body rather than strung through a query.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/move-options")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> MoveOptions(
+        Guid bookingId,
+        MoveOptionsRequest request,
+        CancellationToken ct)
+    {
+        // A list of free courts is the most perishable thing this API says.
+        Response.Headers.CacheControl = "no-store";
+
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await bookings.MoveOptionsAsync(bookingId, userId, request, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MoveOptions>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// What moving onto that court, at those hours, would come to — and whether
     /// the booking falls on the venue's today, which is what the move screen
     /// needs before it can offer dates.
@@ -391,6 +451,11 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "That is the court and the hours you already have, so there is nothing to move."),
+            BookingFailure.DayBookingInPlay => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking runs for the whole day and that day has started, " +
+                "so it stays on the court it is on."),
             BookingFailure.NothingToUpgrade => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
