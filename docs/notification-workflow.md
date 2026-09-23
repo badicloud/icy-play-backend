@@ -125,6 +125,50 @@ Email is the safest initial notification channel for the MVP.
 
 ---
 
+## What actually sends today
+
+The rest of this document is the plan. This section is the build. Templates live
+in [`email-templates/`](email-templates/README.md); the senders are on
+`IBookingNotifier`.
+
+| Letter | Goes to | When |
+| --- | --- | --- |
+| `email-verification` | Customer | A new account is made |
+| `password-reset` | Anyone | A reset is asked for |
+| `account-new-sign-in` | Anyone | Their account is signed in to from a device it has not seen |
+| `facility-owner-invitation` | Owner | Admin onboards them |
+| `facility-attendant-invitation` | Attendant | Owner puts them on the desk |
+| `booking-payment-submitted` | Venue | A customer hands a receipt over |
+| `booking-payment-received` | Customer | Their receipt has arrived |
+| `booking-confirmed` | Customer | The desk confirms |
+| `booking-moved` | Venue | A customer moves a booking themselves |
+| `booking-upgrade-received` | Customer | Their upgrade payment has arrived |
+| `booking-upgrade-submitted` | Venue | An upgrade is waiting on the desk, with all three figures on it |
+| `booking-upgrade-approved` | Customer | The desk approved it |
+
+Three things about this list are deliberate:
+
+**A rejected booking sends nothing.** A rejection needs somewhere for the
+customer to answer from, and that is the message thread, which is not built. A
+*declined upgrade* does write, because there is nothing to answer — only
+something they need to know.
+
+**The venue is told when a booking moves itself.** A free move needs nobody's
+permission and has already happened, so nothing waits on this letter — but the
+venue's diary has changed without anybody at the venue touching it, and this is
+the only thing that says so.
+
+**The desk's upgrade letter carries all three figures** — what the hours cost
+now, what the new ones cost, and the difference. Somebody at the desk is
+checking a bank statement against one of them, and the wrong one is the obvious
+one. What actually landed is the difference.
+
+**Every one of these goes after the save, best effort.** The decision has been
+made and the booking has moved; a mail provider being down must not report a
+completed action as failed.
+
+---
+
 ## Browser Push Notifications
 
 Browser push notifications should be added after the MVP, once the web app is stable.

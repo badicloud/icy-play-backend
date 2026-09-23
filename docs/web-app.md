@@ -32,19 +32,39 @@ more trust than a tidy grid buys.
 
 ```text
 Hero            Find. Book. Play. Any Court, Any Event.
-Catalogue       filter chips, activity cards, the court listing
+Venue catalogue one card per venue, with what it has and where it is
 Features        three cards
 Footer          partner call to action
 ```
+
+**The landing page lists venues, not sports** (`FacilityCatalog`). It opened on
+sports, which asked a visitor to name a game before it would tell them where
+anybody plays — and a visitor who wants to play somewhere near them has a place
+in mind long before a sport. Each venue then has a page of its own at
+`/facilities/{slug}`, listing its courts.
 
 **The catalogue is read from the API, never written into the page.** A
 hard-coded list promises sports nobody has a court for — a promise the search is
 then obliged to break.
 
-Three filters: **All**, **Sports**, **Events**, each with a count. The activity
-cards **narrow the listing rather than unlock it**: every court shows by
+A venue card leads with its **photograph**, because a venue is somewhere you go
+and the decision is partly "would I want to spend two hours there", which no
+list of sports answers. Under it: how many **bookable** courts — not courts, or
+a venue with one hall marked out three ways would read as having nine — the
+sports it runs as chips with their own artwork and a count each, and the address
+as a link to Google's directions.
+
+### Venue page — `/facilities/{slug}`
+
+Where the sport is chosen, and where a booking starts (`FacilityCourts`). The
+activity filter — **All**, **Sports**, **Events** — is narrowed to **only the
+sports this venue actually has**: offering the full catalogue here would list
+games nobody at this address plays, and every one of them would come back empty.
+
+The chips **narrow the listing rather than unlock it**: every court shows by
 default, and picking a sport filters. A visitor should see what is available
-before being asked to choose.
+before being asked to choose. The chosen tab and sport survive in the address
+bar, so a shared link and a back button both land where the reader was.
 
 Empty states say *which* side is empty. "No venues are taking event bookings
 yet" and "No courts are listed yet" mean different things — one says the
@@ -143,6 +163,71 @@ One function builds every version of that sentence. A card has room for a line
 and a page for two, and copy written twice drifts apart.
 
 ---
+
+## The customer's own bookings
+
+### My bookings — `/bookings` and `/bookings/{bookingId}`
+
+The list is cards; the detail page is the whole booking, its history, and
+whatever it can still be offered. A card **caps the hours it lists** — a run of
+days is hundreds of them, and a card that grows to fit is a list that cannot be
+scanned.
+
+The card says when a move is **waiting on the venue**, so somebody who has paid
+an upgrade and is waiting is not left wondering whether the page forgot. And the
+way out — cancelling — is offered **only once the booking is out of the
+customer's hands**: while it is still an unpaid hold there is nothing to cancel
+that letting the clock run out would not do.
+
+### Moving — `MoveBookingDialog`
+
+**The question is asked in the order a customer can actually answer it: when,
+then which court.** It ran the other way round first — pick a court, then read
+that court's diary — which meant choosing between courts before knowing which of
+them could take you, and reading "that hour has gone" one court at a time. Now
+the date and the hours come first, and the courts that can take them are what
+comes back. A court that is shut, closed for work or already spoken for never
+appears, because a card that cannot be clicked is a question the reader has to
+answer twice.
+
+What the dialog asks depends on the booking, and **the server decides which**:
+
+| The booking | What is asked |
+| --- | --- |
+| `Hourly`, not begun | A date, then hours from the building's opening times, then the courts free for them |
+| `Hourly`, under way | Nothing. The whole hours still ahead travel at the times they have; the hour being played stays where it is |
+| `WholeDay`, not begun | A date, and no hours — a day's hours are whatever each court is open for, so the server works them out per court |
+| `MultiDay`, not begun | As many dates as the run has, each picked and unpicked on its own. Once they are all chosen the rest of the strip goes quiet |
+| Sold by the day, begun | Nothing is offered at all |
+
+The booking's **own court is in the list**, because moving to other hours on the
+same court is an ordinary thing to want. What is left off is that court at those
+same hours, which is not a move.
+
+Options arrive **cheapest first**, and a court that costs more carries its
+balance on the card. Picking one goes to the upgrade checkout rather than moving
+anything.
+
+### Upgrade checkout — `/bookings/{bookingId}/upgrade`
+
+The same shape as the booking checkout, because it is the same act: a balance to
+pay, a GCash number to pay it into, a countdown on the hold, a receipt to
+upload, and then a wait on the venue. The **extra confirm step was dropped** —
+the customer has already chosen the court and seen the figure, and a second page
+asking whether they meant it is a page that only adds doubt.
+
+The receipt is capped at 10 MB: a receipt is a screenshot, and anything that
+size is something else.
+
+## The venue's desk
+
+`/desk` — the booking queue (`Waiting` and `Confirmed`), the court diary, and
+`/desk/upgrades`, which is the same two-pile shape: what is waiting is work and
+what is settled is a record. Declining takes a reason, which the customer is
+shown.
+
+A booking's **history** is readable from both the desk and the customer's own
+page, and it is the same account of the same events.
 
 ## The admin console
 
@@ -246,10 +331,8 @@ that could change the answer. See
 
 ## Not built
 
-* **Paying for a booking.** Hours can be chosen and held; nothing collects
-  money. The MVP flow — GCash to the venue, a hold that expires, a receipt
-  uploaded, an attendant verifying it — is in
-  [booking.md](booking.md#not-built), along with what its absence means today.
+* **A message thread.** A rejected booking sends no letter because the customer
+  has nowhere to answer from. This is that missing place.
 * **The facility owner's own console.** Everything built is the platform admin
   acting on an owner's behalf. The `RoleGuard` and `app/(facility-owner)` route
   group are not built.

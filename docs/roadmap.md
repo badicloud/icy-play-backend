@@ -277,16 +277,17 @@ Exit criteria:
 
 ## Phase 5: Booking Workflow
 
-> **Mostly built.** Availability, pricing, booking creation and double-booking
-> protection all exist — see [booking.md](booking.md). The rule this phase was
-> flagged as not enforcing is enforced: one floor hosts one sport at a time, and
-> within that sport its parts run side by side.
+> **Built.** Availability, pricing, the three booking kinds, double-booking
+> protection, the hold and its expiry, and moving a booking — see
+> [booking.md](booking.md). The rule this phase was flagged as not enforcing is
+> enforced: one floor hosts one sport at a time, and within that sport its parts
+> run side by side.
 >
-> **What is missing is paying.** A booking is created `PendingPayment` and stays
-> there, and **the hold never expires** — nothing stops one account from holding
-> every hour of every court without paying. The payment due timestamp below is
-> the part that closes it, and it is the first thing to build before the
-> platform is open to the public.
+> **Beyond the original scope:** a booking can be **moved** to another court,
+> other hours or other dates, and **upgraded** onto dearer hours by paying the
+> difference. Neither was planned here. Both exist because this platform never
+> holds the customer's money, so there is no refund to offer and moving is what
+> is offered instead.
 
 Goal:
 
@@ -326,6 +327,15 @@ Exit criteria:
 
 ## Phase 6: Payment Receipt Upload and Verification
 
+> **Built.** The GCash flow, the hold and its expiry, Cloudinary receipts, and
+> the venue's desk — a queue of what is waiting, confirm, reject, the court
+> diary and a booking's history. The desk is **facility owner and attendant**,
+> not the owner alone as scoped below.
+>
+> The upgrade queue runs through the same desk: a customer pays a balance, the
+> desk sees the receipt and approves or declines it. See
+> [booking.md](booking.md#upgrading-a-booking).
+
 Goal:
 
 Support direct customer payment to Facility Owner with manual receipt verification.
@@ -364,6 +374,15 @@ Exit criteria:
 ---
 
 ## Phase 7: Notifications
+
+> **Partly built: email only.** Twelve transactional letters go today — see
+> [notification-workflow.md](notification-workflow.md#what-actually-sends-today)
+> for the list and what each one is for. They are sent **after the save and best
+> effort**: a decision already made must not be reported as failed because a
+> mail provider is down.
+>
+> Not built: in-app records, SignalR, Hangfire retry, and push of any kind.
+> Sending is direct rather than queued.
 
 Goal:
 

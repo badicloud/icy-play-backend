@@ -388,6 +388,19 @@ Rules:
 * Display booking times using the facility time zone.
 * Reports should clearly define whether filters use UTC or facility local time.
 
+**A venue's time zone is validated as it is typed** (`TimeZoneRules`). Every
+hour this platform sells is a wall-clock hour at the venue — opening times, peak
+windows, holidays, and "has this hour gone" are all asked on the venue's clock —
+and reading that clock means resolving the stored zone. An unresolvable zone
+does not fail: it quietly answers in UTC, which in Manila is eight hours out.
+Nothing throws, nothing is logged, and the venue simply runs a third of a day
+wrong until somebody notices by hand. So it is checked where a person can still
+fix it, on both ways into a facility's details.
+
+Both spellings are accepted, because both resolve: the IANA ids the rest of the
+world uses (`Asia/Manila`) and the Windows ids a Windows host also carries
+(`Singapore Standard Time`).
+
 ---
 
 ## Concurrency and Double Booking Protection
@@ -1031,11 +1044,24 @@ Anonymous. The landing page is the first thing a visitor sees, and asking them
 to sign in to find out whether anyone plays badminton nearby would be the wrong
 way round.
 
-Both are cached for ten minutes on the server and sent with
-`Cache-Control: public, max-age=60`. The server's copy is cleared on every write
-that could change the answer: creating or updating a court, changing divisions,
-setting or lifting maintenance, any sport lookup change, and renewing,
-rescheduling or cancelling a contract.
+The activity, court and one-court endpoints are cached for ten minutes on the
+server and sent with `Cache-Control: public, max-age=5` (`CatalogFreshness`).
+The server's copy is cleared on every write that could change the answer:
+creating or updating a court, changing divisions, setting or lifting
+maintenance, any sport lookup change, and renewing, rescheduling or cancelling a
+contract.
+
+**The browser's five seconds used to be a minute**, which was the right number
+for the visitor and the wrong one for the other reader of these endpoints. An
+owner who changed a rate and opened the venue's page to check it was shown the
+rate they had just replaced, for up to a minute, with no way to tell that from
+the save having failed — and an ordinary reload did not help, because a reload
+honours this header. Only a hard refresh did, which is not something anyone
+should have to know. Five seconds keeps most of what the minute was for: a burst
+of clicks through the catalogue still comes off the browser, and the staleness is
+now shorter than the walk from the pricing form to the page that shows it. The
+real answer is an ETag, so the browser always asks and is told "unchanged" for
+nothing; this is the cheap version of that.
 
 Maintenance is on that list even though the activity list ignores it, because
 the **court list carries it**. A reopened court that still reads as closed turns
@@ -1075,14 +1101,32 @@ A filter that returns nothing is worse than one that was never offered.
 `courtCount` counts every division separately: a floor marked out three ways is
 three courts to book.
 
+### List venues
+
+```http
+GET /api/v1/catalog/facilities
+```
+
+Every venue on offer, with what it has and where it is. **What the landing page
+lists, because a venue is what somebody chooses first** — the site used to open
+on sports, which asked a visitor to name a game before it would tell them where
+anyone plays. Each venue then has a page of its own.
+
+Not sent with a `Cache-Control` header, unlike its neighbours: this is the
+listing an owner most often reloads to check a change has landed.
+
 ### List courts
 
 ```http
-GET /api/v1/catalog/courts?sport=pickleball
+GET /api/v1/catalog/courts?sport=pickleball&facility={facilityId}
 ```
 
-Every bookable court, or those for one sport. Omit `sport` for everything on
-offer — a visitor should see what is available before being asked to choose.
+Every bookable court, or those for one sport, or those at one venue, or both.
+Omit them for everything on offer — a visitor should see what is available
+before being asked to choose.
+
+`facility` is an id rather than a name: a name can be edited and two venues can
+share one, and neither should change or widen what a filter matches.
 
 A divided floor is returned **part by part**, one row per division, each
 carrying the sport it is for. A court set up for three sports appears three
@@ -1205,6 +1249,8 @@ Holds events as well as sports, told apart by `kind`.
 GET    /api/v1/admin/holidays?includeRetired=false
 POST   /api/v1/admin/holidays
 PUT    /api/v1/admin/holidays/{id}
+GET    /api/v1/admin/holidays/template
+POST   /api/v1/admin/holidays/import
 POST   /api/v1/admin/holidays/{id}/retire
 POST   /api/v1/admin/holidays/{id}/reinstate
 ```
@@ -1212,6 +1258,22 @@ POST   /api/v1/admin/holidays/{id}/reinstate
 Retired rather than deleted in both cases: courts reference a sport, and a
 booking priced as a holiday needs the day that made it one to still be there
 when the receipt is questioned.
+
+**The calendar is filled from a spreadsheet**, because the movable feasts change
+every year and arrive as a proclamation listing dozens of dates at once.
+Twenty-odd rows typed one at a time into a form is where the year's calendar
+goes wrong.
+
+`template` hands back an `.xlsx` with the four columns — name, date, kind,
+repeats annually — the header styled, two example rows filled in, dropdowns on
+the two columns with a fixed set of answers, and the date column formatted. The
+fastest way to say what goes in a column is to show it filled in correctly, and
+a dropdown is how a kind cannot come back misspelled.
+
+`import` reads that file back. **The writer and the reader live in one class**
+(`HolidayWorkbook`) on purpose: a template written in one place and parsed in
+another drifts the first time a column is renamed, and the drift shows up as a
+file that downloads cleanly and imports as nothing.
 
 ---
 
@@ -2091,41 +2153,116 @@ into, and how long an unpaid hold survives.
 ### Moving a booking
 
 ```http
-POST /api/v1/bookings/{bookingId}/move   { "startDate": "2026-09-25" }
+GET  /api/v1/bookings/{bookingId}/move-window?date=
+POST /api/v1/bookings/{bookingId}/move-options
+POST /api/v1/bookings/{bookingId}/move-quote
+POST /api/v1/bookings/{bookingId}/move
 ```
 
-Role: Customer, and only their own booking.
+Role: Customer, and only their own booking. Another customer's answers the same
+as one that is not there.
 
-**One date is the whole request.** The hours of the day, the number of days and
-the court do not change — which is what keeps the total identical, which is what
-lets a move happen at all when the money is already with the venue. There is no
-cancellation and no refund anywhere in this platform, because nothing ever holds
-the customer's money; moving is what is offered instead.
+**The rules are in [booking.md](booking.md#moving-a-booking), not here.** They
+are the deal rather than an implementation detail, they are shared by the move,
+the quote, the search and the upgrade, and the last time they were written out
+beside the endpoint the two drifted apart inside a week. What follows is the
+shape of the request and what each refusal means.
 
-The rules, all of them in `BookingMove` on the domain because they are the deal
-rather than an implementation detail:
+A move takes a **target court and the hours to put on it**:
 
-* **Three times.** A booking that can be carried forward for ever is an option
-  on a venue's calendar rather than a booking, and the venue is the one turning
-  other people away to keep holding it.
-* **More than 24 hours** before it starts, counted on the venue's clock. Inside
-  the last day the hour stays where it is.
-* **Same kind of day** — weekday for weekday, weekend for weekend, and not onto
-  a holiday. Those are priced differently.
-* Only `PendingVerification` or `Confirmed`. An unpaid hold needs no moving:
-  let it lapse and book the other date.
+```json
+{ "toBookableCourtId": "…", "slots": [ { "date": "2026-09-25", "startsAt": "18:00" } ] }
+```
+
+`slots` may be omitted, which means "the same hours, on that court". A booking
+sold by the day sends **dates** rather than hours to `move-options`, because its
+hours are not a choice anybody made — they are whatever the court is open for,
+and they cannot be named until a court is.
+
+| Endpoint | What it answers |
+| --- | --- |
+| `move-window` | The hour grid for one date, with how many hours have to be picked. `Hourly` only — a day taken open to close has no hours to choose. |
+| `move-options` | Every court this booking could move to, each quoted, cheapest first. |
+| `move-quote` | What one named court would come to. Asks only; refuses nothing a screen is still deciding. |
+| `move` | Does it. |
 
 Runs in a serializable transaction for the same reason taking a booking does,
-and its own hours are excluded from what counts as taken — otherwise a move that
-overlaps the dates it is leaving would refuse on the strength of the very
-booking being moved. The recomputed total is compared against the original and
-the move refused if they differ; the rules above should make that impossible,
-and it is checked anyway.
+and the booking's own hours are excluded from what counts as taken — otherwise a
+move overlapping the dates it is leaving would refuse on the strength of the very
+booking being moved.
+
+Refusals: `NotMovable`, `MoveLimitReached`, `NotTheSameOffering`,
+`DayBookingInPlay`, `BookingFinished`, `KindDoesNotMatchSlots`, `SlotTaken`,
+`OutsideOpeningHours`, `NotPriced`, `MoveCostsMore`, `NothingWouldChange`.
 
 `BookingDetail` carries `movesLeft` and `canBeMoved` so a page can offer the
 button or explain its absence without working the rules out again. `canBeMoved`
-is answered on the server because the 24-hour rule is measured on the venue's
-clock, not the reader's.
+is answered on the server, because it is measured on the venue's clock, not the
+reader's.
+
+### Upgrading a booking
+
+```http
+POST /api/v1/bookings/{bookingId}/upgrade
+GET  /api/v1/bookings/{bookingId}/upgrade
+POST /api/v1/bookings/{bookingId}/upgrade/receipt
+```
+
+Role: Customer. A move onto hours that cost more, paid for and approved rather
+than immediate — the one case that cannot be instant, because money has to
+change hands and the venue has to see it arrive before it gives up the better
+court. Rules and lifecycle: [booking.md](booking.md#upgrading-a-booking).
+
+`POST …/upgrade` takes the same body a move does and answers the request with
+its `balanceDue` and the hours it is holding. A move that costs the same or less
+is not an upgrade and is refused with `NothingToUpgrade` — it should have gone
+to `move`, which is free and immediate.
+
+`GET …/upgrade` answers the one open request, or null. **One at a time**
+(`MoveAlreadyRequested`): two, and the customer can be paying for hours while
+the venue is approving different ones.
+
+`POST …/upgrade/receipt` attaches the GCash receipt and hands it to the venue,
+the same shape as a booking's own receipt endpoint. The hours are held until the
+venue answers from that moment — the customer cannot be blamed for a queue.
+
+### The upgrade queue
+
+```http
+GET  /api/v1/desk/upgrades?tab=Waiting&facilityId=&page=1&pageSize=10
+POST /api/v1/desk/upgrades/{upgradeId}/approve
+POST /api/v1/desk/upgrades/{upgradeId}/decline
+```
+
+Roles: FacilityOwner, FacilityAttendant, scoped exactly as the booking desk is.
+`tab` is `Waiting` (paid, nobody has looked) or `Settled`.
+
+`approve` re-checks rather than trusting the quote, because time has passed
+since it was made: still waiting (`UpgradeNotWaiting`), a receipt attached
+(`NoReceipt`), the hours still adding up (`UpgradeStale`), the target hours
+still free (`UpgradeHoursTaken`). Then the booking moves at the price it was
+quoted, and the balance is recorded against `PaidTotal`.
+
+`decline` takes a reason, leaves the booking exactly where it was, and tells the
+customer. Unlike a rejected booking, a declined upgrade **does** write — there
+is nothing for the customer to answer, only something they need to know.
+
+### A booking's history
+
+```http
+GET /api/v1/bookings/{bookingId}/history
+GET /api/v1/desk/bookings/{bookingId}/history
+```
+
+One account of one booking, read from the platform's audit trail, and the same
+answer at both doors: two readers of the same events who disagreed about what
+they said would be worse than either of them being wrong. Authorisation is the
+caller's — the customer's screen asks whether the booking is theirs, the desk
+asks whether it is at a venue they work at.
+
+An expiry leaves no row, because nothing is there to write one: a hold lapses by
+the clock passing, not by anybody doing something. It is worked out on the way
+out and added to what the trail holds.
 
 ### The venue's desk
 

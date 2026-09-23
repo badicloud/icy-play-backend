@@ -649,10 +649,14 @@ to pay into lives on the owner.
 | GcashNumber | nvarchar(30) | |
 | GcashAccountName | nvarchar(200) | Shown beside the number, so a customer can check the name before sending. |
 | GcashQrCodeUrl | nvarchar(1000) | Cloudinary `secure_url`. |
-| PartialBookingExpiryMinutes | int | How long an unpaid hold survives. Default 30, clamped to 5–240. |
+| PartialBookingExpiryMinutes | int | How long an unpaid hold survives. Default 5, clamped to 5–240. |
+| MoveLimit | int | How many moves a customer gets on one booking. Default 3, clamped to 1–20. |
 
 These are on the owner rather than in a `PaymentMethods` table because there is
 one way to pay today. A second method is a table; a first one is four columns.
+
+`MoveLimit` is per venue because it is **their** court being held while somebody
+makes up their mind. See [booking.md](booking.md#moving-a-booking).
 
 ### Bookings
 
@@ -672,8 +676,16 @@ What was agreed, as it was agreed. See [booking.md](booking.md).
 | ReceiptUploadedAt | datetimeoffset | **The clock stops here**, not at submit. |
 | SubmittedForVerificationAt | datetimeoffset | |
 | CancellationReason | nvarchar(500) | |
-| MoveCount | int | How many times these hours have been carried to another date. Capped at three. |
+| MoveCount | int | How many times the customer has moved these hours. Capped by the venue's `MoveLimit`. A move the venue asked for is not counted. |
 | MovedAt | datetimeoffset | When the last of those happened. |
+| PaidTotal | decimal(10,2) | What the customer has actually handed over, across the first payment and any upgrade since. |
+
+**`PaidTotal` is stored rather than derived**, which the rest of this table
+avoids on principle. A move to a cheaper court leaves the slots totalling less
+than was paid and a move to a dearer one more, so reading the money off the
+slots afterwards would quietly restate a month that has already been billed. The
+slots say what is being played; this says what was paid. Written by
+`Booking.Confirm` on the first payment and by `Booking.Settle` on each upgrade.
 
 Indexed on CustomerUserId and on (StartDate, EndDate) — the stretch of days a
 venue's console asks for.
@@ -706,6 +718,61 @@ be read back line by line and explained.
 `CourtId` is copied for the same reason it is on BookableCourts: the hot query
 asks what else is taken on this floor, and a join in front of every slot of every
 calendar is a join too many.
+
+### BookingUpgradeRequests
+
+A customer asking to move onto hours that cost more, and offering to pay the
+difference. See [booking.md](booking.md#upgrading-a-booking).
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| BookingId | uniqueidentifier | |
+| ToBookableCourtId | uniqueidentifier | Where it wants to go. |
+| ToCourtName | nvarchar | Snapshot, for the same reason the booking's own is. |
+| RequestedByUserId | uniqueidentifier | |
+| RentalNow | decimal(10,2) | What the moving hours come to now, court rental alone. |
+| RentalNew | decimal(10,2) | What the asked-for hours come to, court rental alone. |
+| BalanceDue | decimal(10,2) | The difference, never less than nothing. |
+| Status | nvarchar(30) | `AwaitingPayment`, `AwaitingApproval`, `Approved`, `Declined`, `Withdrawn`, `Expired`. |
+| HoldsUntil | datetimeoffset | When the hours asked for go back on sale. |
+| ReceiptUrl / ReceiptUploadedAt | | The customer's GCash receipt for the balance. |
+| SettledByUserId / SettledAt | | Who at the venue answered, and when. |
+| DeclineReason | nvarchar(500) | Why the venue said no. The customer is told. |
+
+**Only upgrades exist here.** A move to the same price or cheaper does not
+create a row at all: it is immediate and free, and the request table is for the
+one case that cannot be — money has to change hands, and the venue has to see it
+arrive before it gives up the better court.
+
+**The money is fixed when the request is made**, not worked out again at
+approval. A rate the venue changes in between must not change what somebody has
+already been asked for.
+
+**Court rental on both sides**, platform fee excluded: the fee is charged per
+hour booked and an upgrade buys no hours, so counting it would put a price on a
+move that costs nothing.
+
+The figures are those of the **hours that are moving**, not of the whole
+booking. The hours already played sit on both sides and cancel, so the balance
+is the same either way — but a customer moving the last hour of a long session
+must not be shown the total of a session mostly behind them.
+
+### BookingUpgradeSlots
+
+One hour an upgrade is asking for, at the price it was quoted.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| RequestId | uniqueidentifier | |
+| Date | date | |
+| StartsAt / EndsAt | time | One hour. |
+| RateKind | nvarchar(20) | |
+| Amount | decimal(10,2) | Court rental for this hour. |
+| PlatformFee | decimal(10,2) | Carried so the slot the booking ends up with is complete, not so it is charged again. |
+
+**A copy rather than a reference to the booking's own slots**: these are hours
+the booking does not hold yet, and may never hold. On approval they become
+`BookingSlots` at exactly these prices.
 
 ### FacilityAttendants
 

@@ -150,6 +150,34 @@ Recommended production direction:
 
 SQL Server Express is acceptable for local development and early testing, but production should eventually move to a managed database for backups, reliability, and scaling.
 
+#### AUTO_CLOSE is turned off by a migration
+
+**SQL Server Express sets `AUTO_CLOSE` on for every database it creates**,
+whatever the model database says — every developer's copy, and the integration
+test database on every run. It shuts the database down when the last connection
+drops and recovers it on the next one, throwing away the buffer pool and the
+plan cache each time.
+
+Against a connection pool it reads as a query that is instant whenever you
+measure it and times out for the customer. The court listing was taking **thirty
+seconds on a cold start and seven milliseconds once warm, on twenty-six rows** —
+so a slow catalogue query is worth checking here before it is blamed on the
+query or the indexes.
+
+It lives in a migration (`TurnOffAutoCloseOnSqlServerExpress`) rather than in
+this runbook because it arrives switched on in places nobody would think to
+check. The migration:
+
+* runs **outside a transaction**, because `ALTER DATABASE … SET` cannot run
+  inside one and EF wraps a migration in a transaction by default
+* skips engine edition 5 (Azure SQL Database), which has no such setting and
+  would fail the deployment over a thing it has already done
+* catches its own failure and prints instead of stopping a release — the
+  setting needs `ALTER` on the database, which a deployment account is not
+  always given, and this is a performance setting rather than a schema change
+* has a deliberately empty `Down`: putting `AUTO_CLOSE` back would only
+  reintroduce the stall, and nothing in the schema depends on it
+
 ### Redis
 
 Redis is used for:
