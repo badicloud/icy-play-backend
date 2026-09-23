@@ -170,6 +170,31 @@ public interface IDeskService
     /// </summary>
     Task<DeskResult<DeskSettings>> SettingsAsync(Guid userId, CancellationToken ct);
 
+    /// <summary>
+    /// How much of what this person's venues had open actually got used, court
+    /// by court and part by part.
+    ///
+    /// The money in it is the owner's: an attendant's copy comes back with the
+    /// rental left out rather than hidden, because a figure the page does not
+    /// draw is still a figure in the response.
+    /// </summary>
+    Task<DeskResult<UtilizationReport>> UtilizationAsync(
+        Guid userId,
+        UtilizationQuery query,
+        CancellationToken ct);
+
+    /// <summary>
+    /// What the venue looks like at this moment: how many courts there are, and
+    /// how many of them have somebody on them.
+    ///
+    /// No money in it at all, so an attendant sees the same answer an owner
+    /// does. Counting courts is the desk's own job.
+    /// </summary>
+    Task<DeskResult<VenueSnapshot>> SnapshotAsync(
+        Guid userId,
+        Guid? facilityId,
+        CancellationToken ct);
+
     Task<DeskResult<DeskSettings>> UpdateSettingsAsync(
         Guid userId,
         UpdateDeskSettingsRequest request,

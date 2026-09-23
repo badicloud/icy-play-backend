@@ -242,6 +242,14 @@ public enum DeskFailure
     UnknownStatus,
     /// <summary>More days than a diary will answer for in one go.</summary>
     WindowTooWide,
+    /// <summary>
+    /// More days than a report will answer for. Its own failure rather than
+    /// <see cref="WindowTooWide"/>, because the two allow very different
+    /// stretches: a diary draws every hour and a report adds them up.
+    /// </summary>
+    ReportWindowTooWide,
+    /// <summary>A range that ends before it starts. Usually a year typed wrong.</summary>
+    WindowBackwards,
     /// <summary>No upgrade of that id at a venue this person works.</summary>
     UpgradeNotFound,
     /// <summary>Already decided. A second press must not undo the first.</summary>

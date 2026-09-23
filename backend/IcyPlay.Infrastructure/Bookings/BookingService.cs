@@ -2433,9 +2433,7 @@ public sealed class BookingService(
 
         /// <inheritdoc cref="LocalNow" />
         public static DateTimeOffset LocalNowIn(string timeZone, DateTimeOffset utcNow) =>
-            TimeZoneInfo.TryFindSystemTimeZoneById(timeZone, out var zone)
-                ? TimeZoneInfo.ConvertTime(utcNow, zone)
-                : utcNow;
+            VenueClock.LocalNowIn(timeZone, utcNow);
 
         public DateOnly Today(DateTimeOffset utcNow) =>
             DateOnly.FromDateTime(LocalNow(utcNow).DateTime);

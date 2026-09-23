@@ -456,6 +456,24 @@ Exit criteria:
 
 ## Phase 9: Reporting and Dashboards
 
+> **Started: court utilization.** Built on the venue desk rather than under
+> `facility-owner`, and open to attendants without the money in it. See
+> [api-design.md](api-design.md#court-utilization-report).
+>
+> It reads two figures per court rather than one, because a floor sold in parts
+> has two honest answers: the floor was busy for an hour, and two of its parts
+> were sold for that hour. The percentage is the first; the breakdown is the
+> second.
+>
+> **Dapper is not used**, despite the technical approach below. The
+> availability rules already answer "was this court open" in C#, and restating
+> them in SQL would be a second answer to the same question. The volume does
+> not need it: a month of one venue is a few hundred rows.
+>
+> Not built: the money reports, and the hour-by-day-of-week heatmap — which is
+> where the actionable answer lives, because "Wednesday afternoons are empty"
+> is something a venue can price against and a single percentage is not.
+
 Goal:
 
 Provide operational visibility for Facility Owners and Platform Administrators.

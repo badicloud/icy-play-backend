@@ -511,6 +511,91 @@ public sealed class DeskService(
         return DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct));
     }
 
+    public async Task<DeskResult<VenueSnapshot>> SnapshotAsync(
+        Guid userId,
+        Guid? facilityId,
+        CancellationToken ct)
+    {
+        var venueIds = await VenueQuery(userId)
+            .AsNoTracking()
+            .Select(facility => facility.Id)
+            .ToListAsync(ct);
+
+        if (facilityId is Guid wanted)
+        {
+            if (!venueIds.Contains(wanted))
+            {
+                return DeskResult<VenueSnapshot>.Fail(DeskFailure.NotAttended);
+            }
+
+            venueIds = [wanted];
+        }
+
+        if (venueIds.Count == 0)
+        {
+            return DeskResult<VenueSnapshot>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<VenueSnapshot>.Success(
+            await RightNow.ReadAsync(db, venueIds, timeProvider.GetUtcNow(), ct));
+    }
+
+    public async Task<DeskResult<UtilizationReport>> UtilizationAsync(
+        Guid userId,
+        UtilizationQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (query.To < query.From)
+        {
+            return DeskResult<UtilizationReport>.Fail(DeskFailure.WindowBackwards);
+        }
+
+        if (query.To.DayNumber - query.From.DayNumber >= UtilizationQueryValidator.MostDays)
+        {
+            return DeskResult<UtilizationReport>.Fail(DeskFailure.ReportWindowTooWide);
+        }
+
+        // Which venues, and which of those they own. The second is what decides
+        // whether the money comes back at all, and it is asked here rather than
+        // of a role: an owner is an owner of their own buildings, not of the
+        // one they happen to be on the desk of.
+        var venues = await VenueQuery(userId)
+            .AsNoTracking()
+            .Select(facility => new
+            {
+                facility.Id,
+                Owned = facility.FacilityOwner.UserId == userId
+            })
+            .ToListAsync(ct);
+
+        var venueIds = venues.ConvertAll(venue => venue.Id);
+
+        if (query.FacilityId is Guid wanted)
+        {
+            if (!venueIds.Contains(wanted))
+            {
+                return DeskResult<UtilizationReport>.Fail(DeskFailure.NotAttended);
+            }
+
+            venueIds = [wanted];
+        }
+
+        if (venueIds.Count == 0)
+        {
+            return DeskResult<UtilizationReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        var owned = venues
+            .Where(venue => venue.Owned && venueIds.Contains(venue.Id))
+            .Select(venue => venue.Id)
+            .ToArray();
+
+        return DeskResult<UtilizationReport>.Success(
+            await Utilization.ReadAsync(db, venueIds, owned, query, ct));
+    }
+
     public async Task<DeskResult<PagedResult<DeskUpgrade>>> UpgradesAsync(
         Guid userId,
         DeskUpgradeQuery query,
@@ -843,9 +928,7 @@ public sealed class DeskService(
             .Select(facility => facility.TimeZone)
             .SingleOrDefaultAsync(ct);
 
-        return timeZone is not null && TimeZoneInfo.TryFindSystemTimeZoneById(timeZone, out var zone)
-            ? TimeZoneInfo.ConvertTime(utcNow, zone)
-            : utcNow;
+        return VenueClock.LocalNowIn(timeZone, utcNow);
     }
 
     private async Task<DeskUpgrade> OneUpgradeAsync(Guid upgradeId, CancellationToken ct)
@@ -952,7 +1035,7 @@ public sealed class DeskService(
     /// and the number on a divided one. Derived, never stored — a stored name
     /// would outlive the marking out that made it true.
     /// </summary>
-    private static string UnitLabel(string sportName, int divisionNumber, int divisions) =>
+    internal static string UnitLabel(string sportName, int divisionNumber, int divisions) =>
         divisions <= 1 ? sportName : $"{sportName} {divisionNumber}";
 
     public async Task<DeskResult<DeskSettings>> SettingsAsync(Guid userId, CancellationToken ct)

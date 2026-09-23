@@ -2040,15 +2040,90 @@ Role:
 
 * FacilityOwner
 
+### Venue snapshot
+
+```http
+GET /api/v1/desk/reports/snapshot?facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant. No money in it, so both see the same
+answer — counting courts is the desk's own job.
+
+What the venue looks like **at this moment**, on each venue's own clock:
+
+| Figure | Means |
+| --- | --- |
+| `courts` | Active floors, as the venue registered them. |
+| `bookableCourts` | Active parts those floors are sold in. |
+| `availableNow` | No booking on them, and not closed for work. |
+| `bookedNow` | Somebody is on them, on a booking that still holds the court. |
+| `underMaintenanceNow` | Closed for work at this moment, booked or not. |
+
+**The last three add up to `bookableCourts`**, and they are sorted in one order
+so that they can: maintenance first, then booked, then whatever is left is
+free. A part closed for work is not free whether or not somebody had it booked,
+and a maintenance figure that left those out would understate the closure the
+venue actually made.
+
+An unpaid hold whose clock has run out does **not** count as booked — the same
+rule `Booking.HoldsTheCourtAt` states, asked of a row. Counting it would have
+the desk turning somebody away from an hour anybody can buy.
+
+**Free is not the same as sellable**, and the page says so. A part with no
+booking of its own can still be unsellable because a clashing game has the
+floor: one hall booked for basketball takes its three pickleball courts with
+it. The availability grid answers "can I sell this hour"; this answers "is
+anybody on it".
+
 ### Court Utilization Report
 
 ```http
-GET /api/v1/facility-owner/reports/court-utilization?dateFrom=2026-07-01&dateTo=2026-07-31
+GET /api/v1/desk/reports/court-utilization?from=2026-09-01&to=2026-09-22&facilityId=
 ```
 
-Role:
+Roles: FacilityOwner, FacilityAttendant — **built on the desk, not under
+`facility-owner`** as planned above. The desk is where somebody asks which
+courts sit empty on a Wednesday, and the desk is owner and attendant alike.
 
-* FacilityOwner
+**The money is left out for an attendant**, not hidden from them: `rental` on
+the report, on each court and on each unit comes back `null`. A figure the page
+declines to draw is still a figure in the payload.
+
+Two levels, because a court is a floor and the floor is sold in parts:
+
+| Figure | Means |
+| --- | --- |
+| `openMinutes` | What the court could have sold. Its own hours or the building's, less days the venue was shut, days under maintenance, and days outside the owner's contract — **rounded down to whole slots**, because the grid never offered the remainder. |
+| `inUseMinutes` | Minutes the floor had somebody on it, counted **once** however many of its parts were sold for them. |
+| `soldMinutes` | The parts added up. Larger than `inUseMinutes` whenever a divided floor ran two games side by side. |
+| `idleMinutes` | Open and unsold. Never below nothing. |
+| `maintenanceMinutes` | What the timetable said, on days shut for work. Kept out of `openMinutes` **and** out of `idleMinutes`: nobody could have booked those hours, so they are neither used nor wasted. |
+| `awaitingMinutes` | Paid for and waiting on the desk. Neither played nor lost. |
+| `openDays` / `maintenanceDays` | The days behind the minutes. |
+
+**Utilization is `inUseMinutes / openMinutes`.** Adding up the units will not
+give you that, and it is not meant to: a floor marked out three ways for
+pickleball can sell three o'clock three times over, and a percentage built on
+that reads three hundred. The units say what the floor was used *for*, and they
+add up to `soldMinutes` rather than to `inUseMinutes`.
+
+**A retired part is still listed when it sold hours in the period**, carrying
+`isRetired`. Dropping it left its hours inside the court's `soldMinutes` while
+its row was gone, so the rows no longer totalled the figure above them and
+nothing said what was missing. One that sold nothing is left out.
+
+Confirmed bookings only. A booking still waiting on the desk might be turned
+down, and folding it in would make a report run this afternoon disagree with
+the same report run tomorrow.
+
+The arithmetic is done in C# over an EF read rather than in SQL, and
+deliberately: "was this court open, and for how long" is a rule
+[booking.md](booking.md#what-is-free) already owns and the availability grid
+already answers. A second copy in T-SQL would part company with the first the
+day somebody let a court keep its own hours.
+
+Refusals: `NotAttended` for a venue they do not work, `WindowBackwards`, and
+`ReportWindowTooWide` past a year.
 
 ### Platform Fee Billing Report
 

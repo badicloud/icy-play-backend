@@ -216,6 +216,60 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// What the venue looks like at this moment: how many courts, how many
+    /// parts they are sold in, and how many of those have somebody on them.
+    ///
+    /// Read on each venue's own clock, so a desk asking at nine in the morning
+    /// is answered about nine in the morning wherever the building is.
+    /// </summary>
+    [HttpGet("reports/snapshot")]
+    public async Task<IActionResult> Snapshot(
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.SnapshotAsync(userId, facilityId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<VenueSnapshot>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// How much of what the venue had open actually got used, court by court.
+    ///
+    /// Open to attendants as well as owners, without the money: knowing which
+    /// courts sit empty on a Wednesday is the desk's own business, and what the
+    /// venue took is not. The rental is left out of an attendant's response
+    /// rather than hidden by the page.
+    /// </summary>
+    [HttpGet("reports/court-utilization")]
+    public async Task<IActionResult> CourtUtilization(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.UtilizationAsync(
+            userId,
+            new UtilizationQuery(from, to, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<UtilizationReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// Upgrades customers have paid for and handed over, and the ones already
     /// settled.
     /// </summary>
@@ -445,6 +499,14 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for a stretch of six weeks or less."),
+            DeskFailure.ReportWindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for a year or less."),
+            DeskFailure.WindowBackwards => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "The report has to end on or after it starts."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 
