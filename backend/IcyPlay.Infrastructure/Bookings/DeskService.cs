@@ -511,6 +511,63 @@ public sealed class DeskService(
         return DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct));
     }
 
+    public async Task<DeskResult<HoursOverTime>> HoursOverTimeAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (!HoursGrain.IsSupported(query.Grain))
+        {
+            return DeskResult<HoursOverTime>.Fail(DeskFailure.UnknownGrain);
+        }
+
+        if (query.To < query.From)
+        {
+            return DeskResult<HoursOverTime>.Fail(DeskFailure.WindowBackwards);
+        }
+
+        if (query.To.DayNumber - query.From.DayNumber >= UtilizationQueryValidator.MostDays)
+        {
+            return DeskResult<HoursOverTime>.Fail(DeskFailure.ReportWindowTooWide);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<HoursOverTime>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<HoursOverTime>.Success(
+            await Utilization.OverTimeAsync(db, scoped, query, ct));
+    }
+
+    /// <summary>
+    /// The venues this person works, narrowed to the one they asked about.
+    ///
+    /// Null when they work none, or asked about one they do not work — the same
+    /// answer either way, so the desk cannot be used to map what it cannot see.
+    /// </summary>
+    private async Task<IReadOnlyCollection<Guid>?> ScopeAsync(
+        Guid userId,
+        Guid? facilityId,
+        CancellationToken ct)
+    {
+        var venueIds = await VenueQuery(userId)
+            .AsNoTracking()
+            .Select(facility => facility.Id)
+            .ToListAsync(ct);
+
+        if (facilityId is Guid wanted)
+        {
+            return venueIds.Contains(wanted) ? [wanted] : null;
+        }
+
+        return venueIds.Count == 0 ? null : venueIds;
+    }
+
     public async Task<DeskResult<VenueSnapshot>> SnapshotAsync(
         Guid userId,
         Guid? facilityId,

@@ -27,7 +27,6 @@ public sealed record UtilizationReport(
     DateOnly To,
     int OpenMinutes,
     int InUseMinutes,
-    int IdleMinutes,
     int MaintenanceMinutes,
     int AwaitingMinutes,
     /// <summary>
@@ -73,19 +72,12 @@ public sealed record CourtUtilization(
     /// </summary>
     int SoldMinutes,
     /// <summary>
-    /// Open and nobody on it. <see cref="OpenMinutes"/> less
-    /// <see cref="InUseMinutes"/>, worked out here so a screen cannot arrive at
-    /// a negative by subtracting the wrong pair.
-    /// </summary>
-    int IdleMinutes,
-    /// <summary>
     /// Minutes this court would have been open, had it not been under maintenance.
     ///
-    /// Kept apart from both open and idle. A court under maintenance was
-    /// not idle — nobody could have booked it — and folding those hours into
-    /// the denominator would read the venue as having wasted them. Shown so
-    /// that a month with a bad percentage can be explained rather than just
-    /// noticed.
+    /// Kept apart from open. Nobody could have booked those hours, and folding
+    /// them into the denominator would read the venue as having wasted them.
+    /// Shown so that a month with a bad percentage can be explained rather than
+    /// just noticed.
     /// </summary>
     int MaintenanceMinutes,
     /// <summary>Paid for and waiting on the desk. Not yet in use, not yet lost.</summary>
@@ -165,3 +157,65 @@ public sealed record VenueSnapshot(
     int BookedNow,
     /// <summary>Closed for work at this moment, booked or not.</summary>
     int UnderMaintenanceNow);
+
+/// <summary>How finely the over-time read is cut.</summary>
+public static class HoursGrain
+{
+    public const string Day = "Day";
+    public const string Week = "Week";
+    public const string Month = "Month";
+
+    public static readonly IReadOnlyCollection<string> All = [Day, Week, Month];
+
+    public static bool IsSupported(string? value) =>
+        value is not null && All.Contains(value, StringComparer.Ordinal);
+}
+
+public sealed record HoursQuery(
+    DateOnly From,
+    DateOnly To,
+    string Grain = HoursGrain.Day,
+    Guid? FacilityId = null);
+
+/// <summary>
+/// The utilization report's own figures, cut by date rather than totalled per
+/// court.
+///
+/// The same sums, from the same walk of the calendar. A second count would
+/// give a venue two answers to one question, and the screen that draws the
+/// line beside the total is exactly where that would be noticed.
+/// </summary>
+public sealed record HoursOverTime(
+    DateOnly From,
+    DateOnly To,
+    string Grain,
+    /// <summary>
+    /// Every period in the range, whether or not anything traded in it.
+    ///
+    /// The rows leave out a period nobody could have traded in, so they cannot
+    /// say it was there. A chart needs to — that is where the gap goes — and
+    /// working the periods out on the screen would be a second copy of the
+    /// bucket rule: Monday weeks, clamped ends. One copy, here.
+    /// </summary>
+    IReadOnlyCollection<ReportPeriod> Periods,
+    /// <summary>
+    /// One row per court per period. Periods a court could not have traded in
+    /// at all — shut all week, or outside the owner's contract — are absent
+    /// rather than zero, so a chart draws a gap where there was no offer
+    /// instead of a floor where nobody bought.
+    /// </summary>
+    IReadOnlyCollection<CourtPeriod> Rows);
+
+public sealed record CourtPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    Guid CourtId,
+    Guid FacilityId,
+    string FacilityName,
+    string CourtName,
+    int OpenMinutes,
+    int SoldMinutes,
+    int MaintenanceMinutes);
+
+/// <summary>One bucket of an over-time read, clamped to the range asked for.</summary>
+public sealed record ReportPeriod(DateOnly Starts, DateOnly Ends);

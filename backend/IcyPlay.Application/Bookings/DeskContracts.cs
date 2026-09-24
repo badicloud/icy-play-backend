@@ -250,6 +250,8 @@ public enum DeskFailure
     ReportWindowTooWide,
     /// <summary>A range that ends before it starts. Usually a year typed wrong.</summary>
     WindowBackwards,
+    /// <summary>Not a grain anybody can ask a report for.</summary>
+    UnknownGrain,
     /// <summary>No upgrade of that id at a venue this person works.</summary>
     UpgradeNotFound,
     /// <summary>Already decided. A second press must not undo the first.</summary>

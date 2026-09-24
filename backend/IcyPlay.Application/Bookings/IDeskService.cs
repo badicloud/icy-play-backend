@@ -190,6 +190,18 @@ public interface IDeskService
     /// No money in it at all, so an attendant sees the same answer an owner
     /// does. Counting courts is the desk's own job.
     /// </summary>
+    /// <summary>
+    /// The utilization figures cut by date rather than totalled per court:
+    /// the line beside the total.
+    ///
+    /// No money in it, so an attendant sees what an owner sees. Hours are the
+    /// desk's own business.
+    /// </summary>
+    Task<DeskResult<HoursOverTime>> HoursOverTimeAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct);
+
     Task<DeskResult<VenueSnapshot>> SnapshotAsync(
         Guid userId,
         Guid? facilityId,

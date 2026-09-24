@@ -229,6 +229,39 @@ shown.
 A booking's **history** is readable from both the desk and the customer's own
 page, and it is the same account of the same events.
 
+### Reports — `/desk/reports`
+
+A side menu of every report, grouped by what it is about — courts and
+bookings, sales, inventory — each group on its own card. The unbuilt ones stay
+on it, greyed with a lock, so an owner looking for takings can see they are
+coming rather than wonder whether they are in the wrong place. One list,
+`reports.ts`, feeds the menu.
+
+The menu belongs to the reports section, not to `DeskShell`, which has none on
+purpose. The desk's pages are separate jobs and a breadcrumb says where you
+are; reports are siblings read one after another.
+
+**The landing page is "right now"**: courts, bookable courts, and how many of
+the parts are available, booked or under maintenance at this minute. The last
+three add up to the bookable courts, and the page says **available is not the
+same as sellable** — a part with no booking of its own is still unsellable
+while a clashing game has the floor.
+
+**Court utilisation** — `/desk/reports/utilization`. A court per row, opened to
+the parts it is sold in. The court's percentage counts the floor; the rows
+count what was sold on it, and on a divided floor those are different numbers,
+which the page says in as many words. Shares use the largest-remainder method so
+the column totals 100, with a total row saying what it is a share of.
+
+**Hours over time** — `/desk/reports/hours`. The same figures spread over their
+days, weeks or months, as a chart or a table, for the whole venue or per court.
+The line has its own scale, because against the hours open it would lie flat on
+the floor; what each period was — open, under maintenance, closed — is a strip
+underneath. The line **breaks** on a closed period rather than dropping to zero:
+nothing was on sale, which is not the same as nothing selling. Per court stops
+at eight lines and hands over to the table, which has every court and exports
+to CSV.
+
 ## The admin console
 
 ### Dashboard — `/admin`

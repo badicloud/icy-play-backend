@@ -2040,6 +2040,36 @@ Role:
 
 * FacilityOwner
 
+### Hours over time
+
+```http
+GET /api/v1/desk/reports/hours-over-time?from=&to=&grain=Day&facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant. No money in it, so both read the same
+answer.
+
+**The utilization report's own figures, cut by date rather than totalled per
+court.** One row per court per period, carrying `openMinutes`, `soldMinutes` and
+`maintenanceMinutes` — which is enough for all three ways the
+page shows them: summed per period it is the venue's line, grouped by court it
+is five lines, and printed as it stands it is the table.
+
+`grain` is `Day`, `Week` or `Month`. Weeks start on a Monday, because a venue's
+week does — a Sunday start would cut most weekends in half. `starts` and `ends`
+are **clamped to the range asked for**, so the first and last buckets say the
+days they actually cover rather than the days the week they fall in would have.
+
+**A period a court could not have traded in is absent, not zero.** A chart then
+draws a gap where there was no offer instead of a floor where nobody bought,
+which are different things and read differently to a venue.
+
+**These are the same sums the utilization report returns**, from the same walk
+of the calendar — `Utilization.Walk` is folded once into totals and once into
+buckets. That is deliberate and tested: the line and the percentage sit on the
+same screen, and a venue reading them together is exactly who would find them
+disagreeing. Counting the days twice is how that happens.
+
 ### Venue snapshot
 
 ```http
@@ -2096,8 +2126,7 @@ Two levels, because a court is a floor and the floor is sold in parts:
 | `openMinutes` | What the court could have sold. Its own hours or the building's, less days the venue was shut, days under maintenance, and days outside the owner's contract — **rounded down to whole slots**, because the grid never offered the remainder. |
 | `inUseMinutes` | Minutes the floor had somebody on it, counted **once** however many of its parts were sold for them. |
 | `soldMinutes` | The parts added up. Larger than `inUseMinutes` whenever a divided floor ran two games side by side. |
-| `idleMinutes` | Open and unsold. Never below nothing. |
-| `maintenanceMinutes` | What the timetable said, on days shut for work. Kept out of `openMinutes` **and** out of `idleMinutes`: nobody could have booked those hours, so they are neither used nor wasted. |
+| `maintenanceMinutes` | What the timetable said, on days shut for work. Kept out of `openMinutes`: nobody could have booked those hours, so they are neither used nor wasted. |
 | `awaitingMinutes` | Paid for and waiting on the desk. Neither played nor lost. |
 | `openDays` / `maintenanceDays` | The days behind the minutes. |
 

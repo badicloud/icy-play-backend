@@ -32,75 +32,21 @@ internal static class Utilization
         // some of the courts below it, with no way of telling which.
         var everywhere = venueIds.All(ownedVenueIds.Contains);
 
-        var courts = await db.Courts
-            .AsNoTracking()
-            .Where(court => court.IsActive && venueIds.Contains(court.FacilityId))
-            .Include(court => court.OperatingHours)
-            .Include(court => court.Facility).ThenInclude(facility => facility.OperatingHours)
-            .Include(court => court.Facility).ThenInclude(facility => facility.FacilityOwner)
-                .ThenInclude(owner => owner.Contracts)
-            .Include(court => court.Sports).ThenInclude(pair => pair.BookableCourts)
-            .Include(court => court.Sports).ThenInclude(pair => pair.Sport)
-            .OrderBy(court => court.Facility.Name)
-            .ThenBy(court => court.DisplayOrder)
-            .ThenBy(court => court.Name)
-            .ToListAsync(ct);
+        var source = await LoadAsync(db, venueIds, query.From, query.To, ct);
+        var courts = source.Courts;
 
         if (courts.Count == 0)
         {
             return new UtilizationReport(
                 query.From,
                 query.To,
-                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0,
                 Money(everywhere, 0m),
                 []);
         }
 
-        var courtIds = courts.ConvertAll(court => court.Id);
-
-        // The day the range ends, as an instant, so a maintenance period that starts at
-        // half past eleven on the last night still counts against it.
-        var opensOn = new DateTimeOffset(query.From.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-        var closesOn = new DateTimeOffset(query.To.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
-
-        var maintenance = await db.MaintenancePeriods
-            .AsNoTracking()
-            .Where(period =>
-                period.LiftedAt == null
-                && ((period.CourtId != null && courtIds.Contains(period.CourtId.Value))
-                    || (period.CourtId == null && venueIds.Contains(period.FacilityId)))
-                && period.StartsAt < closesOn
-                && (period.EndsAt == null || period.EndsAt > opensOn))
-            .Select(period => new Maintenance(
-                period.CourtId,
-                period.FacilityId,
-                period.StartsAt,
-                period.EndsAt))
-            .ToListAsync(ct);
-
-        // Confirmed is what was played. Waiting is counted on its own: it is
-        // neither used nor lost, and folding it into either would make a report
-        // run this afternoon disagree with the same report run tomorrow.
-        var slots = await db.BookingSlots
-            .AsNoTracking()
-            .Where(slot =>
-                courtIds.Contains(slot.CourtId)
-                && slot.Date >= query.From
-                && slot.Date <= query.To
-                && (slot.Booking.Status == BookingStatus.Confirmed
-                    || slot.Booking.Status == BookingStatus.PendingVerification))
-            .Select(slot => new Sold(
-                slot.CourtId,
-                slot.BookableCourtId,
-                slot.Date,
-                slot.StartsAt,
-                slot.EndsAt,
-                slot.RateKind,
-                slot.Amount,
-                slot.Booking.Status == BookingStatus.Confirmed))
-            .ToListAsync(ct);
-
-        var byCourt = slots.ToLookup(slot => slot.CourtId);
+        var maintenance = source.Maintenance;
+        var byCourt = source.Slots.ToLookup(slot => slot.CourtId);
         var reported = new List<CourtUtilization>(courts.Count);
 
         foreach (var court in courts)
@@ -141,7 +87,7 @@ internal static class Utilization
                     Money(owned, marked.Sold.Sum(slot => slot.Amount))))
                 .ToArray();
 
-            var calendar = Days(court, maintenance, query);
+            var calendar = Days(court, maintenance, query.From, query.To);
             var inUse = InUseMinutes(played);
 
             reported.Add(new CourtUtilization(
@@ -152,11 +98,6 @@ internal static class Utilization
                 calendar.OpenMinutes,
                 inUse,
                 Minutes(played),
-                // Never below nothing. Hours sold before a court's timetable
-                // was shortened can outlast the window that sold them, and a
-                // court reading "−2h idle" would be read as a bug rather than
-                // as the history it is.
-                Math.Max(0, calendar.OpenMinutes - inUse),
                 calendar.MaintenanceMinutes,
                 InUseMinutes(mine.Where(slot => !slot.IsConfirmed)),
                 calendar.OpenDays,
@@ -170,13 +111,203 @@ internal static class Utilization
             query.To,
             reported.Sum(court => court.OpenMinutes),
             reported.Sum(court => court.InUseMinutes),
-            reported.Sum(court => court.IdleMinutes),
             reported.Sum(court => court.MaintenanceMinutes),
             reported.Sum(court => court.AwaitingMinutes),
             reported.Sum(court => court.OpenDays),
             Money(everywhere, reported.Sum(court => court.Rental ?? 0m)),
             reported);
     }
+
+    /// <summary>
+    /// The same three reads both of these reports need: the courts in scope,
+    /// the closures touching the period, and the hours sold in it.
+    ///
+    /// Shared rather than written twice. The over-time read differs from the
+    /// totals only in how it folds what comes back, and two copies of the
+    /// query would drift on the day somebody narrowed one of them.
+    /// </summary>
+    private static async Task<Source> LoadAsync(
+        AppDbContext db,
+        IReadOnlyCollection<Guid> venueIds,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct)
+    {
+        var courts = await db.Courts
+            .AsNoTracking()
+            .Where(court => court.IsActive && venueIds.Contains(court.FacilityId))
+            .Include(court => court.OperatingHours)
+            .Include(court => court.Facility).ThenInclude(facility => facility.OperatingHours)
+            .Include(court => court.Facility).ThenInclude(facility => facility.FacilityOwner)
+                .ThenInclude(owner => owner.Contracts)
+            .Include(court => court.Sports).ThenInclude(pair => pair.BookableCourts)
+            .Include(court => court.Sports).ThenInclude(pair => pair.Sport)
+            .OrderBy(court => court.Facility.Name)
+            .ThenBy(court => court.DisplayOrder)
+            .ThenBy(court => court.Name)
+            .ToListAsync(ct);
+
+        if (courts.Count == 0)
+        {
+            return new Source(courts, [], []);
+        }
+
+        var courtIds = courts.ConvertAll(court => court.Id);
+
+        // The day the range ends, as an instant, so a maintenance period that
+        // starts at half past eleven on the last night still counts against it.
+        var opensOn = new DateTimeOffset(from.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var closesOn = new DateTimeOffset(to.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+
+        var maintenance = await db.MaintenancePeriods
+            .AsNoTracking()
+            .Where(period =>
+                period.LiftedAt == null
+                && ((period.CourtId != null && courtIds.Contains(period.CourtId.Value))
+                    || (period.CourtId == null && venueIds.Contains(period.FacilityId)))
+                && period.StartsAt < closesOn
+                && (period.EndsAt == null || period.EndsAt > opensOn))
+            .Select(period => new Maintenance(
+                period.CourtId,
+                period.FacilityId,
+                period.StartsAt,
+                period.EndsAt))
+            .ToListAsync(ct);
+
+        // Confirmed is what was played. Waiting is counted on its own: it is
+        // neither used nor lost, and folding it into either would make a report
+        // run this afternoon disagree with the same report run tomorrow.
+        var slots = await db.BookingSlots
+            .AsNoTracking()
+            .Where(slot =>
+                courtIds.Contains(slot.CourtId)
+                && slot.Date >= from
+                && slot.Date <= to
+                && (slot.Booking.Status == BookingStatus.Confirmed
+                    || slot.Booking.Status == BookingStatus.PendingVerification))
+            .Select(slot => new Sold(
+                slot.CourtId,
+                slot.BookableCourtId,
+                slot.Date,
+                slot.StartsAt,
+                slot.EndsAt,
+                slot.RateKind,
+                slot.Amount,
+                slot.Booking.Status == BookingStatus.Confirmed))
+            .ToListAsync(ct);
+
+        return new Source(courts, maintenance, slots);
+    }
+
+    /// <summary>
+    /// The utilization figures cut by date rather than totalled per court.
+    ///
+    /// The same walk of the calendar and the same slots the totals use, folded
+    /// into buckets instead of into one. That is the point: a venue reading the
+    /// line beside the total must not find them disagreeing, and the only way
+    /// to be sure of that is for there to be one sum.
+    /// </summary>
+    public static async Task<HoursOverTime> OverTimeAsync(
+        AppDbContext db,
+        IReadOnlyCollection<Guid> venueIds,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        var source = await LoadAsync(db, venueIds, query.From, query.To, ct);
+
+        var played = source.Slots
+            .Where(slot => slot.IsConfirmed)
+            .ToLookup(slot => (slot.CourtId, slot.Date));
+
+        var rows = new List<CourtPeriod>();
+
+        foreach (var court in source.Courts)
+        {
+            var buckets = new Dictionary<DateOnly, Bucket>();
+
+            foreach (var day in Walk(court, source.Maintenance, query.From, query.To))
+            {
+                var key = Starts(day.Date, query.Grain);
+                var found = buckets.GetValueOrDefault(key, new Bucket(0, 0, 0));
+
+                buckets[key] = day.UnderMaintenance
+                    ? found with { Maintenance = found.Maintenance + day.ScheduledMinutes }
+                    : found with
+                    {
+                        Open = found.Open + day.ScheduledMinutes,
+                        Sold = found.Sold + InUseMinutes(played[(court.Id, day.Date)])
+                    };
+            }
+
+            foreach (var (key, bucket) in buckets.OrderBy(bucket => bucket.Key))
+            {
+                var period = Clamp(key, query);
+
+                rows.Add(new CourtPeriod(
+                    period.Starts,
+                    period.Ends,
+                    court.Id,
+                    court.FacilityId,
+                    court.Facility.Name,
+                    court.Name,
+                    bucket.Open,
+                    bucket.Sold,
+                    bucket.Maintenance));
+            }
+        }
+
+        var periods = new List<ReportPeriod>();
+
+        for (var key = Starts(query.From, query.Grain);
+             key <= query.To;
+             key = Ends(key, query.Grain).AddDays(1))
+        {
+            periods.Add(Clamp(key, query));
+        }
+
+        return new HoursOverTime(query.From, query.To, query.Grain, periods, rows);
+    }
+
+    /// <summary>
+    /// A bucket as the range asked for it: the first and last say the days they
+    /// actually cover, not the days the week or month they fall in would have.
+    /// Rows and periods both come through here, so they cannot disagree about
+    /// where a bucket starts.
+    /// </summary>
+    private static ReportPeriod Clamp(DateOnly key, HoursQuery query)
+    {
+        var ends = Ends(key, query.Grain);
+
+        return new ReportPeriod(
+            key < query.From ? query.From : key,
+            ends > query.To ? query.To : ends);
+    }
+
+    /// <summary>
+    /// Weeks start on a Monday, because a venue's week does. A Sunday-start
+    /// week would cut most weekends in half and make every Saturday the busiest
+    /// day of one bucket and the Sunday the quietest of the next.
+    /// </summary>
+    private static DateOnly Starts(DateOnly date, string grain) => grain switch
+    {
+        HoursGrain.Week => date.AddDays(-(((int)date.DayOfWeek + 6) % 7)),
+        HoursGrain.Month => new DateOnly(date.Year, date.Month, 1),
+        _ => date
+    };
+
+    private static DateOnly Ends(DateOnly starts, string grain) => grain switch
+    {
+        HoursGrain.Week => starts.AddDays(6),
+        HoursGrain.Month => starts.AddMonths(1).AddDays(-1),
+        _ => starts
+    };
+
+    private sealed record Source(
+        List<Court> Courts,
+        List<Maintenance> Maintenance,
+        List<Sold> Slots);
+
+    private sealed record Bucket(int Open, int Sold, int Maintenance);
 
     /// <summary>
     /// Minutes the floor had somebody on it, counted once however many of its
@@ -221,11 +352,48 @@ internal static class Utilization
     private static Calendar Days(
         Court court,
         IReadOnlyCollection<Maintenance> periods,
-        UtilizationQuery query)
+        DateOnly from,
+        DateOnly to)
     {
         var calendar = new Calendar(0, 0, 0, 0);
 
-        for (var date = query.From; date <= query.To; date = date.AddDays(1))
+        foreach (var day in Walk(court, periods, from, to))
+        {
+            calendar = day.UnderMaintenance
+                ? calendar with
+                {
+                    MaintenanceMinutes = calendar.MaintenanceMinutes + day.ScheduledMinutes,
+                    MaintenanceDays = calendar.MaintenanceDays + 1
+                }
+                : calendar with
+                {
+                    OpenMinutes = calendar.OpenMinutes + day.ScheduledMinutes,
+                    OpenDays = calendar.OpenDays + 1
+                };
+        }
+
+        return calendar;
+    }
+
+    /// <summary>
+    /// Each date this court could have traded on, and which of the two it was.
+    ///
+    /// The totals above and the over-time read below both fold this, rather
+    /// than each counting the days for itself. Two walks would be two answers
+    /// to "was this court open on the 10th", and the report that showed them
+    /// side by side would be the thing that found out.
+    ///
+    /// Dates the court could not have traded at all — shut that weekday, or
+    /// outside the owner's contract — are not yielded. They are not open and
+    /// not maintenance either; there was no timetable to lose.
+    /// </summary>
+    private static IEnumerable<DayState> Walk(
+        Court court,
+        IReadOnlyCollection<Maintenance> periods,
+        DateOnly from,
+        DateOnly to)
+    {
+        for (var date = from; date <= to; date = date.AddDays(1))
         {
             var scheduled = ScheduledMinutes(court, date);
 
@@ -234,25 +402,8 @@ internal static class Utilization
                 continue;
             }
 
-            if (UnderMaintenance(court, date, periods))
-            {
-                calendar = calendar with
-                {
-                    MaintenanceMinutes = calendar.MaintenanceMinutes + scheduled,
-                    MaintenanceDays = calendar.MaintenanceDays + 1
-                };
-
-                continue;
-            }
-
-            calendar = calendar with
-            {
-                OpenMinutes = calendar.OpenMinutes + scheduled,
-                OpenDays = calendar.OpenDays + 1
-            };
+            yield return new DayState(date, scheduled, UnderMaintenance(court, date, periods));
         }
-
-        return calendar;
     }
 
     private static bool UnderMaintenance(
@@ -285,7 +436,7 @@ internal static class Utilization
     {
         // Outside a contract the court is not on sale at all, and that is not
         // maintenance either — there was no timetable to lose. Counting it
-        // would show a venue as idle for a month it was not trading in.
+        // would show a venue as unsold for a month it was not trading in.
         var trading = court.Facility.FacilityOwner.Contracts
             .Any(contract => contract.Covers(date));
 
@@ -327,6 +478,9 @@ internal static class Utilization
             ? (facilityOpens, facilityCloses)
             : null;
     }
+
+    /// <summary>One date this court could have traded on, and what it was.</summary>
+    private sealed record DayState(DateOnly Date, int ScheduledMinutes, bool UnderMaintenance);
 
     /// <summary>What the days in the range came to, once each was sorted.</summary>
     private sealed record Calendar(

@@ -178,21 +178,20 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         using var _ = new AssertionScope();
         court.OpenMinutes.Should().Be(
             MinutesOpenPerDay,
-            "a court shut for work was never on sale, and counting it would read as idle");
+            "a court shut for work was never on sale, and counting it would read as unsold");
 
         // Shown rather than swallowed: a venue looking at a bad month is owed
         // the reason, and "we were resurfacing" is the reason.
         court.MaintenanceMinutes.Should().Be(MinutesOpenPerDay);
         court.MaintenanceDays.Should().Be(1);
         court.OpenDays.Should().Be(1);
-        court.IdleMinutes.Should().Be(MinutesOpenPerDay, "nothing was booked on the day it was open");
     }
 
     [Fact]
-    public async Task ShouldCountIdleMinutesAsWhatWasOpenAndUnsold()
+    public async Task ShouldCountSoldHoursAgainstTheDaysTheCourtWasOpen()
     {
         await using var context = database.CreateContext();
-        var venue = await VenueAsync(context, "Utilization Idle");
+        var venue = await VenueAsync(context, "Utilization Sold");
 
         await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(9, 0));
         await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(10, 0));
@@ -208,7 +207,7 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
 
         using var _ = new AssertionScope();
         court.InUseMinutes.Should().Be(120);
-        court.IdleMinutes.Should().Be(MinutesOpenPerDay - 120);
+        court.OpenMinutes.Should().Be(MinutesOpenPerDay);
         court.OpenDays.Should().Be(1);
         court.MaintenanceMinutes.Should().Be(0);
     }
@@ -433,6 +432,136 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         await context.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// The line and the total have to be the same sum.
+    ///
+    /// This is the reason the over-time read folds the same walk rather than
+    /// counting the days again. A venue reading a chart beside a percentage is
+    /// exactly who would find them disagreeing.
+    /// </summary>
+    [Fact]
+    public async Task OverTimeShouldAddUpToTheUtilizationTotals()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Totals");
+
+        await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(9, 0));
+        await ConfirmAsync(context, venue, venue.Pickleball1, Tuesday, new TimeOnly(10, 0));
+        await ConfirmAsync(context, venue, venue.Pickleball2, Tuesday, new TimeOnly(10, 0));
+
+        var sut = CreateService(context);
+
+        var totals = await sut.UtilizationAsync(
+            venue.OwnerUserId,
+            new UtilizationQuery(Monday, Tuesday, venue.FacilityId),
+            CancellationToken.None);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, HoursGrain.Day, venue.FacilityId),
+            CancellationToken.None);
+
+        var court = totals.Value!.Courts.Single();
+        var rows = line.Value!.Rows;
+
+        using var _ = new AssertionScope();
+        rows.Sum(row => row.OpenMinutes).Should().Be(court.OpenMinutes);
+        rows.Sum(row => row.SoldMinutes).Should().Be(court.InUseMinutes);
+        rows.Sum(row => row.MaintenanceMinutes).Should().Be(court.MaintenanceMinutes);
+
+        // Two parts sold for the same hour is one hour of floor, on the line
+        // as well as in the total.
+        rows.Single(row => row.Starts == Tuesday).SoldMinutes.Should().Be(60);
+    }
+
+    /// <summary>
+    /// A day the venue could not have traded on is absent, not zero. A chart
+    /// draws a gap where there was no offer, rather than a floor where nobody
+    /// bought.
+    /// </summary>
+    [Fact]
+    public async Task OverTimeShouldLeaveOutADayTheCourtCouldNotHaveTraded()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Gap", shutOn: Monday.DayOfWeek);
+        var sut = CreateService(context);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, HoursGrain.Day, venue.FacilityId),
+            CancellationToken.None);
+
+        using var _ = new AssertionScope();
+        line.Value!.Rows.Should().NotContain(row => row.Starts == Monday);
+        line.Value.Rows.Should().Contain(row => row.Starts == Tuesday);
+
+        // The period is still there, or the chart could not know a gap belongs
+        // on the Monday rather than the line simply starting on the Tuesday.
+        line.Value.Periods.Select(period => period.Starts)
+            .Should().Equal(Monday, Tuesday);
+    }
+
+    [Fact]
+    public async Task OverTimeShouldClampTheFirstAndLastWeekToTheRangeAskedFor()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Periods");
+        var sut = CreateService(context);
+
+        // A Wednesday to the following Tuesday: two weeks, each partly outside.
+        var wednesday = new DateOnly(2026, 9, 16);
+        var nextTuesday = new DateOnly(2026, 9, 22);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(wednesday, nextTuesday, HoursGrain.Week, venue.FacilityId),
+            CancellationToken.None);
+
+        line.Value!.Periods.Should().Equal(
+            new ReportPeriod(wednesday, new DateOnly(2026, 9, 20)),
+            new ReportPeriod(new DateOnly(2026, 9, 21), nextTuesday));
+    }
+
+    [Fact]
+    public async Task OverTimeShouldGatherDaysIntoTheWeekTheyFallIn()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Weekly");
+
+        await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(9, 0));
+        await ConfirmAsync(context, venue, venue.Basketball, Tuesday, new TimeOnly(9, 0));
+
+        var sut = CreateService(context);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, HoursGrain.Week, venue.FacilityId),
+            CancellationToken.None);
+
+        var week = line.Value!.Rows.Single();
+
+        using var _ = new AssertionScope();
+        week.SoldMinutes.Should().Be(120, "both days fall in one week");
+        // Clamped to what was asked for, not to the Sunday the week really ends on.
+        week.Starts.Should().Be(Monday);
+        week.Ends.Should().Be(Tuesday);
+    }
+
+    [Fact]
+    public async Task OverTimeShouldRefuseAGrainNobodyCanAskFor()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Grain");
+        var sut = CreateService(context);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, "Fortnight", venue.FacilityId),
+            CancellationToken.None);
+
+        line.Failure.Should().Be(DeskFailure.UnknownGrain);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,
@@ -496,7 +625,8 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
     private static async Task<Venue> VenueAsync(
         AppDbContext context,
         string facilityName,
-        int slotLengthMinutes = 60)
+        int slotLengthMinutes = 60,
+        DayOfWeek? shutOn = null)
     {
         var courts = CreateCourtService(context);
 
@@ -530,7 +660,7 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
             new CreateCourtRequest(
                 owner.Id,
                 null,
-                NewFacility(facilityName),
+                NewFacility(facilityName, shutOn),
                 new CourtInput(
                     "Desk court 1",
                     10,
@@ -634,7 +764,7 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
 
     private static AuditActor Admin() => new(Guid.NewGuid(), UserRoleName.PlatformAdmin);
 
-    private static NewFacilityInput NewFacility(string name) => new(
+    private static NewFacilityInput NewFacility(string name, DayOfWeek? shutOn = null) => new(
         new FacilityInput(
             name,
             "Six covered courts.",
@@ -654,10 +784,14 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
             [],
             []),
         [
-            .. Enum.GetValues<DayOfWeek>().Select(day => new OperatingHourInput(
-                day,
-                new TimeOnly(6, 0),
-                new TimeOnly(22, 0)))
+            // A day with no hours is a day the venue is shut: that is how a
+            // closure is said here, and what the availability reads back.
+            .. Enum.GetValues<DayOfWeek>()
+                .Where(day => day != shutOn)
+                .Select(day => new OperatingHourInput(
+                    day,
+                    new TimeOnly(6, 0),
+                    new TimeOnly(22, 0)))
         ],
         []);
 

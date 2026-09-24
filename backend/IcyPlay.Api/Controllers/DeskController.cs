@@ -216,6 +216,36 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// The utilization figures cut by date rather than totalled per court: one
+    /// row per court per period, which a chart folds into one line or five and
+    /// a table prints as it stands.
+    ///
+    /// No money in it, so an attendant reads the same answer an owner does.
+    /// </summary>
+    [HttpGet("reports/hours-over-time")]
+    public async Task<IActionResult> HoursOverTime(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.HoursOverTimeAsync(
+            userId,
+            new HoursQuery(from, to, grain, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<HoursOverTime>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// What the venue looks like at this moment: how many courts, how many
     /// parts they are sold in, and how many of those have somebody on them.
     ///
@@ -507,6 +537,10 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "The report has to end on or after it starts."),
+            DeskFailure.UnknownGrain => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for it by day, by week or by month."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 
