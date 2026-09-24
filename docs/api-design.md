@@ -2042,6 +2042,9 @@ Role:
 
 ### Hours over time
 
+Shown on the desk as **Sold Hours** — the name a venue reads. The endpoint keeps
+the name of what it computes.
+
 ```http
 GET /api/v1/desk/reports/hours-over-time?from=&to=&grain=Day&facilityId=
 ```
@@ -2059,6 +2062,11 @@ is five lines, and printed as it stands it is the table.
 week does — a Sunday start would cut most weekends in half. `starts` and `ends`
 are **clamped to the range asked for**, so the first and last buckets say the
 days they actually cover rather than the days the week they fall in would have.
+
+Each row also carries `parts` and `partsSold`: the parts the court is sold in,
+and how many of them had a booking at some point in the period. A part booked
+twice is one part sold. `parts` counts a retired part only where it sold, so
+`partsSold` is never the larger.
 
 **A period a court could not have traded in is absent, not zero.** A chart then
 draws a gap where there was no offer instead of a floor where nobody bought,
@@ -2129,6 +2137,7 @@ Two levels, because a court is a floor and the floor is sold in parts:
 | `maintenanceMinutes` | What the timetable said, on days shut for work. Kept out of `openMinutes`: nobody could have booked those hours, so they are neither used nor wasted. |
 | `awaitingMinutes` | Paid for and waiting on the desk. Neither played nor lost. |
 | `openDays` / `maintenanceDays` | The days behind the minutes. |
+| `lastSoldOn` | On each court and each part: the last date it sold, **reaching back before the range** as far as it has to. Null when it never has. What tells a quiet month from a court nobody wants. Confirmed only — a hold that lapsed was never a sale. |
 
 **Utilization is `inUseMinutes / openMinutes`.** Adding up the units will not
 give you that, and it is not meant to: a floor marked out three ways for

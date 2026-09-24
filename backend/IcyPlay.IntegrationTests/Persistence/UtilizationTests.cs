@@ -562,6 +562,92 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         line.Failure.Should().Be(DeskFailure.UnknownGrain);
     }
 
+    /// <summary>
+    /// A court that sold nothing in the range still says when it last did, even
+    /// when that was before the range began. That is what tells a quiet month
+    /// from a court nobody wants.
+    /// </summary>
+    [Fact]
+    public async Task ShouldSayWhenACourtLastSoldEvenBeforeTheRange()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Utilization Last Sold");
+
+        // Sold on the Monday; the report is asked about the Tuesday alone.
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+
+        var sut = CreateService(context);
+
+        var result = await sut.UtilizationAsync(
+            venue.OwnerUserId,
+            new UtilizationQuery(Tuesday, Tuesday),
+            CancellationToken.None);
+
+        var court = result.Value!.Courts.Single();
+
+        using var _ = new AssertionScope();
+        court.InUseMinutes.Should().Be(0, "nothing sold on the Tuesday");
+        court.LastSoldOn.Should().Be(Monday);
+        court.Units.Single(unit => unit.BookableCourtId == venue.Pickleball1)
+            .LastSoldOn.Should().Be(Monday);
+        court.Units.Single(unit => unit.BookableCourtId == venue.Basketball)
+            .LastSoldOn.Should().BeNull("it has never been sold");
+    }
+
+    /// <summary>
+    /// A hold that was never confirmed is not a sale, so it does not move the
+    /// last-sold date either.
+    /// </summary>
+    [Fact]
+    public async Task ShouldNotCountAnUnconfirmedBookingAsTheLastSale()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Utilization Last Sold Waiting");
+
+        await WaitingAsync(context, venue, venue.Basketball, Monday, new TimeOnly(9, 0));
+
+        var sut = CreateService(context);
+
+        var result = await sut.UtilizationAsync(
+            venue.OwnerUserId,
+            new UtilizationQuery(Monday, Tuesday),
+            CancellationToken.None);
+
+        result.Value!.Courts.Single().LastSoldOn.Should().BeNull();
+    }
+
+    /// <summary>
+    /// How many parts sold in each period, for the not-sold line. A part sold
+    /// twice is one part sold, and two parts sold the same hour are two.
+    /// </summary>
+    [Fact]
+    public async Task OverTimeShouldCountThePartsThatSoldInEachPeriod()
+    {
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hours Over Time Parts");
+
+        await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(9, 0));
+        await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(11, 0));
+        await ConfirmAsync(context, venue, venue.Pickleball1, Tuesday, new TimeOnly(10, 0));
+        await ConfirmAsync(context, venue, venue.Pickleball2, Tuesday, new TimeOnly(10, 0));
+
+        var sut = CreateService(context);
+
+        var line = await sut.HoursOverTimeAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, HoursGrain.Day, venue.FacilityId),
+            CancellationToken.None);
+
+        var monday = line.Value!.Rows.Single(row => row.Starts == Monday);
+        var tuesday = line.Value.Rows.Single(row => row.Starts == Tuesday);
+
+        using var _ = new AssertionScope();
+        // Basketball whole, and pickleball three across.
+        monday.Parts.Should().Be(4);
+        monday.PartsSold.Should().Be(1, "basketball twice is still one part");
+        tuesday.PartsSold.Should().Be(2, "two pickleball parts, the same hour");
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

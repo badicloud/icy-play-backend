@@ -253,7 +253,7 @@ count what was sold on it, and on a divided floor those are different numbers,
 which the page says in as many words. Shares use the largest-remainder method so
 the column totals 100, with a total row saying what it is a share of.
 
-**Hours over time** — `/desk/reports/hours`. The same figures spread over their
+**Sold Hours** — `/desk/reports/hours`. The same figures spread over their
 days, weeks or months, as a chart or a table, for the whole venue or per court.
 The line has its own scale, because against the hours open it would lie flat on
 the floor; what each period was — open, under maintenance, closed — is a strip
@@ -261,6 +261,36 @@ underneath. The line **breaks** on a closed period rather than dropping to zero:
 nothing was on sale, which is not the same as nothing selling. Per court stops
 at eight lines and hands over to the table, which has every court and exports
 to CSV.
+
+**Sold Courts** and **Not Sold Courts** — `/desk/reports/sold` and
+`/desk/reports/unsold`. Two ends of one list, split by a filter on the
+utilisation report rather than counted twice: a court is on exactly one of them,
+and each page's footer says how many are on the other. Both show courts or
+bookable courts.
+
+**Every over-time report offers the same two views, Chart then Table**, with
+**By** day, week or month in the filter bar — Sold Hours, Sold Courts and Not
+Sold Courts alike. And every chart is a line: the first draft of these two had
+bar charts, and three reports with three kinds of chart read as three products.
+
+**The chart on both is one component, `CourtCountLine`.** How many courts — or
+parts — had a booking each period (Sold Courts, in blue) or had none (Not Sold
+Courts, in orange), beside a dashed line of how many were open. The same unit on
+one axis, so the space between the lines is the other report, and the two
+counted lines add up to the open one. A period the venue was closed is a gap in
+both, not a zero: no courts for sale is not the same as every court selling.
+
+**The table on Sold Courts** ranks busiest first. It carries a small trend line
+per court, from the hours-over-time read so it is the same line Sold Hours
+draws, and every row shares one vertical scale: scaled each to its own peak, a
+court that sold one hour would draw the same mountain as one that sold twenty.
+On bookable courts the total runs higher than on courts, because parts of one
+floor sell the same hour, and a note says so in three lines before anybody
+reports it.
+
+**The table on Not Sold Courts** ranks longest-neglected first — never sold at
+the top, then the oldest last sale. A court with a payment waiting on the desk
+says so, so it is not written off while somebody's money is sitting on it.
 
 ## The admin console
 

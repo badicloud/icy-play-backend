@@ -49,6 +49,30 @@ internal static class Utilization
         var byCourt = source.Slots.ToLookup(slot => slot.CourtId);
         var reported = new List<CourtUtilization>(courts.Count);
 
+        // The last sale on each court and each part, reaching back before the
+        // range as far as it has to. A court that sold nothing this month
+        // either had a quiet month or has sold nothing since March, and only
+        // this tells the two apart. Confirmed only, the same as everywhere
+        // else in the report: a hold that lapsed was never a sale.
+        var courtIds = courts.ConvertAll(court => court.Id);
+
+        var confirmed = db.BookingSlots
+            .AsNoTracking()
+            .Where(slot =>
+                courtIds.Contains(slot.CourtId)
+                && slot.Date <= query.To
+                && slot.Booking.Status == BookingStatus.Confirmed);
+
+        var lastOnCourt = await confirmed
+            .GroupBy(slot => slot.CourtId)
+            .Select(group => new { group.Key, Last = group.Max(slot => slot.Date) })
+            .ToDictionaryAsync(row => row.Key, row => row.Last, ct);
+
+        var lastOnPart = await confirmed
+            .GroupBy(slot => slot.BookableCourtId)
+            .Select(group => new { group.Key, Last = group.Max(slot => slot.Date) })
+            .ToDictionaryAsync(row => row.Key, row => row.Last, ct);
+
         foreach (var court in courts)
         {
             var owned = ownedVenueIds.Contains(court.FacilityId);
@@ -84,6 +108,7 @@ internal static class Utilization
                     Minutes(marked.Sold),
                     Minutes(marked.Sold.Where(slot => slot.RateKind == CourtRateKind.Peak)),
                     !marked.Unit.IsActive,
+                    lastOnPart.TryGetValue(marked.Unit.Id, out var partLast) ? partLast : null,
                     Money(owned, marked.Sold.Sum(slot => slot.Amount))))
                 .ToArray();
 
@@ -102,6 +127,7 @@ internal static class Utilization
                 InUseMinutes(mine.Where(slot => !slot.IsConfirmed)),
                 calendar.OpenDays,
                 calendar.MaintenanceDays,
+                lastOnCourt.TryGetValue(court.Id, out var courtLast) ? courtLast : null,
                 Money(owned, played.Sum(slot => slot.Amount)),
                 units));
         }
@@ -225,23 +251,48 @@ internal static class Utilization
         {
             var buckets = new Dictionary<DateOnly, Bucket>();
 
+            // Which parts sold in each bucket. A set rather than a count: two
+            // bookings on Pickleball 1 in one week are still one part sold.
+            var partsSold = new Dictionary<DateOnly, HashSet<Guid>>();
+
             foreach (var day in Walk(court, source.Maintenance, query.From, query.To))
             {
                 var key = Starts(day.Date, query.Grain);
                 var found = buckets.GetValueOrDefault(key, new Bucket(0, 0, 0));
+                var today = played[(court.Id, day.Date)];
 
                 buckets[key] = day.UnderMaintenance
                     ? found with { Maintenance = found.Maintenance + day.ScheduledMinutes }
                     : found with
                     {
                         Open = found.Open + day.ScheduledMinutes,
-                        Sold = found.Sold + InUseMinutes(played[(court.Id, day.Date)])
+                        Sold = found.Sold + InUseMinutes(today)
                     };
+
+                if (!partsSold.TryGetValue(key, out var sold))
+                {
+                    partsSold[key] = sold = [];
+                }
+
+                if (!day.UnderMaintenance)
+                {
+                    sold.UnionWith(today.Select(slot => slot.BookableCourtId));
+                }
             }
+
+            // The same parts the utilization report lists: the ones still
+            // marked out, and a retired one only where it sold. Counted this
+            // way the sold parts are always among the counted ones.
+            var active = court.Sports
+                .SelectMany(pair => pair.BookableCourts)
+                .Where(unit => unit.IsActive)
+                .Select(unit => unit.Id)
+                .ToHashSet();
 
             foreach (var (key, bucket) in buckets.OrderBy(bucket => bucket.Key))
             {
                 var period = Clamp(key, query);
+                var sold = partsSold[key];
 
                 rows.Add(new CourtPeriod(
                     period.Starts,
@@ -252,7 +303,9 @@ internal static class Utilization
                     court.Name,
                     bucket.Open,
                     bucket.Sold,
-                    bucket.Maintenance));
+                    bucket.Maintenance,
+                    active.Count + sold.Count(id => !active.Contains(id)),
+                    sold.Count));
             }
         }
 

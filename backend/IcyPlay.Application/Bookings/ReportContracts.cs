@@ -86,6 +86,15 @@ public sealed record CourtUtilization(
     int OpenDays,
     /// <summary>Dates it was under maintenance. The days behind the minutes above.</summary>
     int MaintenanceDays,
+    /// <summary>
+    /// The last date anything on this court was sold, up to the end of the
+    /// range — which can be long before it starts. Null when nothing ever has.
+    ///
+    /// What turns "sold nothing this month" into "has sold nothing since
+    /// March", which is the difference between a quiet month and a court
+    /// nobody wants.
+    /// </summary>
+    DateOnly? LastSoldOn,
     decimal? Rental,
     IReadOnlyCollection<UnitUtilization> Units);
 
@@ -111,6 +120,8 @@ public sealed record UnitUtilization(
     /// that total, and nothing on the page said what was missing.
     /// </summary>
     bool IsRetired,
+    /// <summary>The last date this part was sold, up to the end of the range. Null when never.</summary>
+    DateOnly? LastSoldOn,
     decimal? Rental);
 
 public sealed class UtilizationQueryValidator : AbstractValidator<UtilizationQuery>
@@ -215,7 +226,18 @@ public sealed record CourtPeriod(
     string CourtName,
     int OpenMinutes,
     int SoldMinutes,
-    int MaintenanceMinutes);
+    int MaintenanceMinutes,
+    /// <summary>
+    /// The parts this court is sold in — plus any retired part that still sold
+    /// in the period, so <see cref="PartsSold"/> can never be the larger.
+    /// </summary>
+    int Parts,
+    /// <summary>
+    /// Of those, how many had a confirmed booking at some point in the period.
+    /// <see cref="Parts"/> less this is how many sat with no booking at all,
+    /// which is what the not-sold line counts.
+    /// </summary>
+    int PartsSold);
 
 /// <summary>One bucket of an over-time read, clamped to the range asked for.</summary>
 public sealed record ReportPeriod(DateOnly Starts, DateOnly Ends);
