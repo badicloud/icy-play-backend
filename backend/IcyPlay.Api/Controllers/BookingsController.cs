@@ -430,6 +430,18 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This booking has been moved as many times as this venue allows."),
+            BookingFailure.MoveReasonRequired => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Tell us why you are moving this booking."),
+            BookingFailure.MoveReasonNoteRequired => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Say a few words about why you are moving it."),
+            BookingFailure.MoveReasonNoteTooLong => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Keep the reason to 200 characters or fewer."),
             BookingFailure.BookingFinished => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,

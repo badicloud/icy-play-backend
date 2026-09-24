@@ -184,13 +184,6 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
-    /// What the venue looks like at this moment: how many courts there are, and
-    /// how many of them have somebody on them.
-    ///
-    /// No money in it at all, so an attendant sees the same answer an owner
-    /// does. Counting courts is the desk's own job.
-    /// </summary>
-    /// <summary>
     /// The utilization figures cut by date rather than totalled per court:
     /// the line beside the total.
     ///
@@ -202,6 +195,25 @@ public interface IDeskService
         HoursQuery query,
         CancellationToken ct);
 
+    /// <summary>
+    /// How many bookings customers moved in a range, period by period, and the
+    /// reasons they gave.
+    ///
+    /// No money in it, so an attendant sees what an owner sees: a customer's
+    /// reason is already in the booking history the desk reads.
+    /// </summary>
+    Task<DeskResult<MovesReport>> MovesAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>
+    /// What the venue looks like at this moment: how many courts there are, and
+    /// how many of them have somebody on them.
+    ///
+    /// No money in it at all, so an attendant sees the same answer an owner
+    /// does. Counting courts is the desk's own job.
+    /// </summary>
     Task<DeskResult<VenueSnapshot>> SnapshotAsync(
         Guid userId,
         Guid? facilityId,

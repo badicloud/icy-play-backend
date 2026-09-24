@@ -874,7 +874,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Basketball),
+            new MoveBookingRequest(floor.Basketball, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: a booking records the sport as it was named and priced when
@@ -902,7 +902,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking,
             here.Customer,
-            new MoveBookingRequest(elsewhere.Pickleball1),
+            new MoveBookingRequest(elsewhere.Pickleball1, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: the booking carries the venue's name as it was sold, and the
@@ -928,7 +928,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: it has moved, and the move is counted. Nobody is asked to
@@ -954,6 +954,272 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         }
     }
 
+    /// <summary>
+    /// A move is not made without a reason from the list, and Other is not a
+    /// way of saying nothing. Asked of the customer because the venue's report
+    /// counts the answers — a move with no answer is one it cannot count.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 0, BookingFailure.MoveReasonRequired)]
+    [InlineData("Bored", 0, BookingFailure.MoveReasonRequired)]
+    [InlineData(MoveReason.Other, 0, BookingFailure.MoveReasonNoteRequired)]
+    [InlineData(MoveReason.Weather, MoveReason.NoteLimit + 1, BookingFailure.MoveReasonNoteTooLong)]
+    public async Task MoveAsync_ShouldAskWhyBeforeMoving(
+        string? reason,
+        int noteLength,
+        BookingFailure expected)
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, $"Reason Asked Courts {(int)expected}");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var asked = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(
+                floor.Pickleball2,
+                Reason: reason,
+                ReasonNote: noteLength == 0 ? "   " : new string('x', noteLength)),
+            CancellationToken.None);
+
+        // Assert: refused, and nothing moved or was counted.
+        context.ChangeTracker.Clear();
+
+        var stored = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            asked.Failure.Should().Be(expected);
+            stored.BookableCourtId.Should().Be(floor.Pickleball1);
+            stored.MoveCount.Should().Be(0);
+            (await context.BookingMoves.AnyAsync(row => row.BookingId == booking)).Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task MoveAsync_ShouldCountTheMoveWithItsReason()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Reason Counted Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act: Other, with the few words it asks for.
+        var asked = await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.Other, ReasonNote: "  Friend is late  "),
+            CancellationToken.None);
+
+        // Assert: one row for the report, carrying where it went and why, and
+        // the history the desk reads says why too.
+        context.ChangeTracker.Clear();
+
+        var moved = await context.BookingMoves.AsNoTracking().SingleAsync(row => row.BookingId == booking);
+        var history = await context.AuditLogs
+            .AsNoTracking()
+            .SingleAsync(row => row.EntityId == booking && row.Action == AuditAction.BookingMoved);
+
+        using (new AssertionScope())
+        {
+            asked.Succeeded.Should().BeTrue();
+            moved.Kind.Should().Be(MoveKind.Free);
+            moved.Reason.Should().Be(MoveReason.Other);
+            moved.ReasonNote.Should().Be("Friend is late");
+            moved.MovedAt.Should().Be(Now);
+            moved.MovedByUserId.Should().Be(floor.Customer);
+            moved.ToCourtName.Should().NotBeNullOrEmpty();
+            history.NewValuesJson.Should().Contain("Reason: Other").And.Contain("Friend is late");
+        }
+    }
+
+    [Fact]
+    public async Task RequestUpgradeAsync_ShouldAskWhyBeforeWritingItDown()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Reason Asked Courts");
+        var sut = CreateService(context);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        // Act
+        var asked = await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            asked.Failure.Should().Be(BookingFailure.MoveReasonRequired);
+            (await context.BookingUpgradeRequests.AnyAsync(row => row.BookingId == booking)).Should().BeFalse();
+        }
+    }
+
+    /// <summary>
+    /// The reason is asked when the upgrade is, and counted when it goes
+    /// through. The desk approving it is not who knows why, so it is carried.
+    /// </summary>
+    [Fact]
+    public async Task ApproveUpgradeAsync_ShouldCountTheMoveWithTheReasonTheCustomerGave()
+    {
+        // Arrange: an upgrade asked for in the rain and paid for.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Reason Counted Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer, Reason: MoveReason.Weather),
+            CancellationToken.None);
+        await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        var upgradeId = await context.BookingUpgradeRequests
+            .Where(row => row.BookingId == booking)
+            .Select(row => row.Id)
+            .SingleAsync();
+        var ownerUserId = await OwnerUserIdAsync(context, floor);
+        context.ChangeTracker.Clear();
+
+        // Act
+        var approved = await CreateDeskService(context).ApproveUpgradeAsync(
+            ownerUserId,
+            upgradeId,
+            new AuditActor(ownerUserId, UserRoleName.FacilityOwner),
+            CancellationToken.None);
+
+        // Assert: counted as an upgrade, with the customer's reason and the
+        // customer as the one who moved it.
+        context.ChangeTracker.Clear();
+
+        var moved = await context.BookingMoves.AsNoTracking().SingleAsync(row => row.BookingId == booking);
+        var stored = await context.BookingUpgradeRequests.AsNoTracking().SingleAsync(row => row.Id == upgradeId);
+
+        using (new AssertionScope())
+        {
+            approved.Succeeded.Should().BeTrue();
+            stored.MoveReason.Should().Be(MoveReason.Weather);
+            moved.Kind.Should().Be(MoveKind.Upgrade);
+            moved.Reason.Should().Be(MoveReason.Weather);
+            moved.ReasonNote.Should().BeNull();
+            moved.MovedByUserId.Should().Be(floor.Customer);
+        }
+    }
+
+    /// <summary>
+    /// The moves report counts on the venue's clock, only the venue's own
+    /// moves, and shows a move nobody was asked about as not asked.
+    /// </summary>
+    [Fact]
+    public async Task MovesAsync_ShouldCountEachMoveOnTheVenuesDayWithItsReason()
+    {
+        // Arrange: a move today for the weather, and an old one from before
+        // customers were asked, made at half past midnight on Tuesday in
+        // Manila — which is still Monday in UTC.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Moves Report Courts");
+        var sut = CreateService(context);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.MoveAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.Weather),
+            CancellationToken.None);
+
+        context.BookingMoves.Add(new BookingMoveRecord(
+            booking,
+            new DateTimeOffset(2026, 9, 14, 16, 30, 0, TimeSpan.Zero),
+            MoveKind.Free,
+            null,
+            null,
+            null,
+            null,
+            null));
+        await context.SaveChangesAsync();
+
+        // Somebody else's venue, moved the same day. Not this desk's business.
+        var elsewhere = await FloorAsync(context, "Moves Report Elsewhere");
+        var theirs = await ConfirmedAsync(context, CreateService(context), elsewhere, Wednesday, SevenAm);
+        await CreateService(context).MoveAsync(
+            theirs,
+            elsewhere.Customer,
+            new MoveBookingRequest(elsewhere.Pickleball2, Reason: MoveReason.ScheduleChanged),
+            CancellationToken.None);
+
+        var ownerUserId = await OwnerUserIdAsync(context, floor);
+        context.ChangeTracker.Clear();
+
+        // Act
+        var report = await CreateDeskService(context).MovesAsync(
+            ownerUserId,
+            new HoursQuery(Today, Today.AddDays(1), HoursGrain.Day),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            report.Succeeded.Should().BeTrue();
+            var moves = report.Value!;
+
+            moves.Total.Should().Be(2);
+            moves.Periods.Select(period => (period.Starts, period.Free, period.Upgrade)).Should().Equal(
+                (Today, 1, 0),
+                (Today.AddDays(1), 1, 0));
+
+            // Every reason in each period, zero included, so a chart's lines
+            // hold still; the unasked last.
+            moves.Periods.First().Reasons.Select(count => count.Reason).Should().Equal(
+                [.. MoveReason.All, null]);
+            moves.Periods.First().Reasons.Single(count => count.Reason == MoveReason.Weather).Count.Should().Be(1);
+            moves.Periods.Last().Reasons.Single(count => count.Reason is null).Count.Should().Be(1);
+
+            // The range's summary leaves out what nobody gave.
+            moves.Reasons.Should().BeEquivalentTo(
+                [new ReasonCount(MoveReason.Weather, 1), new ReasonCount(null, 1)]);
+
+            // Newest first, on the day the desk would say.
+            moves.Moves.Select(move => move.MovedOn).Should().Equal(Today.AddDays(1), Today);
+            moves.Moves.Last().Reason.Should().Be(MoveReason.Weather);
+            moves.Moves.Last().ToCourtName.Should().NotBeNullOrEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task MovesAsync_ShouldRefuseSomebodyWhoDoesNotWorkTheVenue()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Moves Report Refused Courts");
+        var venueId = await context.Courts
+            .Where(court => court.Id == floor.CourtId)
+            .Select(court => court.FacilityId)
+            .SingleAsync();
+
+        // Act: the customer, asking about the venue.
+        var report = await CreateDeskService(context).MovesAsync(
+            floor.Customer,
+            new HoursQuery(Today, Today, HoursGrain.Day, venueId),
+            CancellationToken.None);
+
+        // Assert
+        report.Failure.Should().Be(DeskFailure.NotAttended);
+    }
+
     [Fact]
     public async Task MoveAsync_ShouldMoveOntoTheHoursItIsGiven()
     {
@@ -969,7 +1235,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             floor.Customer,
             new MoveBookingRequest(
                 floor.Pickleball2,
-                [new BookingSlotInput(Wednesday, new TimeOnly(11, 0))]),
+                [new BookingSlotInput(Wednesday, new TimeOnly(11, 0))], Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: a move changes when a booking is as well as where, so the
@@ -1006,7 +1272,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var moved = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball1, [new BookingSlotInput(thursday, SevenAm)]),
+            new MoveBookingRequest(floor.Pickleball1, [new BookingSlotInput(thursday, SevenAm)], Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: the dates the booking spans follow the hours it now holds,
@@ -1045,7 +1311,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
                 [
                     new BookingSlotInput(Wednesday, new TimeOnly(11, 0)),
                     new BookingSlotInput(Wednesday, new TimeOnly(12, 0))
-                ]),
+                ], Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: a move changes when and where a booking is, never how much of
@@ -1237,7 +1503,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await later.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
@@ -1374,7 +1640,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             waiting.Id,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: this one might still be turned down. Moving it takes hours
@@ -1405,7 +1671,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var moved = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball1),
+            new MoveBookingRequest(floor.Pickleball1, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: refused, and crucially the venue's limit is untouched. This
@@ -1441,7 +1707,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             floor.Customer,
             new MoveBookingRequest(
                 floor.Pickleball1,
-                [new BookingSlotInput(Wednesday, new TimeOnly(14, 0))]),
+                [new BookingSlotInput(Wednesday, new TimeOnly(14, 0))], Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert
@@ -1474,7 +1740,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         foreach (var court in courts)
         {
-            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court), CancellationToken.None))
+            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court, Reason: MoveReason.ScheduleChanged), CancellationToken.None))
                 .Succeeded.Should().BeTrue();
         }
 
@@ -1482,7 +1748,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var again = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: the limit is the venue's own dial, and it is the only thing
@@ -1509,7 +1775,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: the move lands the moment it is asked for, and nothing on
@@ -1551,7 +1817,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(cheaper),
+            new MoveBookingRequest(cheaper, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: it moves, and nothing is given back. There are no refunds —
@@ -1591,7 +1857,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert
@@ -1618,7 +1884,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.MoveAsync(
             booking.Value!.Id,
             floor.Customer,
-            new MoveBookingRequest(floor.Pickleball2),
+            new MoveBookingRequest(floor.Pickleball2, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: a hold that has not been paid for needs no moving. Let it
@@ -1655,7 +1921,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: the request stands on its own and the booking has not budged.
@@ -1706,7 +1972,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: hours nobody has paid for cannot be held for ever, so the
@@ -1733,7 +1999,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(cheaper),
+            new MoveBookingRequest(cheaper, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: refused, and nothing written down. Sending somebody to pay
@@ -1763,14 +2029,14 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
         var again = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: one at a time. Two open requests and the customer can be
@@ -1806,7 +2072,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             created.Value!.Id,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert
@@ -1830,7 +2096,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         // Three free moves, which is what this venue allows.
         foreach (var court in new[] { floor.Pickleball2, floor.Pickleball3, floor.Pickleball1 })
         {
-            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court), CancellationToken.None))
+            (await sut.MoveAsync(booking, floor.Customer, new MoveBookingRequest(court, Reason: MoveReason.ScheduleChanged), CancellationToken.None))
                 .Succeeded.Should().BeTrue();
         }
 
@@ -1838,7 +2104,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Assert: an upgrade is still a move. Paying for one must not be a way
@@ -1885,7 +2151,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
@@ -1938,7 +2204,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var asked = await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
@@ -1989,7 +2255,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
@@ -2023,7 +2289,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         // Act
@@ -2090,7 +2356,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         await sut.RequestUpgradeAsync(
             booking,
             floor.Customer,
-            new MoveBookingRequest(dearer),
+            new MoveBookingRequest(dearer, Reason: MoveReason.ScheduleChanged),
             CancellationToken.None);
 
         await sut.AttachUpgradeReceiptAsync(
@@ -2807,6 +3073,20 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         new AuditLogger(context, new FixedTimeProvider(now ?? Now)),
         new FixedTimeProvider(now ?? Now),
         NullLogger<BookingService>.Instance);
+
+    /// <summary>The account that owns the floor's venue, which is who reads its desk.</summary>
+    private static async Task<Guid> OwnerUserIdAsync(AppDbContext context, Floor floor) =>
+        await context.BookableCourts
+            .Where(unit => unit.Id == floor.Pickleball1)
+            .Select(unit => unit.Court.Facility.FacilityOwner.UserId)
+            .SingleAsync();
+
+    private static DeskService CreateDeskService(AppDbContext context) => new(
+        context,
+        new SilentNotifier(),
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        new FixedTimeProvider(Now),
+        NullLogger<DeskService>.Instance);
 
     private static CloudinaryAssetService Assets() => new(
         Options.Create(new CloudinaryOptions

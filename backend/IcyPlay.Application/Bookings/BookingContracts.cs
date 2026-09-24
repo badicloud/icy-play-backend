@@ -322,6 +322,12 @@ public enum BookingFailure
     NotMovable,
     /// <summary>The venue's limit on moves for one booking has been reached.</summary>
     MoveLimitReached,
+    /// <summary>No reason given, or not one from the list.</summary>
+    MoveReasonRequired,
+    /// <summary>"Other", with nothing said about what the other was.</summary>
+    MoveReasonNoteRequired,
+    /// <summary>A note longer than a reason needs to be.</summary>
+    MoveReasonNoteTooLong,
     /// <summary>
     /// Every hour of it has been played. There is nothing left to move, and a
     /// booking that is over is a refund rather than a move.
@@ -446,7 +452,14 @@ public sealed record AttachReceiptRequest(string ReceiptUrl);
 /// </param>
 public sealed record MoveBookingRequest(
     Guid ToBookableCourtId,
-    IReadOnlyCollection<BookingSlotInput>? Slots = null);
+    IReadOnlyCollection<BookingSlotInput>? Slots = null,
+    /// <summary>
+    /// Why, from <c>MoveReason</c>. Required: asked so the venue can count the
+    /// answers, and a question that may be skipped is one most people skip.
+    /// </summary>
+    string? Reason = null,
+    /// <summary>A few words. Required when the reason is Other, optional otherwise.</summary>
+    string? ReasonNote = null);
 
 /// <summary>
 /// The hours a move may be placed on, on one date, before any court is chosen.

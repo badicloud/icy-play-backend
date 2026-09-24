@@ -42,6 +42,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<Booking> Bookings => Set<Booking>();
     public DbSet<BookingSlot> BookingSlots => Set<BookingSlot>();
     public DbSet<BookingUpgradeRequest> BookingUpgradeRequests => Set<BookingUpgradeRequest>();
+    public DbSet<BookingMoveRecord> BookingMoves => Set<BookingMoveRecord>();
     public DbSet<BookingUpgradeSlot> BookingUpgradeSlots => Set<BookingUpgradeSlot>();
     public DbSet<CourtOperatingHour> CourtOperatingHours => Set<CourtOperatingHour>();
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
@@ -751,6 +752,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.Status).HasMaxLength(30).IsRequired();
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
             entity.Property(x => x.DeclineReason).HasMaxLength(500);
+            entity.Property(x => x.MoveReason).HasMaxLength(30);
+            entity.Property(x => x.MoveReasonNote).HasMaxLength(MoveReason.NoteLimit);
             // Money, so a fixed scale rather than a float: two decimal places
             // is what a peso amount is.
             entity.Property(x => x.RentalNow).HasColumnType("decimal(10,2)");
@@ -773,6 +776,24 @@ public sealed class AppDbContext : DbContext
                 // reaches these rows, and a second path is one more than SQL
                 // Server allows.
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<BookingMoveRecord>(entity =>
+        {
+            entity.ToTable("BookingMoves");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Kind).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Reason).HasMaxLength(30);
+            entity.Property(x => x.ReasonNote).HasMaxLength(MoveReason.NoteLimit);
+            entity.Property(x => x.FromCourtName).HasMaxLength(200);
+            entity.Property(x => x.ToCourtName).HasMaxLength(200);
+            // The one question asked of it: what moved in this stretch of days.
+            entity.HasIndex(x => x.MovedAt);
+            entity.HasIndex(x => x.BookingId);
+            entity.HasOne(x => x.Booking)
+                .WithMany()
+                .HasForeignKey(x => x.BookingId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<BookingUpgradeSlot>(entity =>

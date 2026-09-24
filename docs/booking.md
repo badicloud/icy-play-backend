@@ -264,6 +264,32 @@ those are recorded on it as they were sold. The refusal is `NotTheSameOffering`.
 | **The hours are open on the target court.** | `SlotTaken`, `OutsideOpeningHours`, `NotPriced` |
 | **It must not cost more.** | `MoveCostsMore` → offer an upgrade |
 | **It must actually change something.** | `NothingWouldChange` |
+| **The customer says why** — see below. | `MoveReasonRequired`, `MoveReasonNoteRequired`, `MoveReasonNoteTooLong` |
+
+### Why it moved
+
+Every move asks the customer for a reason, picked from a short list:
+`ScheduleChanged`, `Weather`, `CourtProblem`, `DifferentCourt`, `Other`
+(`MoveReason` in the domain). **Picking one is required.** A note is optional,
+up to 200 characters — **except on `Other`, which needs a few words**, so it is
+not a way of saying nothing.
+
+A list rather than a free box because the point of asking is to count the
+answers: "rain", "raining" and "ulan" typed into a box are three answers to a
+report and one answer to a person.
+
+The reason goes to three places:
+
+* **The booking's history**, at the end of the move's line ("Reason: Weather."),
+  which the customer and the desk both read.
+* **`BookingMoves`**, one row per move that went through, which the desk's
+  *Bookings moved* report counts.
+* On an upgrade, **the request itself**, because it is asked when the upgrade is
+  and only counted when the desk approves it — and the desk approving it is not
+  who knows why.
+
+Moves made before customers were asked have no reason, and the report says
+**Not asked** rather than guessing.
 
 **Why a limit at all.** A booking that can be carried forward for ever is an
 option on a venue's calendar rather than a booking, and the venue is the one
@@ -419,6 +445,9 @@ booking does. Once the receipt is in, it holds the hours until the venue answers
   can be paying for hours while the venue is approving different ones.
 * **Everything a move must satisfy**, because the quote is the same one: same
   sport, same venue, confirmed, shape kept, hours open, day not begun.
+* **A reason**, the same as a free move's (see [why it moved](#why-it-moved)).
+  Asked on the checkout before the request is sent, kept on the request, and
+  counted as a move on the day the desk approves it.
 * **There must be something to pay** (`NothingToUpgrade`). A free move is
   immediate, and sending somebody to a checkout for nought pesos is a step whose
   only effect is to make them wonder what they are being charged for.

@@ -45,6 +45,7 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "BookingSlots",
             "BookingUpgradeRequests",
             "BookingUpgradeSlots",
+            "BookingMoves",
             "CourtOperatingHours",
             "MaintenancePeriods",
             "Photos",

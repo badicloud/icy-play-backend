@@ -738,6 +738,8 @@ difference. See [booking.md](booking.md#upgrading-a-booking).
 | ReceiptUrl / ReceiptUploadedAt | | The customer's GCash receipt for the balance. |
 | SettledByUserId / SettledAt | | Who at the venue answered, and when. |
 | DeclineReason | nvarchar(500) | Why the venue said no. The customer is told. |
+| MoveReason | nvarchar(30) | Why the customer wants to move — see [booking.md](booking.md#why-it-moved). Null only on requests from before customers were asked. |
+| MoveReasonNote | nvarchar(200) | The customer's few words, if any. Required when the reason is `Other`. |
 
 **Only upgrades exist here.** A move to the same price or cheaper does not
 create a row at all: it is immediate and free, and the request table is for the
@@ -756,6 +758,30 @@ The figures are those of the **hours that are moving**, not of the whole
 booking. The hours already played sit on both sides and cancel, so the balance
 is the same either way — but a customer moving the last hour of a long session
 must not be shown the total of a session mostly behind them.
+
+### BookingMoves
+
+One move that went through: a free one the moment it was asked for, an upgrade
+the moment the desk approved it. What the *Bookings moved* report counts.
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| BookingId | uniqueidentifier | Cascades with the booking. Indexed. |
+| MovedAt | datetimeoffset | Indexed. The report turns it into the venue's day. |
+| Kind | nvarchar(20) | `Free` or `Upgrade`. |
+| Reason | nvarchar(30) | A `MoveReason`, or null on a move from before customers were asked. |
+| ReasonNote | nvarchar(200) | |
+| FromCourtName / ToCourtName | nvarchar(200) | As they were named at the time. Null on the backfilled rows. |
+| MovedByUserId | uniqueidentifier | The customer. Null on backfilled upgrades. |
+
+**Its own table rather than read out of `AuditLogs`**: the trail is a record of
+what happened, written as sentences, and this is a count by week and by reason.
+The trail still gets its entry.
+
+The migration that made it (`RecordBookingMovesWithReasons`) **backfilled one
+row per `BookingMoved` and `BookingUpgradeApproved` entry already in the audit
+trail**, so the report does not start at zero. Those rows have no reason and no
+court names.
 
 ### BookingUpgradeSlots
 

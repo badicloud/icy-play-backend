@@ -291,6 +291,15 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.NothingWouldChange);
         }
 
+        // Asked last, after every rule about the move itself: somebody whose
+        // booking cannot move should be told that, not asked why they want to.
+        var why = CheckReason(request);
+
+        if (why != BookingFailure.None)
+        {
+            return BookingResult<BookingDetail>.Fail(why);
+        }
+
         var utcNow = timeProvider.GetUtcNow();
         var wasOn = booking.CourtName;
         var wasFor = Hours(booking);
@@ -306,9 +315,20 @@ public sealed class BookingService(
             customerUserId,
             AuditAction.BookingMoved,
             booking,
-            wasOn == booking.CourtName
+            (wasOn == booking.CourtName
                 ? $"Moved from {wasFor} to {Hours(booking)}."
-                : $"Moved from {wasOn} ({wasFor}) to {booking.CourtName} ({Hours(booking)}).");
+                : $"Moved from {wasOn} ({wasFor}) to {booking.CourtName} ({Hours(booking)}).")
+            + Because(request.Reason!, request.ReasonNote));
+
+        db.BookingMoves.Add(new BookingMoveRecord(
+            booking.Id,
+            utcNow,
+            MoveKind.Free,
+            request.Reason,
+            request.ReasonNote,
+            wasOn,
+            booking.CourtName,
+            customerUserId));
 
         await db.SaveChangesAsync(ct);
 
@@ -698,6 +718,13 @@ public sealed class BookingService(
             return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NothingToUpgrade);
         }
 
+        var why = CheckReason(request);
+
+        if (why != BookingFailure.None)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(why);
+        }
+
         // The hours that are moving, not the whole booking.
         //
         // The difference between the two pairs is the hours already played,
@@ -716,6 +743,8 @@ public sealed class BookingService(
             quote.MovingRentalNow,
             quote.MovingRentalNew,
             quote.HoldMinutes,
+            request.Reason!,
+            request.ReasonNote,
             utcNow);
 
         // Copied off the quote rather than pointing at it: these are hours the
@@ -740,7 +769,8 @@ public sealed class BookingService(
             customerUserId,
             AuditAction.BookingUpgradeRequested,
             booking,
-            $"Asked to upgrade to {upgrade.ToCourtName} ({Hours(upgrade)}) for {upgrade.BalanceDue:N2}, waiting to be paid.");
+            $"Asked to upgrade to {upgrade.ToCourtName} ({Hours(upgrade)}) for {upgrade.BalanceDue:N2}, waiting to be paid."
+            + Because(request.Reason!, request.ReasonNote));
 
         await db.SaveChangesAsync(ct);
 
@@ -1287,6 +1317,39 @@ public sealed class BookingService(
             // happily have moved it to tomorrow.
             ordered[0].Date.ToDateTime(ordered[0].StartsAt) <= venueNow.DateTime));
     }
+
+    /// <summary>
+    /// Whether the customer said why they are moving, in a way that can be
+    /// counted: a reason from the list, a few words when it is Other, and not a
+    /// letter.
+    /// </summary>
+    private static BookingFailure CheckReason(MoveBookingRequest request)
+    {
+        if (!MoveReason.IsSupported(request.Reason))
+        {
+            return BookingFailure.MoveReasonRequired;
+        }
+
+        var note = request.ReasonNote?.Trim();
+
+        if (request.Reason == MoveReason.Other && string.IsNullOrEmpty(note))
+        {
+            return BookingFailure.MoveReasonNoteRequired;
+        }
+
+        return note is { Length: > MoveReason.NoteLimit }
+            ? BookingFailure.MoveReasonNoteTooLong
+            : BookingFailure.None;
+    }
+
+    /// <summary>
+    /// The reason, as the history reads it — which the desk reads too, so a
+    /// diary that changed without anybody at the venue touching it says why.
+    /// </summary>
+    internal static string Because(string reason, string? note) =>
+        string.IsNullOrWhiteSpace(note)
+            ? $" Reason: {MoveReason.Label(reason)}."
+            : $" Reason: {MoveReason.Label(reason)} — {note.Trim()}";
 
     /// <summary>
     /// Writes what just happened into the platform's trail.

@@ -309,6 +309,15 @@ internal static class Utilization
             }
         }
 
+        return new HoursOverTime(query.From, query.To, query.Grain, PeriodsOf(query), rows);
+    }
+
+    /// <summary>
+    /// Every bucket in the range, in order. The moves report cuts its range
+    /// here too, so a week means the same Monday-to-Sunday on every report.
+    /// </summary>
+    internal static List<ReportPeriod> PeriodsOf(HoursQuery query)
+    {
         var periods = new List<ReportPeriod>();
 
         for (var key = Starts(query.From, query.Grain);
@@ -318,7 +327,7 @@ internal static class Utilization
             periods.Add(Clamp(key, query));
         }
 
-        return new HoursOverTime(query.From, query.To, query.Grain, periods, rows);
+        return periods;
     }
 
     /// <summary>
@@ -341,7 +350,7 @@ internal static class Utilization
     /// week would cut most weekends in half and make every Saturday the busiest
     /// day of one bucket and the Sunday the quietest of the next.
     /// </summary>
-    private static DateOnly Starts(DateOnly date, string grain) => grain switch
+    internal static DateOnly Starts(DateOnly date, string grain) => grain switch
     {
         HoursGrain.Week => date.AddDays(-(((int)date.DayOfWeek + 6) % 7)),
         HoursGrain.Month => new DateOnly(date.Year, date.Month, 1),

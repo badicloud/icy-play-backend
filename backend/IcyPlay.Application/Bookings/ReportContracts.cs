@@ -241,3 +241,63 @@ public sealed record CourtPeriod(
 
 /// <summary>One bucket of an over-time read, clamped to the range asked for.</summary>
 public sealed record ReportPeriod(DateOnly Starts, DateOnly Ends);
+
+/// <summary>
+/// How many bookings customers moved, and why.
+///
+/// A move counts on the day it went through, on the venue's clock: a free move
+/// the moment it was asked for, an upgrade the moment the desk approved it.
+/// The day the booking is for is a different question and not this one.
+/// </summary>
+public sealed record MovesReport(
+    DateOnly From,
+    DateOnly To,
+    string Grain,
+    /// <summary>
+    /// Every period in the range, each with its counts — zero where nothing
+    /// moved. Unlike hours there is no "closed" here: a customer can move a
+    /// booking on a day the venue is shut.
+    /// </summary>
+    IReadOnlyCollection<MovesPeriod> Periods,
+    /// <summary>Every reason on the list, most given first, then the moves nobody was asked about.</summary>
+    IReadOnlyCollection<ReasonCount> Reasons,
+    /// <summary>All the moves in the range, not only the ones listed below.</summary>
+    int Total,
+    /// <summary>
+    /// The moves themselves, newest first, up to <see cref="MovesReport.Listed"/>.
+    /// The counts above are always the whole range.
+    /// </summary>
+    IReadOnlyCollection<MovedBooking> Moves)
+{
+    public const int Listed = 200;
+}
+
+public sealed record MovesPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    /// <summary>The same price or cheaper, done the moment it was asked.</summary>
+    int Free,
+    /// <summary>Paid for and approved at the desk.</summary>
+    int Upgrade,
+    /// <summary>Every reason on the list, zero included, in the list's own order; then the unasked.</summary>
+    IReadOnlyCollection<ReasonCount> Reasons);
+
+/// <summary>
+/// One reason and how often it was given. <see cref="Reason"/> is null for the
+/// moves made before customers were asked, which a report shows as not asked
+/// rather than guessing.
+/// </summary>
+public sealed record ReasonCount(string? Reason, int Count);
+
+public sealed record MovedBooking(
+    Guid BookingId,
+    DateTimeOffset MovedAt,
+    /// <summary>The day it moved, on the venue's clock — the day it is counted in.</summary>
+    DateOnly MovedOn,
+    string CustomerName,
+    string FacilityName,
+    string? FromCourtName,
+    string? ToCourtName,
+    string Kind,
+    string? Reason,
+    string? ReasonNote);

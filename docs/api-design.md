@@ -2078,6 +2078,35 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
+### Bookings moved
+
+```http
+GET /api/v1/desk/reports/moves?from=&to=&grain=Day&facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant. No money in it.
+
+**How many bookings customers moved, and why.** A move counts on **the day it
+went through, on the venue's clock** — a free move when it was asked for, an
+upgrade when the desk approved it. The day the booking is for is a different
+question.
+
+* `periods` — every period in the range, zero included, each with `free`,
+  `upgrade` and `reasons`. `reasons` lists every reason on the list, zero
+  included and in the list's order, then `null` for the moves nobody was asked
+  about. Unlike hours there are no gaps: a customer can move a booking on a day
+  the venue is shut.
+* `reasons` — the range's totals, most given first, leaving out a reason nobody
+  gave.
+* `total` — every move in the range.
+* `moves` — the moves themselves, newest first, **at most 200**. The counts
+  above are always the whole range. Each carries `movedOn` (the venue's day),
+  the customer's name, `fromCourtName` / `toCourtName` as they were named then,
+  `kind` (`Free` or `Upgrade`), `reason` and `reasonNote`.
+
+`grain`, the one-year limit and the Monday weeks are the same as Sold Hours',
+from the same code.
+
 ### Venue snapshot
 
 ```http
@@ -2284,8 +2313,20 @@ shape of the request and what each refusal means.
 A move takes a **target court and the hours to put on it**:
 
 ```json
-{ "toBookableCourtId": "…", "slots": [ { "date": "2026-09-25", "startsAt": "18:00" } ] }
+{
+  "toBookableCourtId": "…",
+  "slots": [ { "date": "2026-09-25", "startsAt": "18:00" } ],
+  "reason": "Weather",
+  "reasonNote": null
+}
 ```
+
+`reason` is required on `move` and on `upgrade` — one of `ScheduleChanged`,
+`Weather`, `CourtProblem`, `DifferentCourt`, `Other` — and ignored by
+`move-options` and `move-quote`, which only ask. `reasonNote` is optional, up to
+200 characters, and required when the reason is `Other`. The refusals are 400s:
+`MoveReasonRequired`, `MoveReasonNoteRequired`, `MoveReasonNoteTooLong`. See
+[booking.md](booking.md#why-it-moved).
 
 `slots` may be omitted, which means "the same hours, on that court". A booking
 sold by the day sends **dates** rather than hours to `move-options`, because its

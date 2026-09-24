@@ -30,9 +30,13 @@ public sealed class BookingUpgradeRequest : Entity
         decimal rentalNow,
         decimal rentalNew,
         int holdMinutes,
+        string moveReason,
+        string? moveReasonNote,
         DateTimeOffset requestedAt)
     {
         BookingId = bookingId;
+        MoveReason = moveReason;
+        MoveReasonNote = string.IsNullOrWhiteSpace(moveReasonNote) ? null : moveReasonNote.Trim();
         ToBookableCourtId = toBookableCourtId;
         ToCourtName = toCourtName.Trim();
         RequestedByUserId = requestedByUserId;
@@ -78,6 +82,23 @@ public sealed class BookingUpgradeRequest : Entity
     public ICollection<BookingUpgradeSlot> Slots { get; private set; } = [];
 
     public Guid RequestedByUserId
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// Why the customer wants to move, asked when they ask for the upgrade.
+    ///
+    /// Carried here rather than asked again at approval: by then the customer
+    /// has paid and gone, and the desk approving it is not the one who knows
+    /// why. Null only on requests made before customers were asked.
+    /// </summary>
+    public string? MoveReason
+    {
+        get; private set;
+    }
+
+    public string? MoveReasonNote
     {
         get; private set;
     }

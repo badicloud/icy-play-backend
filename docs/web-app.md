@@ -208,6 +208,13 @@ Options arrive **cheapest first**, and a court that costs more carries its
 balance on the card. Picking one goes to the upgrade checkout rather than moving
 anything.
 
+**Why are you moving it?** — `MoveReasonPicker`, shared by the dialog and the
+upgrade checkout. The reasons are chips; a note box opens once one is picked,
+optional except on Other. *Move it* and *Pay and proceed* stay grey until there
+is an answer the server will take. On an upgrade it is asked **on the checkout,
+not in the dialog**, because the dialog hands over to the checkout through its
+address and a customer's own words do not belong in a URL.
+
 ### Upgrade checkout — `/bookings/{bookingId}/upgrade`
 
 The same shape as the booking checkout, because it is the same act: a balance to
@@ -228,6 +235,16 @@ shown.
 
 A booking's **history** is readable from both the desk and the customer's own
 page, and it is the same account of the same events.
+
+**The bell.** For an owner or an attendant, the account button in the header
+carries a bell with a red count while anything is waiting on the desk:
+payments to check plus upgrades to approve, across every venue they work. It
+shakes, rests and shakes again, and holds still for anybody who has asked for
+less motion. The menu under it has a row for each, linking to its queue. It
+reads the same two counts as the desk overview, from the same cached queries,
+polls every minute, and clears the moment the desk confirms or approves
+something. It is absent when nothing is waiting, and a customer's header never
+asks.
 
 ### Reports — `/desk/reports`
 
@@ -291,6 +308,16 @@ reports it.
 **The table on Not Sold Courts** ranks longest-neglected first — never sold at
 the top, then the oldest last sale. A court with a payment waiting on the desk
 says so, so it is not written off while somebody's money is sitting on it.
+
+**Bookings moved** — `/desk/reports/moves`. How many bookings customers moved
+and why, with the same filter bar, **By**, and Chart · Table. **Show** is *All
+moves* — every move, with paid upgrades as a dashed line inside it — or *By
+reason*, one line per reason in a fixed colour; *Not asked* appears only when
+the range has a move from before customers were asked. Tiles for moved, paid
+upgrades and the top reason; under the chart, the moves themselves, newest
+first, with the customer, from → to, and the reason and note. The day only, not
+the time: the day is the venue's and comes from the server, and a time worked
+out in the browser would be the browser's clock.
 
 ## The admin console
 

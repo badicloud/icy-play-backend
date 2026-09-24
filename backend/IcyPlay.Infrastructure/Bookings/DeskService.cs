@@ -518,19 +518,9 @@ public sealed class DeskService(
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        if (!HoursGrain.IsSupported(query.Grain))
+        if (CheckRange(query) is var wrong and not DeskFailure.None)
         {
-            return DeskResult<HoursOverTime>.Fail(DeskFailure.UnknownGrain);
-        }
-
-        if (query.To < query.From)
-        {
-            return DeskResult<HoursOverTime>.Fail(DeskFailure.WindowBackwards);
-        }
-
-        if (query.To.DayNumber - query.From.DayNumber >= UtilizationQueryValidator.MostDays)
-        {
-            return DeskResult<HoursOverTime>.Fail(DeskFailure.ReportWindowTooWide);
+            return DeskResult<HoursOverTime>.Fail(wrong);
         }
 
         var scoped = await ScopeAsync(userId, query.FacilityId, ct);
@@ -542,6 +532,46 @@ public sealed class DeskService(
 
         return DeskResult<HoursOverTime>.Success(
             await Utilization.OverTimeAsync(db, scoped, query, ct));
+    }
+
+    public async Task<DeskResult<MovesReport>> MovesAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (CheckRange(query) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<MovesReport>.Fail(wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<MovesReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<MovesReport>.Success(await Moves.ReadAsync(db, scoped, query, ct));
+    }
+
+    /// <summary>The same limits on every over-time report: a known grain, forwards, and at most a year.</summary>
+    private static DeskFailure CheckRange(HoursQuery query)
+    {
+        if (!HoursGrain.IsSupported(query.Grain))
+        {
+            return DeskFailure.UnknownGrain;
+        }
+
+        if (query.To < query.From)
+        {
+            return DeskFailure.WindowBackwards;
+        }
+
+        return query.To.DayNumber - query.From.DayNumber >= UtilizationQueryValidator.MostDays
+            ? DeskFailure.ReportWindowTooWide
+            : DeskFailure.None;
     }
 
     /// <summary>
@@ -823,7 +853,21 @@ public sealed class DeskService(
             AuditAction.BookingUpgradeApproved,
             booking,
             null,
-            $"Upgrade approved. Moved from {wasOn} to {booking.CourtName}, and {upgrade.BalanceDue:N2} was paid.");
+            $"Upgrade approved. Moved from {wasOn} to {booking.CourtName}, and {upgrade.BalanceDue:N2} was paid."
+            + (upgrade.MoveReason is null ? string.Empty : BookingService.Because(upgrade.MoveReason, upgrade.MoveReasonNote)));
+
+        // Counted as the customer's move, because it is: they asked for it and
+        // paid for it, and the desk only said the money was there. The reason
+        // is theirs, carried from when they asked.
+        db.BookingMoves.Add(new BookingMoveRecord(
+            booking.Id,
+            utcNow,
+            MoveKind.Upgrade,
+            upgrade.MoveReason,
+            upgrade.MoveReasonNote,
+            wasOn,
+            booking.CourtName,
+            upgrade.RequestedByUserId));
 
         await db.SaveChangesAsync(ct);
 

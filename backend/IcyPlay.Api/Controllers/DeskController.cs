@@ -246,6 +246,35 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// How many bookings customers moved, period by period, and the reasons
+    /// they gave — with the moves themselves, newest first.
+    ///
+    /// No money in it, so an attendant reads the same answer an owner does.
+    /// </summary>
+    [HttpGet("reports/moves")]
+    public async Task<IActionResult> Moves(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.MovesAsync(
+            userId,
+            new HoursQuery(from, to, grain, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MovesReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// What the venue looks like at this moment: how many courts, how many
     /// parts they are sold in, and how many of those have somebody on them.
     ///
