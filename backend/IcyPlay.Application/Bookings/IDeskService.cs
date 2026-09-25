@@ -237,6 +237,18 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// What the venue's open, unsold hours would have earned, period by period
+    /// and court by court, down to each sport court.
+    ///
+    /// Open to attendants as well as owners for now; who may see money is a
+    /// permission still to be built.
+    /// </summary>
+    Task<DeskResult<MissedReport>> MissedAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>
     /// What customers paid the venue in a range, period by period and court by
     /// court, each on the day the desk confirmed or approved it.
     ///

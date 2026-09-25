@@ -2128,7 +2128,7 @@ public sealed class BookingService(
     /// An hourly rate, charged for a slot that may be shorter than an hour. A
     /// venue on half-hour slots charges half, which is what "per hour" means.
     /// </summary>
-    private static decimal PerSlot(decimal hourlyRate, int slotLengthMinutes) =>
+    internal static decimal PerSlot(decimal hourlyRate, int slotLengthMinutes) =>
         Math.Round(hourlyRate * slotLengthMinutes / 60m, 2, MidpointRounding.AwayFromZero);
 
     /// <summary>

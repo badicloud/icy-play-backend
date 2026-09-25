@@ -152,7 +152,7 @@ internal static class Utilization
     /// totals only in how it folds what comes back, and two copies of the
     /// query would drift on the day somebody narrowed one of them.
     /// </summary>
-    private static async Task<Source> LoadAsync(
+    internal static async Task<Source> LoadAsync(
         AppDbContext db,
         IReadOnlyCollection<Guid> venueIds,
         DateOnly from,
@@ -370,7 +370,7 @@ internal static class Utilization
         _ => starts
     };
 
-    private sealed record Source(
+    internal sealed record Source(
         List<Court> Courts,
         List<Maintenance> Maintenance,
         List<Sold> Slots);
@@ -455,7 +455,7 @@ internal static class Utilization
     /// outside the owner's contract — are not yielded. They are not open and
     /// not maintenance either; there was no timetable to lose.
     /// </summary>
-    private static IEnumerable<DayState> Walk(
+    internal static IEnumerable<DayState> Walk(
         Court court,
         IReadOnlyCollection<Maintenance> periods,
         DateOnly from,
@@ -529,7 +529,7 @@ internal static class Utilization
     /// The same rule <see cref="BookingService"/> sells by; null on a day says
     /// it is shut.
     /// </summary>
-    private static (TimeOnly, TimeOnly)? Hours(Court court, DayOfWeek day)
+    internal static (TimeOnly, TimeOnly)? Hours(Court court, DayOfWeek day)
     {
         if (!court.UsesFacilityHours)
         {
@@ -548,7 +548,7 @@ internal static class Utilization
     }
 
     /// <summary>One date this court could have traded on, and what it was.</summary>
-    private sealed record DayState(DateOnly Date, int ScheduledMinutes, bool UnderMaintenance);
+    internal sealed record DayState(DateOnly Date, int ScheduledMinutes, bool UnderMaintenance);
 
     /// <summary>What the days in the range came to, once each was sorted.</summary>
     private sealed record Calendar(
@@ -561,14 +561,14 @@ internal static class Utilization
     /// A maintenance period, flattened. Court-wide when <paramref name="CourtId"/> is set,
     /// building-wide when it is not.
     /// </summary>
-    private sealed record Maintenance(
+    internal sealed record Maintenance(
         Guid? CourtId,
         Guid FacilityId,
         DateTimeOffset StartsAt,
         DateTimeOffset? EndsAt);
 
     /// <summary>One booked slot, flattened to what the arithmetic needs.</summary>
-    private sealed record Sold(
+    internal sealed record Sold(
         Guid CourtId,
         Guid BookableCourtId,
         DateOnly Date,

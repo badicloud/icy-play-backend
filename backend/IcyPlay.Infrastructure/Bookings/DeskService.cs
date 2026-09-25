@@ -608,6 +608,31 @@ public sealed class DeskService(
         return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
     }
 
+    public async Task<DeskResult<MissedReport>> MissedAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // A year, the same as the other reports that walk the calendar hour by
+        // hour; takings only add up payments and can go further.
+        if (CheckRange(query) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<MissedReport>.Fail(wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<MissedReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<MissedReport>.Success(
+            await Missed.ReadAsync(db, scoped, query, timeProvider.GetUtcNow(), ct));
+    }
+
     public async Task<DeskResult<TakingsReport>> TakingsAsync(
         Guid userId,
         HoursQuery query,

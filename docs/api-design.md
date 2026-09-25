@@ -2078,6 +2078,38 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
+### Missed Income
+
+```http
+GET /api/v1/desk/reports/missed?from=&to=&grain=Week&facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant — open to attendants for now, the same
+as takings.
+
+**What the venue's open, unsold hours would have earned, at its own rates.**
+Built on the utilization report's walk of the calendar (the same open days,
+maintenance and contract) and priced by `CourtSport.PriceAt`, the rule the
+booking page sells by — an empty peak hour is worth what a customer would have
+been charged for it.
+
+* **Only hours that have begun**, on the venue's clock. One still ahead can
+  still be sold, so it is not missed yet.
+* **Only what could have been sold.** Hours under maintenance or when the venue
+  was shut are left out, and so is any hour a clashing booking held the floor
+  (confirmed or waiting on the desk).
+* **A court** counts the minutes the whole floor had no booking
+  (`notSoldMinutes`), and its money is its **main sport**: every part of it
+  still sellable in the hour — all of them when the floor was empty, the rest
+  when some were booked, none when another sport had it.
+* **A sport court** (`units`) is priced on its own, at its own rate, counting
+  only hours it could still have been booked. They share one floor, so they
+  overlap and do not add up to the court.
+
+`periods` is the whole venue per period, `rows` each court per period, and
+`courts` each court for the range with its `units`. The range is a year at
+most, as for the other reports that walk the calendar.
+
 ### Takings
 
 ```http

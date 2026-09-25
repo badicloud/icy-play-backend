@@ -416,6 +416,81 @@ public sealed record CourtTakings(
     int UpgradeCount,
     decimal PlatformFee);
 
+/// <summary>
+/// What the venue's open, unsold hours would have earned at its own rates.
+///
+/// Only hours that have begun: an hour still ahead can still be sold, so it
+/// is not missed yet. Hours under maintenance, or when the venue was shut or
+/// outside its contract, were never on sale and are not counted.
+/// </summary>
+public sealed record MissedReport(
+    DateOnly From,
+    DateOnly To,
+    string Grain,
+    /// <summary>Every period in the range, zero included: the whole venue.</summary>
+    IReadOnlyCollection<MissedPeriod> Periods,
+    /// <summary>Each court's figures per period, only where it was open.</summary>
+    IReadOnlyCollection<CourtMissedPeriod> Rows,
+    /// <summary>Each court for the whole range, with the sport courts it is divided into.</summary>
+    IReadOnlyCollection<CourtMissed> Courts);
+
+public sealed record MissedPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    /// <summary>Minutes the courts were open, up to now.</summary>
+    int OpenMinutes,
+    /// <summary>Of those, the minutes a court had no booking at all.</summary>
+    int NotSoldMinutes,
+    int PeakNotSoldMinutes,
+    decimal Missed,
+    decimal PeakMissed);
+
+public sealed record CourtMissedPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    Guid CourtId,
+    Guid FacilityId,
+    string FacilityName,
+    string CourtName,
+    int OpenMinutes,
+    int NotSoldMinutes,
+    decimal Missed);
+
+/// <summary>
+/// One court. <see cref="NotSoldMinutes"/> are the minutes the whole floor had
+/// no booking. <see cref="Missed"/> prices the court's main sport: every part
+/// of it that could still have been sold — all of them when the floor was
+/// empty, the rest when some were booked, none when another sport had the
+/// floor.
+/// </summary>
+public sealed record CourtMissed(
+    Guid CourtId,
+    Guid FacilityId,
+    string FacilityName,
+    string Name,
+    string MainSportName,
+    int OpenMinutes,
+    int NotSoldMinutes,
+    int PeakNotSoldMinutes,
+    decimal Missed,
+    decimal PeakMissed,
+    IReadOnlyCollection<UnitMissed> Units);
+
+/// <summary>
+/// One sport court, on its own: the minutes it could have been booked and was
+/// not, at its own rate. A minute when a clashing game had the floor is not
+/// counted — it could not have been sold. The parts share one floor, so they
+/// overlap and do not add up to the court.
+/// </summary>
+public sealed record UnitMissed(
+    Guid BookableCourtId,
+    string Label,
+    string SportName,
+    bool IsMainSport,
+    int NotSoldMinutes,
+    int PeakNotSoldMinutes,
+    decimal Missed);
+
 public sealed record MovedBooking(
     Guid BookingId,
     DateTimeOffset MovedAt,

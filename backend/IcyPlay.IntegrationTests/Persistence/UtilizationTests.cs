@@ -648,6 +648,63 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         tuesday.PartsSold.Should().Be(2, "two pickleball parts, the same hour");
     }
 
+    /// <summary>
+    /// Missed income counts only hours that have begun, prices the court at its
+    /// main sport, and prices each sport court on its own — leaving out every
+    /// hour a clashing game had the floor, because those were not for sale.
+    ///
+    /// Monday at 09:00 UTC is 5pm in Manila: the 6am to 5pm hours have begun,
+    /// twelve of them, and 5pm is peak. Pickleball 1 is sold at nine and the
+    /// whole floor for basketball at ten.
+    /// </summary>
+    [Fact]
+    public async Task MissedShouldPriceWhatCouldHaveBeenSoldAndHasBegun()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Missed Income Courts");
+
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+        await ConfirmAsync(context, venue, venue.Basketball, Monday, new TimeOnly(10, 0));
+
+        var sut = CreateService(context);
+
+        // Act: Tuesday is in the range and still ahead, so none of it counts.
+        var result = await sut.MissedAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Monday, Tuesday, HoursGrain.Day),
+            CancellationToken.None);
+
+        // Assert
+        var court = result.Value!.Courts.Single();
+        UnitMissed Part(Guid id) => court.Units.Single(unit => unit.BookableCourtId == id);
+
+        using var _ = new AssertionScope();
+        result.Succeeded.Should().BeTrue();
+
+        court.MainSportName.Should().Be("Basketball");
+        court.OpenMinutes.Should().Be(12 * 60, "the hours from six to five have begun");
+        court.NotSoldMinutes.Should().Be(10 * 60, "the floor had somebody on it at nine and at ten");
+        court.PeakNotSoldMinutes.Should().Be(60);
+
+        // Basketball, the main sport: blocked at nine by pickleball and at ten
+        // by itself. Nine standard hours and the peak one.
+        court.Missed.Should().Be((9 * 500m) + 600m);
+        court.PeakMissed.Should().Be(600m);
+        Part(venue.Basketball).Missed.Should().Be(court.Missed);
+
+        // Pickleball 2 sits beside pickleball 1, so nine o'clock was still for
+        // sale; ten was not, the basketball had the floor.
+        Part(venue.Pickleball2).NotSoldMinutes.Should().Be(11 * 60);
+        Part(venue.Pickleball2).Missed.Should().Be((10 * 500m) + 600m);
+        Part(venue.Pickleball1).NotSoldMinutes.Should().Be(10 * 60);
+
+        // Tuesday has not happened yet.
+        result.Value.Periods.Should().HaveCount(2);
+        result.Value.Periods.Last().OpenMinutes.Should().Be(0);
+        result.Value.Periods.First().Missed.Should().Be(court.Missed);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

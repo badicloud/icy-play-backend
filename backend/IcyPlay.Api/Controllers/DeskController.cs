@@ -251,6 +251,36 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// What the venue's open, unsold hours would have earned at its own rates:
+    /// per period, per court, and per sport court. Only hours that have begun —
+    /// one still ahead can still be sold.
+    ///
+    /// Open to attendants for now, the same as takings.
+    /// </summary>
+    [HttpGet("reports/missed")]
+    public async Task<IActionResult> Missed(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Week,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.MissedAsync(
+            userId,
+            new HoursQuery(from, to, grain, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MissedReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// What customers paid the venue, period by period and court by court: a
     /// booking's payment on the day the desk confirmed it, an upgrade's balance
     /// on the day the desk approved it, and the platform fee inside it set

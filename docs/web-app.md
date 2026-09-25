@@ -338,6 +338,16 @@ and per court with a subtotal; the CSV has every court and period. Open to
 attendants until money has a permission of its own. `CountChart` takes a
 `format` for its tooltip and axis, so the same chart draws pesos.
 
+**Missed Income** — `/desk/reports/missed`, in the Sales group. What the open,
+unsold hours would have earned at the venue's own rates, counting only hours that
+have begun. The same filters as Takings, opening on By week. *Whole venue* draws
+missed income against a dashed line of takings; *Per court* one line per court.
+Tiles for missed income, hours not sold, what the empty peak hours were worth,
+and missed income as a multiple of takings. Under the chart, every court most
+missed first, opening to its sport courts — the court priced at its main sport,
+each sport court at its own rate, with a note that the parts share one floor
+and do not add up. Open to attendants until money has a permission of its own.
+
 **Turning a payment down** asks for a reason through `ReasonPicker` — the same
 component the customer's move uses, so every place the platform asks why looks
 and behaves alike.
