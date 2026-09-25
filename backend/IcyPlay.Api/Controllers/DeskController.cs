@@ -251,6 +251,36 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// Every change made to the venue's courts in a range, newest first: what
+    /// it was, what it became, who changed it and why. Read back out of the
+    /// audit trail, which already records all of it.
+    ///
+    /// Open to attendants for now, the same as the other reports.
+    /// </summary>
+    [HttpGet("reports/court-changes")]
+    public async Task<IActionResult> CourtChanges(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? facilityId = null,
+        [FromQuery] Guid? courtId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.CourtChangesAsync(
+            userId,
+            new CourtChangesQuery(from, to, facilityId, courtId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CourtChangesReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// What the venue's open, unsold hours would have earned at its own rates:
     /// per period, per court, and per sport court. Only hours that have begun —
     /// one still ahead can still be sold.

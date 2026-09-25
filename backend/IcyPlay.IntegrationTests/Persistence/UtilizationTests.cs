@@ -705,6 +705,78 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         result.Value.Periods.First().Missed.Should().Be(court.Missed);
     }
 
+    /// <summary>
+    /// Court changes are read back out of the audit trail as a venue would say
+    /// them: the court added, its prices set, pickleball re-marked from three
+    /// courts to two, and the court closed for work — each with the lines that
+    /// changed, the reason given, and who did it.
+    /// </summary>
+    [Fact]
+    public async Task CourtChangesShouldDescribeWhatHappenedToTheCourts()
+    {
+        // Arrange: the venue helper adds the court and prices it.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Court Changes Courts");
+        var courts = CreateCourtService(context);
+        var pickleball = await SportIdAsync(context, "pickleball");
+        var basketball = await SportIdAsync(context, "basketball");
+
+        await courts.UpdateDivisionsAsync(
+            venue.CourtId,
+            new UpdateCourtDivisionsRequest(
+                [new CourtSportInput(basketball, 1), new CourtSportInput(pickleball, 2)],
+                "Wider lanes"),
+            Admin(),
+            CancellationToken.None);
+        await courts.SetCourtMaintenanceAsync(
+            venue.CourtId,
+            new SetMaintenanceRequest(Now, Now.AddDays(2), "Resurfacing"),
+            Admin(),
+            CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        // Act
+        var result = await CreateService(context).CourtChangesAsync(
+            venue.OwnerUserId,
+            new CourtChangesQuery(Monday, Monday),
+            CancellationToken.None);
+
+        // Assert
+        var report = result.Value!;
+        var remarked = report.Changes.Single(change => change.Kind == CourtChangeKind.SportsAndDivisions);
+        var priced = report.Changes.Single(change => change.Kind == CourtChangeKind.Prices);
+
+        using var _ = new AssertionScope();
+        result.Succeeded.Should().BeTrue();
+        report.Kinds.Select(kind => kind.Kind).Should().BeEquivalentTo(
+        [
+            CourtChangeKind.Added,
+            CourtChangeKind.SportsAndDivisions,
+            CourtChangeKind.Prices,
+            CourtChangeKind.Maintenance
+        ]);
+
+        remarked.Title.Should().Be("Desk court 1 · Pickleball re-marked");
+        remarked.Details.Should().Equal(new ChangeDetail("Pickleball", "3 courts", "2 courts"));
+        remarked.Reason.Should().Be("Wider lanes");
+        remarked.ActorRole.Should().Be("Platform admin");
+        remarked.ActorName.Should().BeNull("an admin's own name is the platform's business");
+        remarked.On.Should().Be(Monday);
+
+        priced.Details.Should().Contain(new ChangeDetail("Basketball standard", "Not priced", "₱500"));
+
+        report.Changes.Should().ContainSingle(change => change.Title == "Desk court 1 closed for maintenance")
+            .Which.Reason.Should().Be("Resurfacing");
+
+        report.Summary.Courts.Should().Be(1);
+        report.Summary.CourtsAdded.Should().Be(1);
+        report.Summary.BookableCourts.Should().Be(3, "basketball and two pickleball courts are left");
+        report.Summary.BookableCourtsRetired.Should().Be(1);
+        report.Summary.PriceChanges.Should().Be(1);
+        report.Summary.Closures.Should().Be(1);
+        report.Summary.ClosedNow.Should().Be(1);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

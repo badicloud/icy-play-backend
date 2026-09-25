@@ -348,6 +348,14 @@ missed first, opening to its sport courts — the court priced at its main sport
 each sport court at its own rate, with a note that the parts share one floor
 and do not add up. Open to attendants until money has a permission of its own.
 
+**Court Changes** — `/desk/reports/changes`, in the Inventory group. Every change
+to the courts, newest first, grouped by day: an icon for the kind, the title,
+the time and who, each line as before → after, and the reason. Chips filter by
+kind with a count each; a Court picker narrows to one. Tiles for courts and
+bookable courts now with what the range added and retired, price changes, and
+maintenance closures with how many are on now. A list rather than a chart —
+these are things that happened, not a figure that moves — with CSV export.
+
 **Turning a payment down** asks for a reason through `ReasonPicker` — the same
 component the customer's move uses, so every place the platform asks why looks
 and behaves alike.

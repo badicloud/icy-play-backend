@@ -491,6 +491,89 @@ public sealed record UnitMissed(
     int PeakNotSoldMinutes,
     decimal Missed);
 
+/// <summary>What the court-changes report is asked for. <paramref name="CourtId"/> narrows to one court.</summary>
+public sealed record CourtChangesQuery(
+    DateOnly From,
+    DateOnly To,
+    Guid? FacilityId = null,
+    Guid? CourtId = null);
+
+/// <summary>
+/// Every change made to a venue's courts in a range, newest first, read back
+/// out of the audit trail: what it was, what it became, who changed it and why.
+/// </summary>
+public sealed record CourtChangesReport(
+    DateOnly From,
+    DateOnly To,
+    CourtChangesSummary Summary,
+    /// <summary>How many changes of each kind, for the filter chips. Kinds with none are left out.</summary>
+    IReadOnlyCollection<ChangeKindCount> Kinds,
+    /// <summary>The changes, newest first, up to <see cref="CourtChangesReport.Listed"/>.</summary>
+    IReadOnlyCollection<CourtChange> Changes,
+    /// <summary>Every change in the range, not only the ones listed.</summary>
+    int Total)
+{
+    public const int Listed = 500;
+}
+
+public sealed record CourtChangesSummary(
+    /// <summary>Courts on sale now.</summary>
+    int Courts,
+    int CourtsAdded,
+    int CourtsRetired,
+    /// <summary>The parts those courts are sold in, now.</summary>
+    int BookableCourts,
+    int BookableCourtsAdded,
+    int BookableCourtsRetired,
+    int PriceChanges,
+    /// <summary>How many different courts had their prices changed.</summary>
+    int CourtsRepriced,
+    int Closures,
+    /// <summary>Closures for maintenance on at this moment.</summary>
+    int ClosedNow);
+
+public sealed record ChangeKindCount(string Kind, int Count);
+
+/// <summary>
+/// One change, as a person reads it. The words are made here rather than on
+/// the screen, because the audit trail stores ids and the screen does not know
+/// which sport an id is.
+/// </summary>
+public sealed record CourtChange(
+    string Id,
+    DateTimeOffset At,
+    /// <summary>The day and time on the venue's clock.</summary>
+    DateOnly On,
+    TimeOnly Time,
+    /// <summary>One of <see cref="CourtChangeKind"/>.</summary>
+    string Kind,
+    /// <summary>Null when the change was to the whole venue, such as closing it for maintenance.</summary>
+    Guid? CourtId,
+    string Title,
+    IReadOnlyCollection<ChangeDetail> Details,
+    string? Reason,
+    string? ActorName,
+    /// <summary>"Owner", "Attendant" or "Platform admin".</summary>
+    string ActorRole);
+
+/// <summary>One line of a change. <see cref="Before"/> is null for something added, <see cref="After"/> for something removed.</summary>
+public sealed record ChangeDetail(string Label, string? Before, string? After);
+
+public static class CourtChangeKind
+{
+    public const string Added = "Added";
+    public const string SportsAndDivisions = "SportsAndDivisions";
+    public const string Prices = "Prices";
+    public const string Hours = "Hours";
+    public const string Maintenance = "Maintenance";
+    public const string RenamedOrRetired = "RenamedOrRetired";
+    public const string Photos = "Photos";
+    public const string Details = "Details";
+
+    public static readonly IReadOnlyCollection<string> All =
+        [Added, SportsAndDivisions, Prices, Hours, Maintenance, RenamedOrRetired, Photos, Details];
+}
+
 public sealed record MovedBooking(
     Guid BookingId,
     DateTimeOffset MovedAt,

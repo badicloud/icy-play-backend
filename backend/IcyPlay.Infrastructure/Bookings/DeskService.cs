@@ -608,6 +608,37 @@ public sealed class DeskService(
         return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
     }
 
+    public async Task<DeskResult<CourtChangesReport>> CourtChangesAsync(
+        Guid userId,
+        CourtChangesQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (CheckRange(new HoursQuery(query.From, query.To)) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<CourtChangesReport>.Fail(wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<CourtChangesReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        // A court asked for by id has to be one of these venues', and one
+        // that is not answers the same as one that does not exist.
+        if (query.CourtId is Guid courtId
+            && !await db.Courts.AnyAsync(court => court.Id == courtId && scoped.Contains(court.FacilityId), ct))
+        {
+            return DeskResult<CourtChangesReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<CourtChangesReport>.Success(
+            await CourtChanges.ReadAsync(db, scoped, query, timeProvider.GetUtcNow(), ct));
+    }
+
     public async Task<DeskResult<MissedReport>> MissedAsync(
         Guid userId,
         HoursQuery query,

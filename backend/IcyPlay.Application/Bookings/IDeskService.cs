@@ -237,6 +237,18 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// Every change made to this person's courts in a range, newest first,
+    /// read back out of the audit trail.
+    ///
+    /// Open to attendants as well as owners for now; report visibility is a
+    /// permission still to be built.
+    /// </summary>
+    Task<DeskResult<CourtChangesReport>> CourtChangesAsync(
+        Guid userId,
+        CourtChangesQuery query,
+        CancellationToken ct);
+
+    /// <summary>
     /// What the venue's open, unsold hours would have earned, period by period
     /// and court by court, down to each sport court.
     ///

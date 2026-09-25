@@ -2078,6 +2078,39 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
+### Court Changes
+
+```http
+GET /api/v1/desk/reports/court-changes?from=&to=&facilityId=&courtId=
+```
+
+Roles: FacilityOwner, FacilityAttendant — open to attendants for now; report
+visibility is a permission still to be built.
+
+**Every change made to the venue's courts, newest first, read back out of the
+audit trail.** The trail already records each one — a court's details, sports,
+divisions, prices, hours and photos as the fields that changed, before and
+after; its creation and maintenance as events — with who did it and the reason
+given. What it stores is ids and `500.00/600.00/-/-`; this worded as a venue
+reads it, on the venue's clock:
+
+* `changes` — newest first, at most 500: `on` and `time` (the venue's), `kind`,
+  `title`, `details` as `{ label, before, after }` lines (`before` null for
+  something added, `after` null for something removed), `reason`, and who —
+  `actorName` and `actorRole` ("Owner", "Attendant", "Platform admin"; an
+  admin's own name is left out).
+* `kind` is `Added`, `SportsAndDivisions`, `Prices`, `Hours`, `Maintenance`,
+  `RenamedOrRetired`, `Photos` or `Details`. One saved edit can be two changes:
+  a rename and a new surface read as different things.
+* `kinds` — how many of each, for the filter.
+* `summary` — courts and bookable courts now and what the range added and
+  retired, price changes and on how many courts, closures, and closures on at
+  this moment.
+
+A venue-wide closure counts against every court. `courtId` narrows to one court
+(and still shows venue-wide closures); a court at another venue answers
+`NotAttended`. A year at most.
+
 ### Missed Income
 
 ```http
