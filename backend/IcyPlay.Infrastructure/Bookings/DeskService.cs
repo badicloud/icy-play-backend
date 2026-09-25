@@ -608,6 +608,28 @@ public sealed class DeskService(
         return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
     }
 
+    public async Task<DeskResult<CourtMixReport>> CourtMixAsync(
+        Guid userId,
+        CourtMixQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (CheckRange(new HoursQuery(query.From, query.To)) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<CourtMixReport>.Fail(wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<CourtMixReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<CourtMixReport>.Success(await CourtMix.ReadAsync(db, scoped, query, ct));
+    }
+
     public async Task<DeskResult<CourtChangesReport>> CourtChangesAsync(
         Guid userId,
         CourtChangesQuery query,

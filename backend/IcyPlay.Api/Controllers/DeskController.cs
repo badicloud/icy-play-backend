@@ -251,6 +251,36 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// What the venue has right now: courts by venue type, and the sports and
+    /// events each is set up for, with how much of each venue type's open hours
+    /// sold in the range. Retired courts are listed only when asked for.
+    ///
+    /// Open to attendants for now, the same as the other reports.
+    /// </summary>
+    [HttpGet("reports/court-mix")]
+    public async Task<IActionResult> CourtMix(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? facilityId = null,
+        [FromQuery] bool includeRetired = false,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.CourtMixAsync(
+            userId,
+            new CourtMixQuery(from, to, facilityId, includeRetired),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CourtMixReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// Every change made to the venue's courts in a range, newest first: what
     /// it was, what it became, who changed it and why. Read back out of the
     /// audit trail, which already records all of it.

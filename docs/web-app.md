@@ -356,6 +356,14 @@ bookable courts now with what the range added and retired, price changes, and
 maintenance closures with how many are on now. A list rather than a chart —
 these are things that happened, not a figure that moves — with CSV export.
 
+**Court Mix** — `/desk/reports/mix`, in the Inventory group. What the venue has
+now: tiles for courts, how many are under a roof, lit, and set up for events; a
+bar of indoor, covered and outdoor with each type's courts and share of open
+hours sold; each sport and event with how many courts take it; and every court
+with its venue type, surface, lighting, sports and events, bookable courts and
+share sold. The dates only move the shares. **Show retired courts** lists them
+greyed out with a badge, and never counts them.
+
 **Turning a payment down** asks for a reason through `ReasonPicker` — the same
 component the customer's move uses, so every place the platform asks why looks
 and behaves alike.

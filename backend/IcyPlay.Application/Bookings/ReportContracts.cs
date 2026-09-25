@@ -491,6 +491,86 @@ public sealed record UnitMissed(
     int PeakNotSoldMinutes,
     decimal Missed);
 
+/// <summary>
+/// What the court-mix report is asked for. The range is only for how much each
+/// venue type sold; what the venue has is always as it stands now.
+/// </summary>
+public sealed record CourtMixQuery(
+    DateOnly From,
+    DateOnly To,
+    Guid? FacilityId = null,
+    bool IncludeRetired = false);
+
+/// <summary>
+/// What a venue has right now: its courts by venue type, and the sports and
+/// events each is set up for — with how much of each venue type's open hours
+/// sold in the range, from the utilization report's own sums.
+///
+/// The counts are of courts on sale. Retired courts are listed only when asked
+/// for, marked as such, and never counted in the totals: they are not
+/// something the venue has any more.
+/// </summary>
+public sealed record CourtMixReport(
+    DateOnly From,
+    DateOnly To,
+    CourtMixSummary Summary,
+    IReadOnlyCollection<VenueTypeMix> VenueTypes,
+    IReadOnlyCollection<ActivityMix> Activities,
+    IReadOnlyCollection<CourtMixRow> Courts);
+
+public sealed record CourtMixSummary(
+    int Courts,
+    int BookableCourts,
+    /// <summary>Indoor and covered: the courts rain does not stop.</summary>
+    int UnderRoof,
+    int WithLighting,
+    /// <summary>Courts set up for at least one event.</summary>
+    int TakeEvents,
+    /// <summary>How many different events those courts take.</summary>
+    int EventKinds,
+    /// <summary>Retired courts at these venues, listed or not.</summary>
+    int Retired);
+
+/// <summary>
+/// One venue type. <see cref="OpenMinutes"/> and <see cref="InUseMinutes"/>
+/// are the utilization report's figures for its courts, added up — so the
+/// share here is the same one Court utilisation shows, cut by roof.
+/// </summary>
+public sealed record VenueTypeMix(
+    string VenueType,
+    int Courts,
+    IReadOnlyCollection<string> CourtNames,
+    int OpenMinutes,
+    int InUseMinutes);
+
+/// <summary>One sport or event, and how many courts are set up for it.</summary>
+public sealed record ActivityMix(
+    Guid SportId,
+    string Name,
+    /// <summary>"Sport" or "Event".</summary>
+    string Kind,
+    int Courts,
+    int BookableCourts,
+    /// <summary>On how many of those courts it is the main sport.</summary>
+    int MainOn);
+
+public sealed record CourtMixRow(
+    Guid CourtId,
+    Guid FacilityId,
+    string FacilityName,
+    string Name,
+    string VenueType,
+    string? Surface,
+    bool HasLighting,
+    bool IsRetired,
+    int BookableCourts,
+    IReadOnlyCollection<CourtActivity> Activities,
+    /// <summary>The utilization figures for this court in the range. Zero for a retired court.</summary>
+    int OpenMinutes,
+    int InUseMinutes);
+
+public sealed record CourtActivity(string Name, string Kind, bool IsMain, int Divisions);
+
 /// <summary>What the court-changes report is asked for. <paramref name="CourtId"/> narrows to one court.</summary>
 public sealed record CourtChangesQuery(
     DateOnly From,

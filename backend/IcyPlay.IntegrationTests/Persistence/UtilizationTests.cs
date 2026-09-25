@@ -777,6 +777,72 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         report.Summary.ClosedNow.Should().Be(1);
     }
 
+    /// <summary>
+    /// The court mix counts what the venue has now — by venue type and by what
+    /// each court is set up for — with each venue type's share of its open
+    /// hours sold, the same figures Court utilisation shows. A retired court is
+    /// never counted, and listed only when asked for.
+    /// </summary>
+    [Fact]
+    public async Task CourtMixShouldCountWhatTheVenueHasAndListRetiredOnlyWhenAsked()
+    {
+        // Arrange: one covered court, lit, basketball as its main sport and
+        // pickleball three ways, sold for an hour on Monday.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Court Mix Courts");
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+        var sut = CreateService(context);
+
+        // Act
+        var mix = (await sut.CourtMixAsync(
+            venue.OwnerUserId,
+            new CourtMixQuery(Monday, Monday),
+            CancellationToken.None)).Value!;
+
+        await context.Courts
+            .Where(court => court.Id == venue.CourtId)
+            .ExecuteUpdateAsync(set => set.SetProperty(court => court.IsActive, false));
+
+        var withoutRetired = (await sut.CourtMixAsync(
+            venue.OwnerUserId,
+            new CourtMixQuery(Monday, Monday),
+            CancellationToken.None)).Value!;
+        var withRetired = (await sut.CourtMixAsync(
+            venue.OwnerUserId,
+            new CourtMixQuery(Monday, Monday, IncludeRetired: true),
+            CancellationToken.None)).Value!;
+
+        // Assert
+        using var _ = new AssertionScope();
+        mix.Summary.Should().Be(new CourtMixSummary(
+            Courts: 1,
+            BookableCourts: 4,
+            UnderRoof: 1,
+            WithLighting: 1,
+            TakeEvents: 0,
+            EventKinds: 0,
+            Retired: 0));
+
+        var covered = mix.VenueTypes.Should().ContainSingle().Subject;
+        covered.VenueType.Should().Be(CourtVenueType.Covered);
+        covered.OpenMinutes.Should().Be(MinutesOpenPerDay);
+        covered.InUseMinutes.Should().Be(60);
+
+        mix.Activities.Select(activity => (activity.Name, activity.Courts, activity.BookableCourts, activity.MainOn))
+            .Should().Equal(("Basketball", 1, 1, 1), ("Pickleball", 1, 3, 0));
+
+        var row = mix.Courts.Should().ContainSingle().Subject;
+        row.Activities.First().Should().Be(new CourtActivity("Basketball", ActivityKind.Sport, true, 1));
+        row.IsRetired.Should().BeFalse();
+
+        // Retired: gone from the counts, and from the list unless asked for.
+        withoutRetired.Summary.Courts.Should().Be(0);
+        withoutRetired.Summary.Retired.Should().Be(1);
+        withoutRetired.Courts.Should().BeEmpty();
+        withRetired.Courts.Should().ContainSingle().Which.IsRetired.Should().BeTrue();
+        withRetired.Summary.Courts.Should().Be(0);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

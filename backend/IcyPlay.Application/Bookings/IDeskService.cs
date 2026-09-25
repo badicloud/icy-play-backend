@@ -237,6 +237,18 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// What this person's venues have right now — courts by venue type, and the
+    /// sports and events each is set up for — with how much each venue type
+    /// sold in the range.
+    ///
+    /// Open to attendants as well as owners for now.
+    /// </summary>
+    Task<DeskResult<CourtMixReport>> CourtMixAsync(
+        Guid userId,
+        CourtMixQuery query,
+        CancellationToken ct);
+
+    /// <summary>
     /// Every change made to this person's courts in a range, newest first,
     /// read back out of the audit trail.
     ///

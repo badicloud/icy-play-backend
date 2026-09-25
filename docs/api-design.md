@@ -2078,6 +2078,34 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
+### Court Mix
+
+```http
+GET /api/v1/desk/reports/court-mix?from=&to=&facilityId=&includeRetired=false
+```
+
+Roles: FacilityOwner, FacilityAttendant — open to attendants for now.
+
+**What the venue has right now**: its courts by venue type (`Indoor`,
+`Covered`, `Outdoor`), and the sports and events each is set up for. The range
+is only for how much each venue type sold — `openMinutes` and `inUseMinutes`
+are the utilization report's own figures per court, added up by roof, so the
+share cannot disagree with Court utilisation.
+
+* `summary` — courts and bookable courts on sale, how many are under a roof
+  (indoor or covered), lit, and set up for events, how many kinds of event,
+  and how many courts are retired.
+* `venueTypes` — each type's courts, their names, and its open and sold minutes.
+* `activities` — each sport and event (`kind`), on how many courts, how many
+  bookable courts, and on how many it is the main sport. Sports first.
+* `courts` — each court: venue type, surface, lighting, what it is set up for
+  (main sport first, with divisions), bookable courts, and its own open and
+  sold minutes.
+
+**Retired courts are never counted**: they are not something the venue has any
+more. `includeRetired=true` lists them in `courts`, marked `isRetired`, and
+nowhere else. A year at most.
+
 ### Court Changes
 
 ```http
