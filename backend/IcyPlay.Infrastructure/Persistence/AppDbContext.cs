@@ -290,6 +290,19 @@ public sealed class AppDbContext : DbContext
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 21, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("b83f6a17-2e49-4d05-9c61-f4a0d7e25b98"),
+                    Key = EmailTemplateKey.BookingDeclined,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8379592L,
+                    // "Not accepted" in the subject, so somebody who reads
+                    // nothing else does not turn up to play.
+                    Subject = "Your booking at {{var:facility_name}} was not accepted",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
                 });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>

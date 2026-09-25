@@ -176,7 +176,15 @@ public static class HoursGrain
     public const string Week = "Week";
     public const string Month = "Month";
 
-    public static readonly IReadOnlyCollection<string> All = [Day, Week, Month];
+    /// <summary>Calendar quarters: January, April, July and October.</summary>
+    public const string Quarter = "Quarter";
+
+    /// <summary>January to June, and July to December.</summary>
+    public const string Half = "Half";
+
+    public const string Year = "Year";
+
+    public static readonly IReadOnlyCollection<string> All = [Day, Week, Month, Quarter, Half, Year];
 
     public static bool IsSupported(string? value) =>
         value is not null && All.Contains(value, StringComparer.Ordinal);
@@ -350,6 +358,63 @@ public sealed record DeclinedBooking(
     /// <summary>Who turned it down, and whether that was the owner. Null where nobody was recorded.</summary>
     string? DeclinedByName,
     bool DeclinedByOwner);
+
+/// <summary>
+/// What customers paid the venue, counted on the day the desk confirmed it.
+///
+/// Two kinds of money, each on the day it came in: a booking's payment on the
+/// day the desk confirmed it, and an upgrade's balance on the day the desk
+/// approved it. The platform fee is inside what the customer paid and is the
+/// platform's, billed to the venue later; the rest is the venue's takings.
+/// </summary>
+public sealed record TakingsReport(
+    DateOnly From,
+    DateOnly To,
+    string Grain,
+    /// <summary>Every period in the range, zero included: the whole venue's figures.</summary>
+    IReadOnlyCollection<TakingsPeriod> Periods,
+    /// <summary>
+    /// The same money per court per period, only where some came in. A booking
+    /// counts to the court it is on now — after an upgrade, the one it moved
+    /// to, which is where it is played.
+    /// </summary>
+    IReadOnlyCollection<CourtTakings> Rows)
+{
+    /// <summary>
+    /// Five years. Wider than the other reports, because takings are what gets
+    /// compared year on year, and a sum of payments is cheap to add up.
+    /// </summary>
+    public const int MostDays = 1827;
+}
+
+public sealed record TakingsPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    /// <summary>Bookings whose payment was confirmed in the period.</summary>
+    int Bookings,
+    /// <summary>The hours those bookings are for.</summary>
+    int Hours,
+    /// <summary>Court rental confirmed: what was paid, less the platform fee.</summary>
+    decimal Rental,
+    /// <summary>Upgrade balances approved in the period.</summary>
+    decimal Upgrades,
+    int UpgradeCount,
+    /// <summary>The platform's share of what was confirmed. Not the venue's.</summary>
+    decimal PlatformFee);
+
+public sealed record CourtTakings(
+    DateOnly Starts,
+    DateOnly Ends,
+    Guid CourtId,
+    Guid FacilityId,
+    string FacilityName,
+    string CourtName,
+    int Bookings,
+    int Hours,
+    decimal Rental,
+    decimal Upgrades,
+    int UpgradeCount,
+    decimal PlatformFee);
 
 public sealed record MovedBooking(
     Guid BookingId,

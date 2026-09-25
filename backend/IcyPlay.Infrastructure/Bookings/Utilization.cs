@@ -354,6 +354,9 @@ internal static class Utilization
     {
         HoursGrain.Week => date.AddDays(-(((int)date.DayOfWeek + 6) % 7)),
         HoursGrain.Month => new DateOnly(date.Year, date.Month, 1),
+        HoursGrain.Quarter => new DateOnly(date.Year, ((date.Month - 1) / 3 * 3) + 1, 1),
+        HoursGrain.Half => new DateOnly(date.Year, date.Month <= 6 ? 1 : 7, 1),
+        HoursGrain.Year => new DateOnly(date.Year, 1, 1),
         _ => date
     };
 
@@ -361,6 +364,9 @@ internal static class Utilization
     {
         HoursGrain.Week => starts.AddDays(6),
         HoursGrain.Month => starts.AddMonths(1).AddDays(-1),
+        HoursGrain.Quarter => starts.AddMonths(3).AddDays(-1),
+        HoursGrain.Half => starts.AddMonths(6).AddDays(-1),
+        HoursGrain.Year => starts.AddYears(1).AddDays(-1),
         _ => starts
     };
 

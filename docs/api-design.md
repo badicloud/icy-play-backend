@@ -2078,6 +2078,39 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
+### Takings
+
+```http
+GET /api/v1/desk/reports/takings?from=&to=&grain=Month&facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant. **Open to attendants for now** — who
+may see money is a permission still to be built.
+
+**What customers paid the venue, on the day the money was accepted**: a
+booking's payment on the day the desk confirmed it, and an upgrade's balance on
+the day the desk approved it. The confirmation day rather than the day played,
+because that is when the money came in and what a venue matches against its
+GCash history.
+
+A booking's payment is `PaidTotal` less the upgrades approved since — each
+upgrade adds its balance there and is counted on its own day. Not worked out
+from the booking's hours as they stand: a free move to a cheaper court changes
+what the hours cost, not what was paid, and there are no refunds. The platform
+fee is inside every payment, per hour booked, and set apart as `platformFee`;
+it is the platform's and billed to the venue later. The venue's takings are
+`rental + upgrades`; what the customers paid is that plus `platformFee`.
+
+* `periods` — every period, zero included: `bookings`, `hours`, `rental`,
+  `upgrades`, `upgradeCount`, `platformFee`.
+* `rows` — the same per court per period, only where money came in. A booking
+  counts to the court it is on now; after an upgrade, the one it moved to.
+
+`grain` also takes **`Quarter`, `Half` and `Year`** (calendar quarters, January
+and July halves), clamped to the range like the others, and the range may be
+up to **five years** (`TakingsWindowTooWide` past that). The other reports
+accept the same grains and keep their one-year limit.
+
 ### Declined Bookings
 
 ```http
@@ -2486,9 +2519,11 @@ that is optional except on `Other` (400s: `RejectReasonRequired`,
 `RejectNoteRequired`, `RejectNoteTooLong`) — and puts the hours straight back on
 sale. Its own
 status rather than a cancellation: a customer changing their mind and a receipt
-that did not add up read differently in a venue's history. **No letter goes
-out** — a rejection needs somewhere for the customer to answer from, and that is
-the message thread, which is not built.
+that did not add up read differently in a venue's history. **The customer is
+emailed** (`booking-declined`) after the save, best effort, the same as a
+confirmation: that the court is not held, the reason, and the venue's contact —
+there is no message thread to answer from, so the letter says who to speak to
+about any money sent.
 
 ### The court diary
 

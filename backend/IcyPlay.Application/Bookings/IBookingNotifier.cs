@@ -66,4 +66,11 @@ public interface IBookingNotifier
     /// sent when a person at the venue has actually checked the payment.
     /// </summary>
     Task BookingConfirmedAsync(Booking booking, CancellationToken ct);
+
+    /// <summary>
+    /// Tells the customer the venue turned their payment down: that the court
+    /// is not held, the reason the desk gave, and who to speak to about any
+    /// money they sent — the venue, because IcyPlay never holds it.
+    /// </summary>
+    Task BookingDeclinedAsync(Booking booking, CancellationToken ct);
 }

@@ -38,6 +38,7 @@ go. So a missing template is quiet: check the logs, not the screen.
 | `booking-payment-received.html` | `booking-payment-received` | The customer | They upload a GCash receipt and submit it |
 | `booking-payment-submitted.html` | `booking-payment-submitted` | The facility administrator | The same moment |
 | `booking-confirmed.html` | `booking-confirmed` | The customer | A person at the venue has checked the payment |
+| `booking-declined.html` | `booking-declined` | The customer | A person at the venue has checked the payment and turned it down |
 
 ### The three a booking sends
 
@@ -48,6 +49,9 @@ Customer submits their receipt
 
 Venue confirms
   └─ customer   "Your court is booked"      confirmed
+
+Venue declines
+  └─ customer   "Your booking was not accepted"   the court is NOT held
 ```
 
 **The first letter is carefully not a confirmation.** The court is held, nothing
@@ -82,6 +86,29 @@ words differ: one says the court is held, the other says it is confirmed.
 | `rental_amount` | 1,600.00 |
 | `platform_fee` | 45.00 |
 | `total_amount` | 1,645.00 |
+| `booking_url` | The customer's booking page |
+| `support_email` | icyplaybooking@gmail.com |
+| `current_year` | 2026 |
+
+### `booking-declined`
+
+The letter a customer most needs and least wants, so it says the three things
+they will ask, in order: **the court is not held** (so they do not turn up),
+**why**, and **what to do** — speak to the venue if money left their account,
+because they paid the venue and IcyPlay cannot refund it; or book again, since
+the hours are back on sale.
+
+| Variable | Example |
+| --- | --- |
+| `recipient_name` | Maria Santos |
+| `court_name` | Che court 1 · Pickleball 1 |
+| `facility_name` | CheChe Facility |
+| `sport_name` | Pickleball |
+| `booking_dates` | 15 Sep 2026, or `15 Sep – 17 Sep 2026` |
+| `booked_hours` | 3 |
+| `total_amount` | 1,645.00 |
+| `decline_reason` | `Wrong amount — paid ₱800 only`, or `Payment not received.` — the reason the desk picked and its note, as one sentence |
+| `venue_contact` | `0917 555 0101 · desk@cheche.ph` — the venue's phone and email, or the owner's account email when it has neither |
 | `booking_url` | The customer's booking page |
 | `support_email` | icyplaybooking@gmail.com |
 | `current_year` | 2026 |

@@ -507,13 +507,13 @@ public sealed class DeskService(
         Record(actor, AuditAction.BookingRejected, booking, booking.CancellationReason);
         await db.SaveChangesAsync(ct);
 
-        // No letter yet. A rejection needs somewhere for the customer to answer
-        // from, and that is the message thread, which is not built. Telling
-        // somebody their payment was refused and leaving them no reply is worse
-        // than the console showing it and somebody ringing them.
-        logger.LogInformation(
-            "Booking {BookingId} was rejected at the desk. The customer has not been emailed.",
-            bookingId);
+        logger.LogInformation("Booking {BookingId} was rejected at the desk.", bookingId);
+
+        // After the save, and best effort, as a confirmation's letter is: a
+        // mail provider being down must not undo a decision already made. The
+        // letter gives the venue's contact, because there is no message thread
+        // for the customer to answer from.
+        await TellTheCustomerItWasDeclinedAsync(booking, ct);
 
         return DeskResult<DeskBooking>.Success(await OneAsync(bookingId, ct));
     }
@@ -608,8 +608,34 @@ public sealed class DeskService(
         return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
     }
 
+    public async Task<DeskResult<TakingsReport>> TakingsAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        // Wider than a year: takings are compared year on year.
+        var wrong = CheckRange(query, TakingsReport.MostDays);
+
+        if (wrong != DeskFailure.None)
+        {
+            return DeskResult<TakingsReport>.Fail(
+                wrong == DeskFailure.ReportWindowTooWide ? DeskFailure.TakingsWindowTooWide : wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<TakingsReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<TakingsReport>.Success(await Takings.ReadAsync(db, scoped, query, ct));
+    }
+
     /// <summary>The same limits on every over-time report: a known grain, forwards, and at most a year.</summary>
-    private static DeskFailure CheckRange(HoursQuery query)
+    private static DeskFailure CheckRange(HoursQuery query, int mostDays = UtilizationQueryValidator.MostDays)
     {
         if (!HoursGrain.IsSupported(query.Grain))
         {
@@ -621,7 +647,7 @@ public sealed class DeskService(
             return DeskFailure.WindowBackwards;
         }
 
-        return query.To.DayNumber - query.From.DayNumber >= UtilizationQueryValidator.MostDays
+        return query.To.DayNumber - query.From.DayNumber >= mostDays
             ? DeskFailure.ReportWindowTooWide
             : DeskFailure.None;
     }
@@ -1327,6 +1353,21 @@ public sealed class DeskService(
             logger.LogError(
                 exception,
                 "The confirmation letter for booking {BookingId} could not be sent.",
+                booking.Id);
+        }
+    }
+
+    private async Task TellTheCustomerItWasDeclinedAsync(Booking booking, CancellationToken ct)
+    {
+        try
+        {
+            await notifier.BookingDeclinedAsync(booking, ct);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "The declined letter for booking {BookingId} could not be sent.",
                 booking.Id);
         }
     }

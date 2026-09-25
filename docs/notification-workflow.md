@@ -141,6 +141,7 @@ in [`email-templates/`](email-templates/README.md); the senders are on
 | `booking-payment-submitted` | Venue | A customer hands a receipt over |
 | `booking-payment-received` | Customer | Their receipt has arrived |
 | `booking-confirmed` | Customer | The desk confirms |
+| `booking-declined` | Customer | The desk turns the payment down |
 | `booking-moved` | Venue | A customer moves a booking themselves |
 | `booking-upgrade-received` | Customer | Their upgrade payment has arrived |
 | `booking-upgrade-submitted` | Venue | An upgrade is waiting on the desk, with all three figures on it |
@@ -148,10 +149,13 @@ in [`email-templates/`](email-templates/README.md); the senders are on
 
 Three things about this list are deliberate:
 
-**A rejected booking sends nothing.** A rejection needs somewhere for the
-customer to answer from, and that is the message thread, which is not built. A
-*declined upgrade* does write, because there is nothing to answer — only
-something they need to know.
+**A declined booking writes to the customer.** It used to send nothing, on the
+reasoning that a rejection needs somewhere to answer from and the message thread
+is not built. That left somebody who had paid finding out only by opening the
+app, or by turning up. The letter says first that the court is **not** held,
+then the reason the desk picked, then who to speak to about the money: the
+venue, whose phone and email it carries (the owner's email when the venue has
+published neither), because IcyPlay never holds it.
 
 **The venue is told when a booking moves itself.** A free move needs nobody's
 permission and has already happened, so nothing waits on this letter — but the

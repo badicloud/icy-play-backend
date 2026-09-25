@@ -1,13 +1,16 @@
 using FluentAssertions.Execution;
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
+using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
+using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Bookings;
+using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
@@ -209,7 +212,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task RejectAsync_ShouldPutTheHoursBackOnSaleWithoutEmailingAnybody()
+    public async Task RejectAsync_ShouldPutTheHoursBackOnSaleAndTellTheCustomer()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -245,8 +248,60 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             stored.Status.Should().NotBe(BookingStatus.Cancelled);
             // Rejected holds nothing, so the hour sells again.
             free.Succeeded.Should().BeTrue();
-            // No letter until there is somewhere for the customer to answer.
+            // One letter, and it is the declined one, not a confirmation.
+            letters.Declined.Should().Equal(booking);
             letters.Confirmed.Should().BeEmpty();
+        }
+    }
+
+    /// <summary>
+    /// The declined letter goes to the customer through the declined template,
+    /// carrying the sentence they also see on their booking and how to reach
+    /// the venue — they paid it, not IcyPlay.
+    /// </summary>
+    [Fact]
+    public async Task RejectAsync_ShouldWriteToTheCustomerWithTheReasonAndTheVenuesContact()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Declined Letter Courts");
+        var booking = await SubmittedAsync(context, venue, SevenAm);
+        var mail = new CapturingEmailSender();
+        var sut = CreateService(
+            context,
+            new BookingNotifier(
+                context,
+                mail,
+                Options.Create(new BookingNotificationOptions
+                {
+                    BookingUrl = "https://icyplay.test/bookings",
+                    SupportEmail = "help@icyplay.test"
+                }),
+                new FixedTimeProvider(Now),
+                NullLogger<BookingNotifier>.Instance));
+        var customerEmail = await context.Users
+            .Where(user => user.Id == venue.CustomerUserId)
+            .Select(user => user.Email)
+            .SingleAsync();
+
+        // Act
+        await sut.RejectAsync(
+            venue.OwnerUserId,
+            booking,
+            new RejectBookingRequest(RejectReason.WrongAmount, "Paid ₱300 only"),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+
+        // Assert
+        var letter = mail.Sent.Should().ContainSingle().Subject;
+
+        using (new AssertionScope())
+        {
+            letter.TemplateKey.Should().Be(EmailTemplateKey.BookingDeclined);
+            letter.RecipientEmail.Should().Be(customerEmail);
+            letter.Variables["decline_reason"].Should().Be("Wrong amount — Paid ₱300 only");
+            letter.Variables["venue_contact"].Should().Be("+639171234567 · hello@example.com");
+            letter.Variables["booking_url"].Should().Be($"https://icyplay.test/bookings/{booking}");
         }
     }
 
@@ -999,6 +1054,9 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     {
         public List<Guid> Confirmed { get; } = [];
 
+        /// <summary>Bookings the customer was told had been turned down.</summary>
+        public List<Guid> Declined { get; } = [];
+
         /// <summary>Upgrades the customer was told had gone through.</summary>
         public List<Guid> UpgradesApproved { get; } = [];
 
@@ -1007,6 +1065,12 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct)
         {
             Confirmed.Add(booking.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task BookingDeclinedAsync(Booking booking, CancellationToken ct)
+        {
+            Declined.Add(booking.Id);
             return Task.CompletedTask;
         }
 
@@ -1023,6 +1087,18 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             Booking booking,
             BookingMoveNotice notice,
             CancellationToken ct) => Task.CompletedTask;
+    }
+
+    /// <summary>Keeps every letter handed to it, so a test can read what would have gone out.</summary>
+    private sealed class CapturingEmailSender : ITransactionalEmailSender
+    {
+        public List<TransactionalEmailMessage> Sent { get; } = [];
+
+        public Task SendAsync(TransactionalEmailMessage message, CancellationToken cancellationToken)
+        {
+            Sent.Add(message);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

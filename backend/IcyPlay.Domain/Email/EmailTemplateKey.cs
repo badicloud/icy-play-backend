@@ -73,4 +73,11 @@ public static class EmailTemplateKey
     /// the desk is the one turning people away from them.
     /// </summary>
     public const string BookingMoved = "booking-moved";
+
+    /// <summary>
+    /// Tells the customer the venue checked their payment and turned it down,
+    /// why, and what to do. Says first that the court is NOT held: somebody who
+    /// turns up on a declined booking finds the court sold to someone else.
+    /// </summary>
+    public const string BookingDeclined = "booking-declined";
 }

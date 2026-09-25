@@ -327,6 +327,17 @@ declined, the share of payments checked, and the top reason; under the chart,
 each refusal with the customer, court and hours, amount, reason and note, and
 who declined it. The chart is `CountChart`, shared with Moved Bookings.
 
+**Takings** — `/desk/reports/takings`, in the Sales group. What customers paid,
+on the day the desk confirmed it. **By** also offers Quarter, Half and Year.
+*Whole venue* draws the takings against a dashed line of everything the
+customers paid, so the gap is the platform fee; *Per court* is one line per
+court, handing over to the table past eight. Tiles for what customers paid, the
+platform fee, the venue's takings and what came from upgrades. The table has
+bookings, hours, court rental, upgrades, platform fee and takings per period,
+and per court with a subtotal; the CSV has every court and period. Open to
+attendants until money has a permission of its own. `CountChart` takes a
+`format` for its tooltip and axis, so the same chart draws pesos.
+
 **Turning a payment down** asks for a reason through `ReasonPicker` — the same
 component the customer's move uses, so every place the platform asks why looks
 and behaves alike.
@@ -433,8 +444,9 @@ that could change the answer. See
 
 ## Not built
 
-* **A message thread.** A rejected booking sends no letter because the customer
-  has nowhere to answer from. This is that missing place.
+* **A message thread.** A declined customer is emailed the venue's phone and
+  email, because there is nowhere in IcyPlay to answer from. This is that
+  missing place.
 * **The facility owner's own console.** Everything built is the platform admin
   acting on an owner's behalf. The `RoleGuard` and `app/(facility-owner)` route
   group are not built.

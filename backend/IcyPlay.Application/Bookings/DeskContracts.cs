@@ -252,6 +252,8 @@ public enum DeskFailure
     /// stretches: a diary draws every hour and a report adds them up.
     /// </summary>
     ReportWindowTooWide,
+    /// <summary>More than the takings report answers for: five years.</summary>
+    TakingsWindowTooWide,
     /// <summary>A range that ends before it starts. Usually a year typed wrong.</summary>
     WindowBackwards,
     /// <summary>Not a grain anybody can ask a report for.</summary>

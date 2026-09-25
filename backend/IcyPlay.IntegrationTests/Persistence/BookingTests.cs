@@ -1199,6 +1199,130 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         }
     }
 
+    /// <summary>
+    /// Takings count each payment on the day it was accepted: the booking's on
+    /// the day it was confirmed, the upgrade's balance on the day it was
+    /// approved, with the platform fee inside the payment set apart — and the
+    /// booking's rental is what was paid, not what its hours cost now.
+    /// </summary>
+    [Fact]
+    public async Task TakingsAsync_ShouldCountWhatWasPaidAndWhatTheUpgradeAdded()
+    {
+        // Arrange: a booking confirmed at five hundred, then upgraded onto a
+        // nine-hundred court with the four hundred paid and approved.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Takings Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+
+        await sut.RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer, Reason: MoveReason.DifferentCourt),
+            CancellationToken.None);
+        await sut.AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        var upgradeId = await context.BookingUpgradeRequests
+            .Where(row => row.BookingId == booking)
+            .Select(row => row.Id)
+            .SingleAsync();
+        var ownerUserId = await OwnerUserIdAsync(context, floor);
+        context.ChangeTracker.Clear();
+
+        var desk = CreateDeskService(context);
+        await desk.ApproveUpgradeAsync(
+            ownerUserId,
+            upgradeId,
+            new AuditActor(ownerUserId, UserRoleName.FacilityOwner),
+            CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var paid = await context.Bookings.AsNoTracking()
+            .Where(row => row.Id == booking)
+            .Select(row => row.PaidTotal)
+            .SingleAsync();
+        var newCourt = await context.BookableCourts.AsNoTracking()
+            .Where(unit => unit.Id == dearer)
+            .Select(unit => unit.CourtId)
+            .SingleAsync();
+
+        // Act
+        var report = await desk.TakingsAsync(
+            ownerUserId,
+            new HoursQuery(Today, Today, HoursGrain.Day),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            report.Succeeded.Should().BeTrue();
+            var day = report.Value!.Periods.Should().ContainSingle().Subject;
+
+            day.Bookings.Should().Be(1);
+            day.Hours.Should().Be(1);
+            day.Rental.Should().Be(500m);
+            day.Upgrades.Should().Be(400m);
+            day.UpgradeCount.Should().Be(1);
+            day.PlatformFee.Should().BePositive();
+
+            // Everything the customer handed over, and nothing twice.
+            (day.Rental + day.Upgrades + day.PlatformFee).Should().Be(paid);
+
+            // Counted to the court it is played on now.
+            report.Value.Rows.Should().ContainSingle()
+                .Which.CourtId.Should().Be(newCourt);
+        }
+    }
+
+    /// <summary>
+    /// The longer cuts a year-on-year report needs: calendar quarters, halves
+    /// and years, clamped to the range, and a range of up to five years.
+    /// </summary>
+    [Fact]
+    public async Task TakingsAsync_ShouldCutByQuarterHalfAndYear()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Takings Grain Courts");
+        var ownerUserId = await OwnerUserIdAsync(context, floor);
+        var desk = CreateDeskService(context);
+
+        async Task<IEnumerable<(DateOnly, DateOnly)>> Periods(DateOnly from, DateOnly to, string grain) =>
+            (await desk.TakingsAsync(ownerUserId, new HoursQuery(from, to, grain), CancellationToken.None))
+                .Value!.Periods.Select(period => (period.Starts, period.Ends));
+
+        // Act
+        var quarters = await Periods(new(2026, 8, 15), new(2026, 12, 31), HoursGrain.Quarter);
+        var halves = await Periods(new(2026, 1, 1), new(2026, 12, 31), HoursGrain.Half);
+        var years = await Periods(new(2024, 6, 1), new(2026, 3, 31), HoursGrain.Year);
+        var tooWide = await desk.TakingsAsync(
+            ownerUserId,
+            new HoursQuery(new(2020, 1, 1), new(2026, 1, 1), HoursGrain.Year),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            quarters.Should().Equal(
+                (new DateOnly(2026, 8, 15), new DateOnly(2026, 9, 30)),
+                (new DateOnly(2026, 10, 1), new DateOnly(2026, 12, 31)));
+            halves.Should().Equal(
+                (new DateOnly(2026, 1, 1), new DateOnly(2026, 6, 30)),
+                (new DateOnly(2026, 7, 1), new DateOnly(2026, 12, 31)));
+            years.Should().Equal(
+                (new DateOnly(2024, 6, 1), new DateOnly(2024, 12, 31)),
+                (new DateOnly(2025, 1, 1), new DateOnly(2025, 12, 31)),
+                (new DateOnly(2026, 1, 1), new DateOnly(2026, 3, 31)));
+            tooWide.Failure.Should().Be(DeskFailure.TakingsWindowTooWide);
+        }
+    }
+
     [Fact]
     public async Task MovesAsync_ShouldRefuseSomebodyWhoDoesNotWorkTheVenue()
     {
@@ -3106,6 +3230,8 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         public Task PaymentSubmittedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
+
+        public Task BookingDeclinedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
         public Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct) =>
             Task.CompletedTask;

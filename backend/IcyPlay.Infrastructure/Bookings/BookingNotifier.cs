@@ -134,6 +134,45 @@ public sealed class BookingNotifier(
             ct);
     }
 
+    public async Task BookingDeclinedAsync(Booking booking, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(booking);
+
+        var parties = await PartiesAsync(booking.Id, ct);
+
+        if (parties is null || parties.CustomerEmail.Length == 0)
+        {
+            return;
+        }
+
+        var days = await DaysAsync(booking.Id, ct);
+
+        await SendAsync(
+            new TransactionalEmailMessage(
+                EmailTemplateKey.BookingDeclined,
+                parties.CustomerEmail,
+                parties.CustomerName,
+                new Dictionary<string, object>
+                {
+                    ["recipient_name"] = parties.CustomerName,
+                    ["court_name"] = booking.CourtName,
+                    ["facility_name"] = booking.FacilityName,
+                    ["sport_name"] = booking.SportName,
+                    ["booking_dates"] = Dates(days),
+                    ["booked_hours"] = booking.BookedHours,
+                    ["total_amount"] = Money(booking.Total),
+                    // The one sentence the booking page shows too: the reason
+                    // the desk picked, and its note.
+                    ["decline_reason"] = booking.CancellationReason ?? "The venue could not accept the payment.",
+                    ["venue_contact"] = parties.VenueContact,
+                    ["booking_url"] = BookingUrl(booking.Id),
+                    ["support_email"] = Settings.SupportEmail,
+                    ["current_year"] = timeProvider.GetUtcNow().Year
+                }),
+            booking.Id,
+            ct);
+    }
+
     public async Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(upgrade);
@@ -303,7 +342,9 @@ public sealed class BookingNotifier(
                     .Select(user => new { user.Email, user.FullName })
                     .FirstOrDefault(),
                 Owner = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner,
-                Administrator = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner.User
+                Administrator = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner.User,
+                candidate.Booking.BookableCourt.Court.Facility.ContactPhone,
+                candidate.Booking.BookableCourt.Court.Facility.ContactEmail
             })
             .SingleOrDefaultAsync(ct);
 
@@ -318,7 +359,8 @@ public sealed class BookingNotifier(
                     row.Customer?.Email ?? string.Empty,
                     row.Owner.BusinessName,
                     row.Administrator.FullName,
-                    row.Administrator.Email));
+                    row.Administrator.Email,
+                    VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email)));
     }
 
     private sealed record AboutUpgrade(
@@ -385,7 +427,9 @@ public sealed class BookingNotifier(
                     .Select(user => new { user.Email, user.FullName })
                     .FirstOrDefault(),
                 Owner = candidate.BookableCourt.Court.Facility.FacilityOwner,
-                Administrator = candidate.BookableCourt.Court.Facility.FacilityOwner.User
+                Administrator = candidate.BookableCourt.Court.Facility.FacilityOwner.User,
+                candidate.BookableCourt.Court.Facility.ContactPhone,
+                candidate.BookableCourt.Court.Facility.ContactEmail
             })
             .SingleOrDefaultAsync(ct);
 
@@ -396,7 +440,22 @@ public sealed class BookingNotifier(
                 row.Customer?.Email ?? string.Empty,
                 row.Owner.BusinessName,
                 row.Administrator.FullName,
-                row.Administrator.Email);
+                row.Administrator.Email,
+                VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email));
+    }
+
+    /// <summary>
+    /// How a customer reaches the venue: the phone and email it published, or
+    /// the owner's own when it published neither — a letter that says "speak
+    /// to the venue" has to say how.
+    /// </summary>
+    private static string VenueContact(string? phone, string? email, string ownerEmail)
+    {
+        var published = new[] { phone, email }
+            .Where(part => !string.IsNullOrWhiteSpace(part))
+            .ToArray();
+
+        return published.Length > 0 ? string.Join(" · ", published) : ownerEmail;
     }
 
     private sealed record Parties(
@@ -404,7 +463,8 @@ public sealed class BookingNotifier(
         string CustomerEmail,
         string BusinessName,
         string AdministratorName,
-        string AdministratorEmail);
+        string AdministratorEmail,
+        string VenueContact);
 
     /// <summary>
     /// Money as a person reads it. Formatted here rather than in the template

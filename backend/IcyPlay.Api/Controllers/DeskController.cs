@@ -251,6 +251,38 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// What customers paid the venue, period by period and court by court: a
+    /// booking's payment on the day the desk confirmed it, an upgrade's balance
+    /// on the day the desk approved it, and the platform fee inside it set
+    /// apart.
+    ///
+    /// Open to attendants for now. Who may see money is a permission still to
+    /// be built, and until then the desk shows it to whoever works it.
+    /// </summary>
+    [HttpGet("reports/takings")]
+    public async Task<IActionResult> Takings(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.TakingsAsync(
+            userId,
+            new HoursQuery(from, to, grain, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<TakingsReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// How many payments the desk turned down, against how many it checked, and
     /// the reasons it gave — with the refusals themselves, newest first.
     ///
@@ -598,6 +630,10 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for a year or less."),
+            DeskFailure.TakingsWindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for five years or less."),
             DeskFailure.WindowBackwards => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
