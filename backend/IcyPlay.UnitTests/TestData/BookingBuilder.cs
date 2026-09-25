@@ -114,7 +114,7 @@ public sealed class BookingBuilder
                 booking.Confirm(createdAt);
                 break;
             case BookingStatus.Rejected:
-                booking.Reject("Receipt did not match.", createdAt);
+                booking.Reject(RejectReason.WrongAmount, "Receipt did not match.", Guid.NewGuid(), createdAt);
                 break;
             case BookingStatus.Cancelled:
                 booking.Cancel("Changed their mind.", createdAt);

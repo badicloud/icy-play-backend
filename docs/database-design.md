@@ -675,7 +675,10 @@ What was agreed, as it was agreed. See [booking.md](booking.md).
 | ReceiptUrl | nvarchar(1000) | Cloudinary `secure_url`. |
 | ReceiptUploadedAt | datetimeoffset | **The clock stops here**, not at submit. |
 | SubmittedForVerificationAt | datetimeoffset | |
-| CancellationReason | nvarchar(500) | |
+| CancellationReason | nvarchar(500) | The one sentence a person reads for why it ended. On a refusal, the reason and the note together. |
+| RejectionReason | nvarchar(30) | On a refusal, the `RejectReason` picked. Null on anything else, and on refusals from before the list. |
+| RejectionNote | nvarchar(200) | The desk's note on a refusal, if any. |
+| RejectedByUserId | uniqueidentifier | Who at the venue refused it. Backfilled from the audit trail by `RecordWhyTheDeskDeclined`. |
 | MoveCount | int | How many times the customer has moved these hours. Capped by the venue's `MoveLimit`. A move the venue asked for is not counted. |
 | MovedAt | datetimeoffset | When the last of those happened. |
 | PaidTotal | decimal(10,2) | What the customer has actually handed over, across the first payment and any upgrade since. |
@@ -762,7 +765,7 @@ must not be shown the total of a session mostly behind them.
 ### BookingMoves
 
 One move that went through: a free one the moment it was asked for, an upgrade
-the moment the desk approved it. What the *Bookings moved* report counts.
+the moment the desk approved it. What the *Moved Bookings* report counts.
 
 | Column | Type | Notes |
 | --- | --- | --- |

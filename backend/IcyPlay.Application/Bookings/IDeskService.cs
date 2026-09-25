@@ -225,10 +225,23 @@ public interface IDeskService
         AuditActor actor,
         CancellationToken ct);
 
+    /// <summary>
+    /// Turns a payment down, with a reason from the list. The hours go back on
+    /// sale, and the reason is what the customer reads on their booking.
+    /// </summary>
     Task<DeskResult<DeskBooking>> RejectAsync(
         Guid userId,
         Guid bookingId,
-        string? reason,
+        RejectBookingRequest request,
         AuditActor actor,
+        CancellationToken ct);
+
+    /// <summary>
+    /// How many payments the desk turned down in a range, period by period,
+    /// against how many it checked, and why.
+    /// </summary>
+    Task<DeskResult<DeclinesReport>> DeclinesAsync(
+        Guid userId,
+        HoursQuery query,
         CancellationToken ct);
 }

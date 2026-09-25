@@ -157,6 +157,29 @@ public sealed class Booking : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// On a refusal, the <see cref="RejectReason"/> the desk picked — what the
+    /// declined-bookings report counts. Null on anything else, and on a
+    /// refusal from before the desk picked from a list, whose words are still
+    /// in <see cref="CancellationReason"/>.
+    /// </summary>
+    public string? RejectionReason
+    {
+        get; private set;
+    }
+
+    /// <summary>The desk's few words on a refusal, if it wrote any.</summary>
+    public string? RejectionNote
+    {
+        get; private set;
+    }
+
+    /// <summary>Who at the venue turned the payment down.</summary>
+    public Guid? RejectedByUserId
+    {
+        get; private set;
+    }
+
     /// <summary>Hours booked. One per slot, since a slot is an hour of court time.</summary>
     public int BookedHours => Slots.Count;
 
@@ -299,11 +322,14 @@ public sealed class Booking : Entity
     /// The moment lands on <see cref="CancelledAt"/>, which is when the booking
     /// stopped standing whichever way it stopped.
     /// </summary>
-    public void Reject(string? reason, DateTimeOffset now)
+    public void Reject(string reason, string? note, Guid rejectedByUserId, DateTimeOffset now)
     {
         Status = BookingStatus.Rejected;
         CancelledAt = now;
-        CancellationReason = reason;
+        RejectionReason = reason;
+        RejectionNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        RejectedByUserId = rejectedByUserId;
+        CancellationReason = RejectReason.Sentence(reason, note);
         UpdatedAt = now;
     }
 

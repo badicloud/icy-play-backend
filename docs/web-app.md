@@ -309,7 +309,7 @@ reports it.
 the top, then the oldest last sale. A court with a payment waiting on the desk
 says so, so it is not written off while somebody's money is sitting on it.
 
-**Bookings moved** — `/desk/reports/moves`. How many bookings customers moved
+**Moved Bookings** — `/desk/reports/moves`. How many bookings customers moved
 and why, with the same filter bar, **By**, and Chart · Table. **Show** is *All
 moves* — every move, with paid upgrades as a dashed line inside it — or *By
 reason*, one line per reason in a fixed colour; *Not asked* appears only when
@@ -318,6 +318,18 @@ upgrades and the top reason; under the chart, the moves themselves, newest
 first, with the customer, from → to, and the reason and note. The day only, not
 the time: the day is the venue's and comes from the server, and a time worked
 out in the browser would be the browser's clock.
+
+**Declined Bookings** — `/desk/reports/declines`. The same shape. *All declines*
+draws the refusals against a dashed line of every payment the desk checked, so
+the gap is what it confirmed; *By reason* is one line per reason, with *Not
+categorised* only when the range has a refusal from before the list. Tiles for
+declined, the share of payments checked, and the top reason; under the chart,
+each refusal with the customer, court and hours, amount, reason and note, and
+who declined it. The chart is `CountChart`, shared with Moved Bookings.
+
+**Turning a payment down** asks for a reason through `ReasonPicker` — the same
+component the customer's move uses, so every place the platform asks why looks
+and behaves alike.
 
 ## The admin console
 

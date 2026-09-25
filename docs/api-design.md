@@ -2078,7 +2078,36 @@ buckets. That is deliberate and tested: the line and the percentage sit on the
 same screen, and a venue reading them together is exactly who would find them
 disagreeing. Counting the days twice is how that happens.
 
-### Bookings moved
+### Declined Bookings
+
+```http
+GET /api/v1/desk/reports/declines?from=&to=&grain=Day&facilityId=
+```
+
+Roles: FacilityOwner, FacilityAttendant. **The amounts are in it for attendants
+too, for now** — it is the desk's own work being counted.
+
+**How many payments the desk turned down, against how many it checked, and
+why.** Each counts on **the day it was answered, on the venue's clock**: a
+refusal on the day it was refused, a confirmation on the day it was confirmed.
+The two together are `checked`, because both only happen to a payment that was
+waiting — so the share of refusals is a share of every answer the desk gave.
+
+* `periods` — every period, zero included, each with `declined`, `checked` and
+  `reasons` (every reason on the list, zero included, then `null` for the
+  refusals from before the list).
+* `reasons` — the range's totals, most given first, leaving out a reason nobody
+  gave.
+* `total`, `checked` — the whole range.
+* `declines` — the refusals, newest first, **at most 200**: `declinedOn`, the
+  customer, venue, court, `kind`, the dates and first-to-last hour, `hours`,
+  `amount` (court rental plus the platform fee — what the customer sent),
+  `reason`, `note` (on an old refusal, all the desk wrote), `declinedByName`
+  and `declinedByOwner`.
+
+Upgrades the desk declined are not in it yet.
+
+### Moved Bookings
 
 ```http
 GET /api/v1/desk/reports/moves?from=&to=&grain=Day&facilityId=
@@ -2451,7 +2480,11 @@ first, and anything with no receipt on it. It emails the customer their
 confirmation — the one letter that reads as one — after the save, best effort: a
 mail provider being down must not undo a decision somebody has already made.
 
-`reject` takes a reason and puts the hours straight back on sale. Its own
+`reject` takes `{ "reason": "WrongAmount", "note": "Paid ₱4,800 only" }` — a
+reason from the list in [booking.md](booking.md#status), required, and a note
+that is optional except on `Other` (400s: `RejectReasonRequired`,
+`RejectNoteRequired`, `RejectNoteTooLong`) — and puts the hours straight back on
+sale. Its own
 status rather than a cancellation: a customer changing their mind and a receipt
 that did not add up read differently in a venue's history. **No letter goes
 out** — a rejection needs somewhere for the customer to answer from, and that is

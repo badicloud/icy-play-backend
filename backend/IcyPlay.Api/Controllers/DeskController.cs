@@ -208,7 +208,12 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
             return Unauthorized();
         }
 
-        var result = await desk.RejectAsync(userId, bookingId, request?.Reason, actor, ct);
+        var result = await desk.RejectAsync(
+            userId,
+            bookingId,
+            request ?? new RejectBookingRequest(null),
+            actor,
+            ct);
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<DeskBooking>(result.Value!))
@@ -242,6 +247,37 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<HoursOverTime>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// How many payments the desk turned down, against how many it checked, and
+    /// the reasons it gave — with the refusals themselves, newest first.
+    ///
+    /// The amounts are in it for attendants as well as owners, for now: it is
+    /// the desk's own work being counted, and what was sent is on the receipt
+    /// they already looked at.
+    /// </summary>
+    [HttpGet("reports/declines")]
+    public async Task<IActionResult> Declines(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.DeclinesAsync(
+            userId,
+            new HoursQuery(from, to, grain, facilityId),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeclinesReport>(result.Value!))
             : Failure(result.Failure);
     }
 
@@ -570,6 +606,18 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for it by day, by week or by month."),
+            DeskFailure.RejectReasonRequired => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Pick why you are turning this booking down."),
+            DeskFailure.RejectNoteRequired => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Say a few words about what was wrong."),
+            DeskFailure.RejectNoteTooLong => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Keep the note to 200 characters or fewer."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 

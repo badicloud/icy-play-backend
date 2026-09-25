@@ -153,7 +153,11 @@ public sealed record UpdateDeskSettingsRequest(
     int PartialBookingExpiryMinutes,
     int MoveLimit);
 
-public sealed record RejectBookingRequest(string? Reason);
+/// <summary>
+/// Turning a payment down: a reason from <see cref="Domain.Bookings.RejectReason"/>,
+/// and a note that is optional except on Other.
+/// </summary>
+public sealed record RejectBookingRequest(string? Reason, string? Note = null);
 
 /// <summary>
 /// One upgrade as the venue's desk sees it.
@@ -252,6 +256,12 @@ public enum DeskFailure
     WindowBackwards,
     /// <summary>Not a grain anybody can ask a report for.</summary>
     UnknownGrain,
+    /// <summary>A refusal with no reason from the list.</summary>
+    RejectReasonRequired,
+    /// <summary>Other, with nothing written to say what.</summary>
+    RejectNoteRequired,
+    /// <summary>A note past <see cref="Domain.Bookings.RejectReason.NoteLimit"/>.</summary>
+    RejectNoteTooLong,
     /// <summary>No upgrade of that id at a venue this person works.</summary>
     UpgradeNotFound,
     /// <summary>Already decided. A second press must not undo the first.</summary>
@@ -282,6 +292,7 @@ public sealed class RejectBookingRequestValidator : AbstractValidator<RejectBook
 {
     public RejectBookingRequestValidator()
     {
-        RuleFor(x => x.Reason).MaximumLength(500);
+        RuleFor(x => x.Reason).MaximumLength(30);
+        RuleFor(x => x.Note).MaximumLength(500);
     }
 }

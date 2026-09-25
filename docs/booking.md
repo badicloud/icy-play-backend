@@ -186,6 +186,20 @@ mind and a receipt that did not add up are different things, and a venue reading
 its own history has to be able to tell them apart. The court goes back on sale
 either way, because neither still holds it.
 
+**A rejection takes a reason from a list** (`RejectReason`):
+`PaymentNotReceived`, `WrongAmount`, `ReceiptUnclear`, `CourtNotAvailable`,
+`Other`. Picking one is required; a note is optional, up to 200 characters,
+except on `Other`, which needs one. The refusals are `RejectReasonRequired`,
+`RejectNoteRequired` and `RejectNoteTooLong`. A list for the same reason moves
+have one: the desk's *Declined Bookings* report counts the answers.
+
+The booking keeps the pick (`RejectionReason`), the note (`RejectionNote`) and
+who said no (`RejectedByUserId`). `CancellationReason` holds the one sentence a
+person reads — "Wrong amount — paid ₱4,800 only" — which is what the customer
+sees on their booking and what the history shows, so every screen that already
+read it carries on unchanged. Rejections from before the list have only the
+words the desk typed, and the report shows them as **not categorised**.
+
 ---
 
 ## Paying for it
@@ -283,7 +297,7 @@ The reason goes to three places:
 * **The booking's history**, at the end of the move's line ("Reason: Weather."),
   which the customer and the desk both read.
 * **`BookingMoves`**, one row per move that went through, which the desk's
-  *Bookings moved* report counts.
+  *Moved Bookings* report counts.
 * On an upgrade, **the request itself**, because it is asked when the upgrade is
   and only counted when the desk approves it — and the desk approving it is not
   who knows why.

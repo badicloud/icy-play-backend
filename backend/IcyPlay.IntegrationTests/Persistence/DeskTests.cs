@@ -33,6 +33,9 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         new(2026, 9, 14, 9, 0, 0, TimeSpan.Zero);
 
     private static readonly DateOnly Tuesday = new(2026, 9, 15);
+
+    /// <summary>The venue's today. 09:00 UTC is 5pm in Manila.</summary>
+    private static readonly DateOnly Today = new(2026, 9, 14);
     private static readonly TimeOnly SevenAm = new(7, 0);
     private static readonly TimeOnly EightAm = new(8, 0);
 
@@ -219,7 +222,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         var result = await sut.RejectAsync(
             venue.OwnerUserId,
             booking,
-            "The receipt is for someone else's booking",
+            new RejectBookingRequest(RejectReason.ReceiptUnclear, "  The receipt is for someone else's booking "),
             Desk(venue.OwnerUserId),
             CancellationToken.None);
 
@@ -231,7 +234,12 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         {
             result.Succeeded.Should().BeTrue();
             stored.Status.Should().Be(BookingStatus.Rejected);
-            stored.CancellationReason.Should().Be("The receipt is for someone else's booking");
+            // Picked from the list for the report, and one sentence for the
+            // customer and the history, which already read this field.
+            stored.RejectionReason.Should().Be(RejectReason.ReceiptUnclear);
+            stored.RejectionNote.Should().Be("The receipt is for someone else's booking");
+            stored.RejectedByUserId.Should().Be(venue.OwnerUserId);
+            stored.CancellationReason.Should().Be("Receipt unclear — The receipt is for someone else's booking");
             // Its own state, not a cancellation: a customer changing their mind
             // and a receipt that did not add up read differently in a history.
             stored.Status.Should().NotBe(BookingStatus.Cancelled);
@@ -239,6 +247,125 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             free.Succeeded.Should().BeTrue();
             // No letter until there is somewhere for the customer to answer.
             letters.Confirmed.Should().BeEmpty();
+        }
+    }
+
+    /// <summary>
+    /// A refusal is not made without a reason from the list, and Other is not
+    /// a way of saying nothing — the report counts these.
+    /// </summary>
+    [Theory]
+    [InlineData(null, 0, DeskFailure.RejectReasonRequired)]
+    [InlineData("It was wrong", 0, DeskFailure.RejectReasonRequired)]
+    [InlineData(RejectReason.Other, 0, DeskFailure.RejectNoteRequired)]
+    [InlineData(RejectReason.WrongAmount, RejectReason.NoteLimit + 1, DeskFailure.RejectNoteTooLong)]
+    public async Task RejectAsync_ShouldAskWhyBeforeTurningItDown(
+        string? reason,
+        int noteLength,
+        DeskFailure expected)
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, $"Reject Reason Courts {(int)expected}");
+        var booking = await SubmittedAsync(context, venue, SevenAm);
+        var sut = CreateService(context);
+
+        // Act
+        var result = await sut.RejectAsync(
+            venue.OwnerUserId,
+            booking,
+            new RejectBookingRequest(reason, noteLength == 0 ? "  " : new string('x', noteLength)),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+
+        // Assert: refused, and the payment is still waiting.
+        context.ChangeTracker.Clear();
+        var stored = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking);
+
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(expected);
+            stored.Status.Should().Be(BookingStatus.PendingVerification);
+        }
+    }
+
+    /// <summary>
+    /// The declines report counts refusals on the venue's day, against every
+    /// payment the desk answered, and shows an old typed refusal as not
+    /// categorised with the words the desk wrote.
+    /// </summary>
+    [Fact]
+    public async Task DeclinesAsync_ShouldCountRefusalsAgainstWhatTheDeskChecked()
+    {
+        // Arrange: one confirmed, one refused from the list, and one refused
+        // before the list existed.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Declines Report Courts");
+        var confirmed = await SubmittedAsync(context, venue, SevenAm);
+        var refused = await SubmittedAsync(context, venue, EightAm);
+        var typed = await SubmittedAsync(context, venue, new TimeOnly(9, 0));
+        var sut = CreateService(context);
+
+        await sut.ConfirmAsync(venue.OwnerUserId, confirmed, Desk(venue.OwnerUserId), CancellationToken.None);
+        await sut.RejectAsync(
+            venue.OwnerUserId,
+            refused,
+            new RejectBookingRequest(RejectReason.PaymentNotReceived),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+        await context.Bookings
+            .Where(row => row.Id == typed)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(row => row.Status, BookingStatus.Rejected)
+                .SetProperty(row => row.CancelledAt, Now)
+                .SetProperty(row => row.CancellationReason, "No money came in"));
+
+        // Somebody else's venue, refused the same day. Not this desk's count.
+        var elsewhere = await VenueAsync(context, "Declines Report Elsewhere");
+        var theirs = await SubmittedAsync(context, elsewhere, SevenAm);
+        await sut.RejectAsync(
+            elsewhere.OwnerUserId,
+            theirs,
+            new RejectBookingRequest(RejectReason.WrongAmount),
+            Desk(elsewhere.OwnerUserId),
+            CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        // Act
+        var report = await sut.DeclinesAsync(
+            venue.OwnerUserId,
+            new HoursQuery(Today, Today, HoursGrain.Day),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            report.Succeeded.Should().BeTrue();
+            var declines = report.Value!;
+
+            declines.Total.Should().Be(2);
+            declines.Checked.Should().Be(3);
+            declines.Periods.Should().ContainSingle()
+                .Which.Should().Match<DeclinesPeriod>(period => period.Declined == 2 && period.Checked == 3);
+            declines.Periods.Single().Reasons.Select(count => count.Reason).Should().Equal(
+                [.. RejectReason.All, null]);
+            declines.Reasons.Should().BeEquivalentTo(
+                [new ReasonCount(RejectReason.PaymentNotReceived, 1), new ReasonCount(null, 1)]);
+
+            var picked = declines.Declines.Single(row => row.BookingId == refused);
+            picked.Reason.Should().Be(RejectReason.PaymentNotReceived);
+            picked.Note.Should().BeNull();
+            picked.DeclinedOn.Should().Be(Today);
+            picked.DeclinedByOwner.Should().BeTrue();
+            picked.DeclinedByName.Should().NotBeNullOrEmpty();
+            picked.Hours.Should().Be(1);
+            picked.StartsAt.Should().Be(EightAm);
+            picked.Amount.Should().BePositive();
+
+            var old = declines.Declines.Single(row => row.BookingId == typed);
+            old.Reason.Should().BeNull();
+            old.Note.Should().Be("No money came in");
+            old.DeclinedByName.Should().BeNull();
         }
     }
 
@@ -467,7 +594,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         await sut.RejectAsync(
             venue.OwnerUserId,
             turnedDown,
-            "Wrong amount",
+            new RejectBookingRequest(RejectReason.WrongAmount),
             Desk(venue.OwnerUserId),
             CancellationToken.None);
 
@@ -490,7 +617,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             everything.Value!.Items.Select(booking => booking.Id)
                 .Should().BeEquivalentTo([standing, turnedDown]);
             rejected.Value!.Items.Should().ContainSingle()
-                .Which.DecisionReason.Should().Be("Wrong amount");
+                .Which.DecisionReason.Should().Be("Wrong amount.");
             // Grouped by the part of the floor it was sold on, so the console
             // can file it under "Basketball" without asking again.
             everything.Value!.Items.Should().AllSatisfy(booking =>

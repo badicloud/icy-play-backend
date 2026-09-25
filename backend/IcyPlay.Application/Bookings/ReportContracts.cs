@@ -289,6 +289,68 @@ public sealed record MovesPeriod(
 /// </summary>
 public sealed record ReasonCount(string? Reason, int Count);
 
+/// <summary>
+/// How many payments the desk turned down, against how many it checked, and why.
+///
+/// A payment counts on the day it was answered, on the venue's clock: a refusal
+/// on the day it was refused, a confirmation on the day it was confirmed. The
+/// two together are what the desk checked that day.
+/// </summary>
+public sealed record DeclinesReport(
+    DateOnly From,
+    DateOnly To,
+    string Grain,
+    /// <summary>Every period in the range, zero included.</summary>
+    IReadOnlyCollection<DeclinesPeriod> Periods,
+    /// <summary>
+    /// The range's reasons, most given first; a reason nobody gave is left out.
+    /// Null counts the refusals from before the desk picked from a list.
+    /// </summary>
+    IReadOnlyCollection<ReasonCount> Reasons,
+    /// <summary>Every refusal in the range, not only the ones listed below.</summary>
+    int Total,
+    /// <summary>Payments answered in the range: refused plus confirmed.</summary>
+    int Checked,
+    /// <summary>The refusals themselves, newest first, up to <see cref="DeclinesReport.Listed"/>.</summary>
+    IReadOnlyCollection<DeclinedBooking> Declines)
+{
+    public const int Listed = 200;
+}
+
+public sealed record DeclinesPeriod(
+    DateOnly Starts,
+    DateOnly Ends,
+    int Declined,
+    /// <summary>Refused plus confirmed in the period.</summary>
+    int Checked,
+    /// <summary>Every reason on the list, zero included, in the list's own order; then the uncategorised.</summary>
+    IReadOnlyCollection<ReasonCount> Reasons);
+
+public sealed record DeclinedBooking(
+    Guid BookingId,
+    DateTimeOffset DeclinedAt,
+    /// <summary>The day it was refused, on the venue's clock — the day it is counted in.</summary>
+    DateOnly DeclinedOn,
+    string CustomerName,
+    string FacilityName,
+    string CourtName,
+    string Kind,
+    DateOnly StartDate,
+    DateOnly EndDate,
+    /// <summary>The first hour's start and the last hour's end.</summary>
+    TimeOnly? StartsAt,
+    TimeOnly? EndsAt,
+    int Hours,
+    /// <summary>What the customer sent to pay for it: court rental and the platform's fee.</summary>
+    decimal Amount,
+    /// <summary>A <c>RejectReason</c>, or null on a refusal from before the list.</summary>
+    string? Reason,
+    /// <summary>The desk's words: the note, or on an old refusal, all it wrote.</summary>
+    string? Note,
+    /// <summary>Who turned it down, and whether that was the owner. Null where nobody was recorded.</summary>
+    string? DeclinedByName,
+    bool DeclinedByOwner);
+
 public sealed record MovedBooking(
     Guid BookingId,
     DateTimeOffset MovedAt,

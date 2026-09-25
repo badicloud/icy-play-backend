@@ -480,10 +480,12 @@ public sealed class DeskService(
     public async Task<DeskResult<DeskBooking>> RejectAsync(
         Guid userId,
         Guid bookingId,
-        string? reason,
+        RejectBookingRequest request,
         AuditActor actor,
         CancellationToken ct)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
         var booking = await ForDeskAsync(userId, bookingId, ct);
 
         if (booking is null)
@@ -496,8 +498,13 @@ public sealed class DeskService(
             return DeskResult<DeskBooking>.Fail(DeskFailure.NotWaiting);
         }
 
-        booking.Reject(reason, timeProvider.GetUtcNow());
-        Record(actor, AuditAction.BookingRejected, booking, reason);
+        if (CheckReason(request) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<DeskBooking>.Fail(wrong);
+        }
+
+        booking.Reject(request.Reason!, request.Note, userId, timeProvider.GetUtcNow());
+        Record(actor, AuditAction.BookingRejected, booking, booking.CancellationReason);
         await db.SaveChangesAsync(ct);
 
         // No letter yet. A rejection needs somewhere for the customer to answer
@@ -554,6 +561,51 @@ public sealed class DeskService(
         }
 
         return DeskResult<MovesReport>.Success(await Moves.ReadAsync(db, scoped, query, ct));
+    }
+
+    /// <summary>
+    /// Whether the desk said why in a way that can be counted: a reason from
+    /// the list, a few words when it is Other, and not a letter.
+    /// </summary>
+    private static DeskFailure CheckReason(RejectBookingRequest request)
+    {
+        if (!RejectReason.IsSupported(request.Reason))
+        {
+            return DeskFailure.RejectReasonRequired;
+        }
+
+        var note = request.Note?.Trim();
+
+        if (request.Reason == RejectReason.Other && string.IsNullOrEmpty(note))
+        {
+            return DeskFailure.RejectNoteRequired;
+        }
+
+        return note is { Length: > RejectReason.NoteLimit }
+            ? DeskFailure.RejectNoteTooLong
+            : DeskFailure.None;
+    }
+
+    public async Task<DeskResult<DeclinesReport>> DeclinesAsync(
+        Guid userId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (CheckRange(query) is var wrong and not DeskFailure.None)
+        {
+            return DeskResult<DeclinesReport>.Fail(wrong);
+        }
+
+        var scoped = await ScopeAsync(userId, query.FacilityId, ct);
+
+        if (scoped is null)
+        {
+            return DeskResult<DeclinesReport>.Fail(DeskFailure.NotAttended);
+        }
+
+        return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
     }
 
     /// <summary>The same limits on every over-time report: a known grain, forwards, and at most a year.</summary>

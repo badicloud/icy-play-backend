@@ -702,6 +702,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.PlatformHourlyRate).HasColumnType("decimal(10,2)");
             entity.Property(x => x.PaidTotal).HasColumnType("decimal(10,2)");
             entity.Property(x => x.CancellationReason).HasMaxLength(500);
+            entity.Property(x => x.RejectionReason).HasMaxLength(30);
+            entity.Property(x => x.RejectionNote).HasMaxLength(RejectReason.NoteLimit);
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
             // What a venue's console asks for: the bookings touching a stretch
             // of days.
