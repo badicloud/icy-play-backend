@@ -427,6 +427,22 @@ tell whether the feature is missing or their court is. The customer side of
 booking is built; what is missing here is the venue's view of it, and the
 attendant's queue for verifying payments.
 
+### Reports — `/admin/reports`
+
+The venue desk's reports, for the platform. The **same side menu** as the
+desk's (`ReportsNav variant="admin"`), over the same list in `reports.ts`: a
+report the admin does not have yet is greyed, and each one arrives by getting
+an `adminHref`.
+
+The landing page has a **Facility owner** filter and, once an owner is picked, a
+**Venue** filter; both live in the address (`?owner=&venue=`) so the reports
+built on it can carry them. Under them, **Right now** — the desk's five tiles
+(`SnapshotTiles`, shared with the desk's own landing) for the whole platform,
+or the owner or venue picked — and then **Per facility owner**, a row each with
+the same five numbers small and an *Open reports* link that narrows the page to
+them. The rows go when an owner is picked, because a list of one is the row
+above it.
+
 ### Other admin pages
 
 | Page | Notes |

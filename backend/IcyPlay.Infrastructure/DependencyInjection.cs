@@ -77,6 +77,7 @@ public static class DependencyInjection
         services.AddScoped<IActivityCatalog, ActivityCatalog>();
         services.AddScoped<IBookingService, BookingService>();
         services.AddScoped<IDeskService, DeskService>();
+        services.AddScoped<IPlatformReportService, PlatformReportService>();
         services.AddScoped<IFacilityAttendantService, FacilityAttendantService>();
         services.AddScoped<IBookingNotifier, BookingNotifier>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>

@@ -2347,6 +2347,31 @@ day somebody let a court keep its own hours.
 Refusals: `NotAttended` for a venue they do not work, `WindowBackwards`, and
 `ReportWindowTooWide` past a year.
 
+### Admin reports
+
+```http
+GET /api/v1/admin/reports/owners
+GET /api/v1/admin/reports/snapshot?facilityOwnerId=&facilityId=
+```
+
+Role: PlatformAdmin. **The venue desk's reports, for the platform**: across
+every venue, one facility owner's, or one venue. Every figure comes from the
+same code the desk runs — each report is worked out over a list of venues, and
+only who decides the list differs (`IPlatformReportService`). Two copies of
+"how busy is a court" would be two answers to the question the owner and the
+platform most need to agree on.
+
+* `owners` — every facility owner and their venues, for the filters.
+* `snapshot` — the desk's five numbers (courts, bookable courts, available,
+  booked, under maintenance) across the venues in scope as `total`, then
+  `perOwner`, plus how many owners and venues are in scope. An owner with no
+  venue is listed with zeros.
+
+An owner or venue that does not exist, or a venue that is not the owner's, is a
+404 (`OwnerNotFound`, `VenueNotFound`) rather than a page of zeros an admin
+would believe. The desk's other reports come to the admin one at a time, under
+`/admin/reports/…`, with the same two filters.
+
 ### Platform Fee Billing Report
 
 ```http

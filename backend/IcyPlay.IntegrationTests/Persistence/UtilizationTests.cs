@@ -843,6 +843,60 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         withRetired.Summary.Courts.Should().Be(0);
     }
 
+    /// <summary>
+    /// The admin's snapshot is the desk's own, added up across the venues in
+    /// scope and then owner by owner — and an owner or venue that does not
+    /// exist is refused rather than answered with zeros.
+    ///
+    /// Monday at 09:00 UTC is 5pm in Manila, so a booking at five is on the
+    /// court now.
+    /// </summary>
+    [Fact]
+    public async Task PlatformSnapshotShouldAddUpTheDesksFiguresOwnerByOwner()
+    {
+        // Arrange: two owners, one with somebody on pickleball 1 right now.
+        await using var context = database.CreateContext();
+        var busy = await VenueAsync(context, "Platform Busy Courts");
+        var quiet = await VenueAsync(context, "Platform Quiet Courts");
+        await ConfirmAsync(context, busy, busy.Pickleball1, Monday, new TimeOnly(17, 0));
+
+        async Task<Guid> OwnerOf(Venue venue) =>
+            await context.Facilities
+                .Where(facility => facility.Id == venue.FacilityId)
+                .Select(facility => facility.FacilityOwnerId)
+                .SingleAsync();
+
+        var busyOwner = await OwnerOf(busy);
+        var quietOwner = await OwnerOf(quiet);
+        var sut = new PlatformReportService(context, new FixedTimeProvider(Now));
+
+        // Act
+        var everyone = await sut.SnapshotAsync(null, null, CancellationToken.None);
+        var one = await sut.SnapshotAsync(busyOwner, null, CancellationToken.None);
+        var unknownOwner = await sut.SnapshotAsync(Guid.NewGuid(), null, CancellationToken.None);
+        var someoneElsesVenue = await sut.SnapshotAsync(busyOwner, quiet.FacilityId, CancellationToken.None);
+
+        // Assert
+        using var _ = new AssertionScope();
+        everyone.Value!.PerOwner.Select(owner => owner.FacilityOwnerId)
+            .Should().Contain([busyOwner, quietOwner]);
+        everyone.Value.Total.Courts.Should().Be(everyone.Value.PerOwner.Sum(owner => owner.Snapshot.Courts));
+
+        var theirs = one.Value!.PerOwner.Should().ContainSingle().Subject;
+        one.Value.Owners.Should().Be(1);
+        one.Value.Venues.Should().Be(1);
+        theirs.Snapshot.Should().Be(new VenueSnapshot(
+            Courts: 1,
+            BookableCourts: 4,
+            AvailableNow: 3,
+            BookedNow: 1,
+            UnderMaintenanceNow: 0));
+        one.Value.Total.Should().Be(theirs.Snapshot, "one owner's total is that owner");
+
+        unknownOwner.Failure.Should().Be(PlatformReportFailure.OwnerNotFound);
+        someoneElsesVenue.Failure.Should().Be(PlatformReportFailure.VenueNotFound);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,
