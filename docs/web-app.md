@@ -443,6 +443,15 @@ the same five numbers small and an *Open reports* link that narrows the page to
 them. The rows go when an owner is picked, because a list of one is the row
 above it.
 
+**Each report is the desk's own page.** The admin reports layout wraps its pages
+in `AdminReportScope`, which reads the owner and venue from the address; a
+report asks `useReportScope()` who is reading it and fetches from the desk or
+the admin endpoint accordingly — the other query is switched off, not merely
+ignored. `ReportFilters` shows the desk's venue picker or the admin's
+`OwnerVenueFilter`, the breadcrumb comes from `reportTrail`, and the menu's links
+carry `?owner=&venue=` so the scope follows the admin from report to report. So
+far: **Court utilisation** (`/admin/reports/utilization`), with the rental in it.
+
 ### Other admin pages
 
 | Page | Notes |

@@ -897,6 +897,41 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         someoneElsesVenue.Failure.Should().Be(PlatformReportFailure.VenueNotFound);
     }
 
+    /// <summary>
+    /// The admin's court utilisation for one owner is the owner's own report,
+    /// figure for figure — money included, because the admin sees what the
+    /// owner sees of their own.
+    /// </summary>
+    [Fact]
+    public async Task PlatformUtilizationShouldMatchTheOwnersOwnReport()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Platform Utilization Courts");
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+        var ownerId = await context.Facilities
+            .Where(facility => facility.Id == venue.FacilityId)
+            .Select(facility => facility.FacilityOwnerId)
+            .SingleAsync();
+        var sut = new PlatformReportService(context, new FixedTimeProvider(Now));
+
+        // Act
+        var admin = await sut.UtilizationAsync(ownerId, null, Monday, Monday, CancellationToken.None);
+        var owner = await CreateService(context).UtilizationAsync(
+            venue.OwnerUserId,
+            new UtilizationQuery(Monday, Monday),
+            CancellationToken.None);
+        var backwards = await sut.UtilizationAsync(ownerId, null, Tuesday, Monday, CancellationToken.None);
+
+        // Assert
+        using var _ = new AssertionScope();
+        admin.Succeeded.Should().BeTrue();
+        admin.Value!.Should().BeEquivalentTo(owner.Value);
+        admin.Value!.Rental.Should().Be(500m);
+        admin.Value.InUseMinutes.Should().Be(60);
+        backwards.Failure.Should().Be(PlatformReportFailure.WindowBackwards);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

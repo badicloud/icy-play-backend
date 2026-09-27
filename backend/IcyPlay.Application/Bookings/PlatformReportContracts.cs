@@ -29,7 +29,11 @@ public enum PlatformReportFailure
     /// <summary>No facility owner of that id.</summary>
     OwnerNotFound,
     /// <summary>No venue of that id — or none belonging to the owner asked for.</summary>
-    VenueNotFound
+    VenueNotFound,
+    /// <summary>A range that ends before it starts.</summary>
+    WindowBackwards,
+    /// <summary>More days than the report answers for.</summary>
+    WindowTooWide
 }
 
 public sealed record PlatformReportResult<T>(T? Value, PlatformReportFailure Failure = PlatformReportFailure.None)

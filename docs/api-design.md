@@ -2352,6 +2352,7 @@ Refusals: `NotAttended` for a venue they do not work, `WindowBackwards`, and
 ```http
 GET /api/v1/admin/reports/owners
 GET /api/v1/admin/reports/snapshot?facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/court-utilization?from=&to=&facilityOwnerId=&facilityId=
 ```
 
 Role: PlatformAdmin. **The venue desk's reports, for the platform**: across
@@ -2366,6 +2367,10 @@ platform most need to agree on.
   booked, under maintenance) across the venues in scope as `total`, then
   `perOwner`, plus how many owners and venues are in scope. An owner with no
   venue is listed with zeros.
+* `court-utilization` — the desk's Court utilisation over the venues in scope,
+  **with the rental in it**: the admin sees what each owner sees of their own.
+  The same limits as the desk: forwards (`WindowBackwards`) and a year at most
+  (`WindowTooWide`), both 400s.
 
 An owner or venue that does not exist, or a venue that is not the owner's, is a
 404 (`OwnerNotFound`, `VenueNotFound`) rather than a page of zeros an admin

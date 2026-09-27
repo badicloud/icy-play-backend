@@ -21,4 +21,15 @@ public interface IPlatformReportService
         Guid? facilityOwnerId,
         Guid? facilityId,
         CancellationToken ct);
+
+    /// <summary>
+    /// Court utilisation across the venues in scope — the desk's report, with
+    /// the money in it: the admin sees what every owner sees of their own.
+    /// </summary>
+    Task<PlatformReportResult<UtilizationReport>> UtilizationAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct);
 }

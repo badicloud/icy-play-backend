@@ -68,6 +68,46 @@ public sealed class PlatformReportService(AppDbContext db, TimeProvider timeProv
             perOwner));
     }
 
+    public async Task<PlatformReportResult<UtilizationReport>> UtilizationAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct)
+    {
+        if (CheckRange(from, to) is var wrong and not PlatformReportFailure.None)
+        {
+            return PlatformReportResult<UtilizationReport>.Fail(wrong);
+        }
+
+        var scope = await ScopeAsync(facilityOwnerId, facilityId, ct);
+
+        if (scope.Failure != PlatformReportFailure.None)
+        {
+            return PlatformReportResult<UtilizationReport>.Fail(scope.Failure);
+        }
+
+        var venueIds = scope.Venues.Select(venue => venue.Id).ToList();
+
+        // Every venue counts as "owned" here: the rental is the admin's to see,
+        // the same figure each owner sees of their own.
+        return PlatformReportResult<UtilizationReport>.Success(
+            await Utilization.ReadAsync(db, venueIds, venueIds, new UtilizationQuery(from, to), ct));
+    }
+
+    /// <summary>The desk's own limits: forwards, and a year at most.</summary>
+    private static PlatformReportFailure CheckRange(DateOnly from, DateOnly to, int mostDays = UtilizationQueryValidator.MostDays)
+    {
+        if (to < from)
+        {
+            return PlatformReportFailure.WindowBackwards;
+        }
+
+        return to.DayNumber - from.DayNumber >= mostDays
+            ? PlatformReportFailure.WindowTooWide
+            : PlatformReportFailure.None;
+    }
+
     /// <summary>
     /// The owners and venues a report covers: all of them, one owner's, or one
     /// venue. An owner or venue that does not exist is a failure rather than an

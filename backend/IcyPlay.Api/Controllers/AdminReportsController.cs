@@ -37,15 +37,48 @@ public sealed class AdminReportsController(IPlatformReportService reports) : Con
             : Failure(result.Failure);
     }
 
+    /// <summary>
+    /// Court utilisation across every venue, one owner's, or one venue — the
+    /// desk's own report, with the rental in it.
+    /// </summary>
+    [HttpGet("court-utilization")]
+    public async Task<IActionResult> CourtUtilization(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.UtilizationAsync(facilityOwnerId, facilityId, from, to, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<UtilizationReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
     private IActionResult Failure(PlatformReportFailure failure)
     {
-        var message = failure switch
+        var (status, code, message) = failure switch
         {
-            PlatformReportFailure.OwnerNotFound => "There is no facility owner with that id.",
-            PlatformReportFailure.VenueNotFound => "There is no venue with that id for that owner.",
-            _ => "The request could not be completed."
+            PlatformReportFailure.OwnerNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "There is no facility owner with that id."),
+            PlatformReportFailure.VenueNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "There is no venue with that id for that owner."),
+            PlatformReportFailure.WindowBackwards => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "The report has to end on or after it starts."),
+            PlatformReportFailure.WindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for a year or less."),
+            _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 
-        return NotFound(new ApiErrorEnvelope(new ApiError(ErrorCodes.NotFound, message)));
+        return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
     }
 }
