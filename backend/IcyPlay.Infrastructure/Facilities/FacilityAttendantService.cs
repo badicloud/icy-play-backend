@@ -30,6 +30,13 @@ public sealed class FacilityAttendantService(
     TimeProvider timeProvider,
     ILogger<FacilityAttendantService> logger) : IFacilityAttendantService
 {
+    public async Task<Guid?> FacilityOwnerIdOfAsync(Guid userId, CancellationToken ct) =>
+        await db.FacilityOwners
+            .AsNoTracking()
+            .Where(owner => owner.UserId == userId)
+            .Select(owner => (Guid?)owner.Id)
+            .FirstOrDefaultAsync(ct);
+
     public async Task<AttendantResult<IReadOnlyCollection<FacilityAttendantDetail>>> ListAsync(
         Guid facilityOwnerId,
         Guid facilityId,
@@ -331,7 +338,8 @@ public sealed class FacilityAttendantService(
                 false,
                 0,
                 null,
-                null))
+                null,
+                true))
             .SingleAsync(ct);
 
         var staff = await db.FacilityAttendants
@@ -346,6 +354,7 @@ public sealed class FacilityAttendantService(
                 attendant.User.Email,
                 attendant.User.PhoneNumber,
                 attendant.CreatedAt,
+                attendant.CanSeeMoney,
                 // Claiming any invitation sets the password, so any accepted
                 // token means the account is theirs.
                 Accepted = db.AccountInvitationTokens
@@ -380,7 +389,8 @@ public sealed class FacilityAttendantService(
                 attendant.InvitationsSent > 0,
                 attendant.InvitationsSent,
                 attendant.LastInvitedAt,
-                attendant.CreatedAt))
+                attendant.CreatedAt,
+                attendant.CanSeeMoney))
         ];
     }
 

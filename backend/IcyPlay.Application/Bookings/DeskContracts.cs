@@ -44,7 +44,28 @@ public sealed record DeskBooking(
     DateTimeOffset CreatedAt);
 
 /// <summary>A venue the signed-in person may confirm bookings for.</summary>
-public sealed record DeskVenue(Guid Id, string Name);
+/// <summary>
+/// A venue somebody works. <see cref="CanSeeMoney"/> says whether its money
+/// reports are theirs to read: always for the owner, and for an attendant only
+/// when the owner has said so.
+/// </summary>
+public sealed record DeskVenue(Guid Id, string Name, bool CanSeeMoney = true);
+
+/// <summary>
+/// One attendant as their owner sees them on the desk: who, which venue, and
+/// whether they may read the venue's money.
+/// </summary>
+public sealed record DeskAttendant(
+    Guid Id,
+    Guid FacilityId,
+    string FacilityName,
+    string FullName,
+    string Email,
+    /// <summary>Whether they have set a password and taken the account over.</summary>
+    bool HasAccepted,
+    bool CanSeeMoney);
+
+public sealed record SetAttendantMoneyRequest(bool CanSeeMoney);
 
 /// <summary>
 /// A court as the venue registered it, with the parts it is sold in.
@@ -254,6 +275,12 @@ public enum DeskFailure
     ReportWindowTooWide,
     /// <summary>More than the takings report answers for: five years.</summary>
     TakingsWindowTooWide,
+    /// <summary>A money report, for an attendant whose owner has not shared the money.</summary>
+    MoneyHidden,
+    /// <summary>Something only the venue's owner may do.</summary>
+    NotOwner,
+    /// <summary>No attendant of that id at a venue this person owns.</summary>
+    AttendantNotFound,
     /// <summary>A range that ends before it starts. Usually a year typed wrong.</summary>
     WindowBackwards,
     /// <summary>Not a grain anybody can ask a report for.</summary>

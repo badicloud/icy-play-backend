@@ -196,6 +196,44 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
             : Failure(result.Failure);
     }
 
+    /// <summary>
+    /// The attendants at the venues this person owns, and whether each may read
+    /// the money. Owners only.
+    /// </summary>
+    [HttpGet("attendants")]
+    public async Task<IActionResult> Attendants(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.AttendantsAsync(userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<DeskAttendant>>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Lets one attendant read the venue's money, or stops them. Owners only.</summary>
+    [HttpPut("attendants/{attendantId:guid}/money")]
+    public async Task<IActionResult> SetAttendantMoney(
+        Guid attendantId,
+        SetAttendantMoneyRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.SetAttendantMoneyAsync(userId, attendantId, request.CanSeeMoney, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeskAttendant>(result.Value!))
+            : Failure(result.Failure);
+    }
+
     /// <summary>Says it is not, with a reason. The hours go back on sale.</summary>
     [HttpPost("bookings/{bookingId:guid}/reject")]
     public async Task<IActionResult> Reject(
@@ -720,6 +758,18 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for a year or less."),
+            DeskFailure.MoneyHidden => (
+                StatusCodes.Status403Forbidden,
+                ErrorCodes.Forbidden,
+                "Your venue's owner has not shared its money figures with you."),
+            DeskFailure.NotOwner => (
+                StatusCodes.Status403Forbidden,
+                ErrorCodes.Forbidden,
+                "Only the venue's owner can do that."),
+            DeskFailure.AttendantNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "That attendant is not at a venue you own."),
             DeskFailure.TakingsWindowTooWide => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

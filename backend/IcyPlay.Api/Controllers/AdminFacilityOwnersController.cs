@@ -291,39 +291,8 @@ public sealed class AdminFacilityOwnersController(
         return result.Succeeded ? NoContent() : AttendantFailureResult(result.Failure);
     }
 
-    private IActionResult AttendantFailureResult(AttendantFailure failure)
-    {
-        var (status, code, message) = failure switch
-        {
-            AttendantFailure.FacilityNotFound => (
-                StatusCodes.Status404NotFound,
-                ErrorCodes.NotFound,
-                "That facility does not exist, or does not belong to this owner."),
-            AttendantFailure.AttendantNotFound => (
-                StatusCodes.Status404NotFound,
-                ErrorCodes.NotFound,
-                "That person is not on this venue's desk."),
-            AttendantFailure.AlreadyAttending => (
-                StatusCodes.Status409Conflict,
-                ErrorCodes.Conflict,
-                "They already work this venue."),
-            AttendantFailure.IsTheOwner => (
-                StatusCodes.Status409Conflict,
-                ErrorCodes.Conflict,
-                "The owner attends their own venue already."),
-            AttendantFailure.InvitationAlreadyAccepted => (
-                StatusCodes.Status409Conflict,
-                ErrorCodes.Conflict,
-                "They have already set up their account, so there is nothing to resend."),
-            AttendantFailure.EmailAlreadyRegistered => (
-                StatusCodes.Status409Conflict,
-                ErrorCodes.Conflict,
-                "That address already has an IcyPlay account, so it cannot be used. Try one nobody has signed up with."),
-            _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
-        };
-
-        return StatusCode(status, new ApiErrorEnvelope(new ApiError(code, message)));
-    }
+    private static IActionResult AttendantFailureResult(AttendantFailure failure) =>
+        AttendantFailureResults.ToResult(failure);
 
     [HttpPut("{id:guid}/payment-details")]
     public Task<IActionResult> UpdatePaymentDetails(

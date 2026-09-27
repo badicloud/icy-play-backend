@@ -9,6 +9,13 @@ public interface IFacilityAttendantService
     /// well as the facility, so another owner's venue answers the same as one
     /// that does not exist.
     /// </summary>
+    /// <summary>
+    /// The facility owner an account is, or null when it is nobody's. How the
+    /// owner's own desk turns who is signed in into the owner the calls below
+    /// act for — never an id the request sends.
+    /// </summary>
+    Task<Guid?> FacilityOwnerIdOfAsync(Guid userId, CancellationToken ct);
+
     Task<AttendantResult<IReadOnlyCollection<FacilityAttendantDetail>>> ListAsync(
         Guid facilityOwnerId,
         Guid facilityId,

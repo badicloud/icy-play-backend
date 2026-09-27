@@ -424,6 +424,68 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         }
     }
 
+    /// <summary>
+    /// An attendant reads the venue's money only once the owner says so, and
+    /// only the owner can say so. Until then the money reports are refused and
+    /// the rental is left out of the response rather than hidden by the page.
+    /// </summary>
+    [Fact]
+    public async Task AttendantShouldSeeTheMoneyOnlyOnceTheOwnerSharesIt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Money Sharing Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var attendantId = await context.FacilityAttendants
+            .Where(row => row.UserId == attendant)
+            .Select(row => row.Id)
+            .SingleAsync();
+        var sut = CreateService(context);
+        var range = new HoursQuery(Tuesday, Tuesday, HoursGrain.Day);
+
+        // Act: before, the attendant tries to share it with themselves, then the owner does.
+        var takingsBefore = await sut.TakingsAsync(attendant, range, CancellationToken.None);
+        var missedBefore = await sut.MissedAsync(attendant, range, CancellationToken.None);
+        var rentalBefore = await sut.UtilizationAsync(attendant, new UtilizationQuery(Tuesday, Tuesday), CancellationToken.None);
+        var venuesBefore = await sut.VenuesAsync(attendant, CancellationToken.None);
+        var listByAttendant = await sut.AttendantsAsync(attendant, CancellationToken.None);
+        var selfService = await sut.SetAttendantMoneyAsync(
+            attendant, attendantId, true, Desk(attendant), CancellationToken.None);
+
+        var roster = await sut.AttendantsAsync(venue.OwnerUserId, CancellationToken.None);
+        var shared = await sut.SetAttendantMoneyAsync(
+            venue.OwnerUserId, attendantId, true, Desk(venue.OwnerUserId), CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        var takingsAfter = await sut.TakingsAsync(attendant, range, CancellationToken.None);
+        var rentalAfter = await sut.UtilizationAsync(attendant, new UtilizationQuery(Tuesday, Tuesday), CancellationToken.None);
+        var venuesAfter = await sut.VenuesAsync(attendant, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            takingsBefore.Failure.Should().Be(DeskFailure.MoneyHidden);
+            missedBefore.Failure.Should().Be(DeskFailure.MoneyHidden);
+            rentalBefore.Value!.Rental.Should().BeNull();
+            venuesBefore.Should().ContainSingle().Which.CanSeeMoney.Should().BeFalse();
+
+            // Only the owner decides.
+            listByAttendant.Failure.Should().Be(DeskFailure.NotOwner);
+            selfService.Failure.Should().Be(DeskFailure.AttendantNotFound);
+
+            roster.Value.Should().ContainSingle(row => row.Id == attendantId)
+                .Which.CanSeeMoney.Should().BeFalse();
+            shared.Value!.CanSeeMoney.Should().BeTrue();
+
+            takingsAfter.Succeeded.Should().BeTrue();
+            rentalAfter.Value!.Rental.Should().NotBeNull();
+            venuesAfter.Should().ContainSingle().Which.CanSeeMoney.Should().BeTrue();
+            (await context.AuditLogs.CountAsync(entry =>
+                entry.Action == AuditAction.FacilityAttendantMoneyAccessChanged
+                && entry.EntityId == venue.FacilityId)).Should().Be(1);
+        }
+    }
+
     [Fact]
     public async Task ListAsync_ShouldKeepWhatIsDoneApartFromWhatIsWaiting()
     {

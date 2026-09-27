@@ -349,8 +349,11 @@ public sealed record DeclinedBooking(
     TimeOnly? StartsAt,
     TimeOnly? EndsAt,
     int Hours,
-    /// <summary>What the customer sent to pay for it: court rental and the platform's fee.</summary>
-    decimal Amount,
+    /// <summary>
+    /// What the customer sent to pay for it: court rental and the platform's
+    /// fee. Null for an attendant whose owner has not shared the money.
+    /// </summary>
+    decimal? Amount,
     /// <summary>A <c>RejectReason</c>, or null on a refusal from before the list.</summary>
     string? Reason,
     /// <summary>The desk's words: the note, or on an old refusal, all it wrote.</summary>

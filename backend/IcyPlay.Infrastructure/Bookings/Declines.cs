@@ -19,6 +19,7 @@ internal static class Declines
         AppDbContext db,
         IReadOnlyCollection<Guid> venueIds,
         HoursQuery query,
+        bool maySeeMoney,
         CancellationToken ct)
     {
         // A day either side in UTC, so every venue's own day is inside what is
@@ -89,7 +90,7 @@ internal static class Declines
                 row.StartsAt,
                 row.EndsAt,
                 row.Hours,
-                row.Amount,
+                maySeeMoney ? row.Amount : null,
                 row.RejectionReason,
                 // An old refusal has no note of its own: all the desk wrote is
                 // in the sentence the customer reads.

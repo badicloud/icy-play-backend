@@ -812,6 +812,7 @@ Who may confirm a payment at one venue.
 | FacilityId | uniqueidentifier | |
 | UserId | uniqueidentifier | |
 | IsActive | bit | False once taken off the desk. |
+| CanSeeMoney | bit | Whether the owner lets them read the venue's money reports. Off by default; set by the owner on their desk (`LetOwnersShareMoneyWithAttendants`). |
 
 Unique on (FacilityId, UserId).
 

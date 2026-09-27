@@ -145,7 +145,7 @@ public sealed class PlatformReportService(AppDbContext db, TimeProvider timeProv
             facilityOwnerId,
             facilityId,
             Over(query),
-            venues => Declines.ReadAsync(db, venues, query, ct),
+            venues => Declines.ReadAsync(db, venues, query, maySeeMoney: true, ct),
             ct);
 
     public Task<PlatformReportResult<TakingsReport>> TakingsAsync(

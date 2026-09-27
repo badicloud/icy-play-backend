@@ -48,6 +48,30 @@ public sealed class FacilityAttendant : Entity
     /// </summary>
     public bool IsActive { get; private set; } = true;
 
+    /// <summary>
+    /// Whether the owner lets this attendant read the venue's money: takings,
+    /// missed income, rental, and what a declined customer sent.
+    ///
+    /// Off until the owner turns it on. Checking a receipt needs the amount on
+    /// that receipt, which the desk always shows; what this guards is the
+    /// venue's totals, which are the owner's business to share.
+    /// </summary>
+    public bool CanSeeMoney
+    {
+        get; private set;
+    }
+
+    public void SetCanSeeMoney(bool canSeeMoney, DateTimeOffset now)
+    {
+        if (CanSeeMoney == canSeeMoney)
+        {
+            return;
+        }
+
+        CanSeeMoney = canSeeMoney;
+        UpdatedAt = now;
+    }
+
     public void Retire(DateTimeOffset now)
     {
         if (!IsActive)

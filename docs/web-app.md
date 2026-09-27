@@ -364,6 +364,17 @@ with its venue type, surface, lighting, sports and events, bookable courts and
 share sold. The dates only move the shares. **Show retired courts** lists them
 greyed out with a badge, and never counts them.
 
+**Attendants** — `/desk/attendants`, on the desk overview for owners only. The
+admin console's own `AttendantsPanel`, once per venue, pointed at the owner's
+desk (`OWN_DESK` in place of an owner id): add an attendant and they are emailed
+the same activation link the admin's invitation sends, resend it, take them
+off, and a **Can see money** checkbox on each, saved as it is ticked. An attendant without it is **not shown the money reports at all** — Takings,
+Missed Income and Platform commission (`money: true` in `reports.ts`) are left
+out of the menu, and the Sales group with them — rather than shown locked, since
+a locked row says there is something they are not allowed. They also get no
+rental on Court utilisation and a dash for the amount on Declined Bookings. The admin console's attendants panel shows a **Can see money** check
+mark beside each attendant who has it.
+
 **Turning a payment down** asks for a reason through `ReasonPicker` — the same
 component the customer's move uses, so every place the platform asks why looks
 and behaves alike.

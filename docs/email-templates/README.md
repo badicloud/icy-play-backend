@@ -17,6 +17,28 @@ a version nobody is sending.
 So a new email needs three things: the HTML uploaded to Mailjet, its numeric id,
 and a migration that seeds the row pointing one at the other.
 
+## Who it comes from
+
+Every letter goes out as **IcyPlay Booking <no-reply@icyplay.com>**
+(`Mailjet:SenderEmail` and `Mailjet:SenderName` in `appsettings`). The API sends
+the sender and the subject with every message, so they override whatever the
+Mailjet template has; the **reply-to** is not sent, so the template's is used —
+keep it on a mailbox somebody reads, because `no-reply@` has none.
+
+`icyplay.com` is on Namecheap DNS and validated in Mailjet, with:
+
+* **SPF** — `v=spf1 include:spf.mailjet.com include:spf.efwd.registrar-servers.com ~all`.
+  One record for both Mailjet and Namecheap's email forwarding; a second SPF
+  record would make both invalid.
+* **DKIM** — `mailjet._domainkey`, added by Mailjet's automatic Namecheap setup.
+* **DMARC** — `_dmarc`: `v=DMARC1; p=none; rua=mailto:icyplaybooking@gmail.com`.
+
+It used to send as `icyplaybooking@gmail.com`. A `@gmail.com` sender cannot be
+signed by Mailjet, so Gmail treats it as unauthenticated and letters land in
+spam — which is why it moved. A letter stuck on **Retrying** for one recipient
+while others are delivered is that recipient's mailbox (full, mistyped or
+disabled), not the setup.
+
 ## Uploading one
 
 1. Mailjet → **Transactional** → **Templates** → create, and paste the file's

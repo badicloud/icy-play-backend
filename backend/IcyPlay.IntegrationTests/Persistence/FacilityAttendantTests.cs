@@ -408,6 +408,52 @@ public sealed class FacilityAttendantTests(SqlServerDatabaseFixture database)
         }
     }
 
+    /// <summary>
+    /// The owner puts somebody on their own desk the same way the admin does,
+    /// invitation and all — and only on their own: the owner is who is signed
+    /// in, so another owner's venue answers the same as one that is not there.
+    /// </summary>
+    [Fact]
+    public async Task InviteAsync_ShouldLetTheOwnerAddToTheirOwnDeskAndNoOneElses()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var mail = new RecordingInvitation(context);
+        var (owner, _, sut) = await OnboardAsync(context, "Owner Invites Courts", mail);
+        var (other, _, _) = await OnboardAsync(context, "Owner Invites Elsewhere");
+        var customer = await CustomerAsync(context, "Not An Owner");
+        var asOwner = new AuditActor(owner.UserId, UserRoleName.FacilityOwner, "127.0.0.1", "tests");
+        var email = $"desk-{Guid.NewGuid():N}@example.com";
+
+        // Act
+        var ownerId = await sut.FacilityOwnerIdOfAsync(owner.UserId, CancellationToken.None);
+        var nobody = await sut.FacilityOwnerIdOfAsync(customer.Id, CancellationToken.None);
+        var invited = await sut.InviteAsync(
+            ownerId!.Value,
+            owner.FacilityId,
+            new InviteAttendantRequest("Ana Reyes", email, null, null),
+            asOwner,
+            CancellationToken.None);
+        var elsewhere = await sut.InviteAsync(
+            ownerId.Value,
+            other.FacilityId,
+            new InviteAttendantRequest("Ben Cruz", $"desk-{Guid.NewGuid():N}@example.com", null, null),
+            asOwner,
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            ownerId.Should().Be(owner.FacilityOwnerId);
+            nobody.Should().BeNull();
+
+            invited.Succeeded.Should().BeTrue();
+            mail.Sent.Should().ContainSingle(letter => letter.RecipientEmail == email);
+
+            elsewhere.Failure.Should().Be(AttendantFailure.FacilityNotFound);
+        }
+    }
+
     private static async Task<AttendantEmailCheck> CheckAsync(
         FacilityAttendantService sut,
         OnboardedFacilityOwnerResponse owner,

@@ -219,6 +219,20 @@ public interface IDeskService
         Guid? facilityId,
         CancellationToken ct);
 
+    /// <summary>
+    /// The attendants at the venues this person owns, and whether each may read
+    /// the money. Owners only: an attendant asking is refused.
+    /// </summary>
+    Task<DeskResult<IReadOnlyCollection<DeskAttendant>>> AttendantsAsync(Guid userId, CancellationToken ct);
+
+    /// <summary>Lets one attendant read the venue's money, or stops them. Owners only.</summary>
+    Task<DeskResult<DeskAttendant>> SetAttendantMoneyAsync(
+        Guid userId,
+        Guid attendantId,
+        bool canSeeMoney,
+        AuditActor actor,
+        CancellationToken ct);
+
     Task<DeskResult<DeskSettings>> UpdateSettingsAsync(
         Guid userId,
         UpdateDeskSettingsRequest request,

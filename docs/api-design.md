@@ -2666,6 +2666,40 @@ confirmation: that the court is not held, the reason, and the venue's contact â€
 there is no message thread to answer from, so the letter says who to speak to
 about any money sent.
 
+### Attendants and money
+
+```http
+GET    /api/v1/desk/venues/{facilityId}/attendants
+GET    /api/v1/desk/venues/{facilityId}/attendants/check?email=
+POST   /api/v1/desk/venues/{facilityId}/attendants
+POST   /api/v1/desk/venues/{facilityId}/attendants/{attendantId}/resend-invitation
+DELETE /api/v1/desk/venues/{facilityId}/attendants/{attendantId}?reason=
+GET    /api/v1/desk/attendants
+PUT    /api/v1/desk/attendants/{attendantId}/money   { "canSeeMoney": true }
+```
+
+The first five are the admin console's attendant endpoints, for the owner's own
+venues (`DeskAttendantsController`, FacilityOwner only): the same service, the
+same invitation email, the same refusals. The owner they act for is the one
+signed in (`FacilityOwnerIdOfAsync`), never an id the request sends, so a venue
+that is not theirs answers `FacilityNotFound` like one that does not exist.
+
+**Owners only.** An attendant asking for the list is `NotOwner` (403); an
+attendant, or an owner naming somebody else's staff, changing one is
+`AttendantNotFound` (404). Each change is written to the audit trail
+(`FacilityAttendantMoneyAccessChanged`).
+
+**Money** is the venue's figures: **Takings** and **Missed Income**, the
+**rental** on Court utilisation, and the **amount** on Declined Bookings. The
+owner and the platform admin always see it. An attendant sees it only where the
+owner has ticked *Can see money* for them â€” and a report over several venues
+only when every one of them has. Enforced on the server: Takings and Missed
+Income answer `MoneyHidden` (403), and the rental and declined amount come back
+`null` rather than hidden by the page. `GET /desk/venues` carries `canSeeMoney`
+per venue so the menu can leave the money reports out. The amount on a receipt an
+attendant is checking is not money in this sense: the booking queue always
+shows it, because checking a payment needs it.
+
 ### The court diary
 
 ```http

@@ -36,7 +36,12 @@ public sealed record FacilityAttendantDetail(
     int InvitationsSent,
     /// <summary>When the newest of those was issued.</summary>
     DateTimeOffset? LastInvitedAt,
-    DateTimeOffset? AddedAt);
+    DateTimeOffset? AddedAt,
+    /// <summary>
+    /// Whether they may read the venue's money reports. Always for the owner;
+    /// for an attendant, whatever the owner set on their desk.
+    /// </summary>
+    bool CanSeeMoney = false);
 
 public sealed record InviteAttendantRequest(
     string FullName,

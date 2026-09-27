@@ -126,6 +126,7 @@ public static class AuditAction
     public const string BookingHoldExpired = "BookingHoldExpired";
     public const string BookingConfirmed = "BookingConfirmed";
     public const string BookingRejected = "BookingRejected";
+    public const string FacilityAttendantMoneyAccessChanged = "FacilityAttendantMoneyAccessChanged";
     public const string ContractCommenced = "ContractCommenced";
     public const string ContractCancelled = "ContractCancelled";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";

@@ -36,7 +36,12 @@ public sealed class DeskService(
         await VenueQuery(userId)
             .AsNoTracking()
             .OrderBy(facility => facility.Name)
-            .Select(facility => new DeskVenue(facility.Id, facility.Name))
+            .Select(facility => new DeskVenue(
+                facility.Id,
+                facility.Name,
+                facility.FacilityOwner.UserId == userId
+                    || facility.Attendants.Any(attendant =>
+                        attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney)))
             .ToListAsync(ct);
 
     public async Task<DeskResult<PagedResult<DeskBooking>>> ListAsync(
@@ -605,7 +610,8 @@ public sealed class DeskService(
             return DeskResult<DeclinesReport>.Fail(DeskFailure.NotAttended);
         }
 
-        return DeskResult<DeclinesReport>.Success(await Declines.ReadAsync(db, scoped, query, ct));
+        return DeskResult<DeclinesReport>.Success(
+            await Declines.ReadAsync(db, scoped, query, await MaySeeMoneyAsync(userId, scoped, ct), ct));
     }
 
     public async Task<DeskResult<CourtMixReport>> CourtMixAsync(
@@ -682,6 +688,11 @@ public sealed class DeskService(
             return DeskResult<MissedReport>.Fail(DeskFailure.NotAttended);
         }
 
+        if (!await MaySeeMoneyAsync(userId, scoped, ct))
+        {
+            return DeskResult<MissedReport>.Fail(DeskFailure.MoneyHidden);
+        }
+
         return DeskResult<MissedReport>.Success(
             await Missed.ReadAsync(db, scoped, query, timeProvider.GetUtcNow(), ct));
     }
@@ -709,8 +720,113 @@ public sealed class DeskService(
             return DeskResult<TakingsReport>.Fail(DeskFailure.NotAttended);
         }
 
+        if (!await MaySeeMoneyAsync(userId, scoped, ct))
+        {
+            return DeskResult<TakingsReport>.Fail(DeskFailure.MoneyHidden);
+        }
+
         return DeskResult<TakingsReport>.Success(await Takings.ReadAsync(db, scoped, query, ct));
     }
+
+    /// <summary>
+    /// Whether this person may read the money of every venue in scope: they
+    /// own it, or its owner has let them. Every one, because a total over two
+    /// venues is partly the money of each.
+    /// </summary>
+    private async Task<bool> MaySeeMoneyAsync(Guid userId, IReadOnlyCollection<Guid> venueIds, CancellationToken ct) =>
+        !await db.Facilities
+            .AsNoTracking()
+            .AnyAsync(
+                facility => venueIds.Contains(facility.Id)
+                    && facility.FacilityOwner.UserId != userId
+                    && !facility.Attendants.Any(attendant =>
+                        attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney),
+                ct);
+
+    public async Task<DeskResult<IReadOnlyCollection<DeskAttendant>>> AttendantsAsync(
+        Guid userId,
+        CancellationToken ct)
+    {
+        // Owners only. An attendant works a desk; who else works it, and what
+        // they may see, is the owner's to decide.
+        var owns = await db.Facilities.AnyAsync(facility => facility.FacilityOwner.UserId == userId, ct);
+
+        if (!owns)
+        {
+            return DeskResult<IReadOnlyCollection<DeskAttendant>>.Fail(DeskFailure.NotOwner);
+        }
+
+        return DeskResult<IReadOnlyCollection<DeskAttendant>>.Success(
+            await OwnedAttendants(userId)
+                .OrderBy(attendant => attendant.Facility.Name)
+                .ThenBy(attendant => attendant.User.FullName)
+                .Select(ToDeskAttendant)
+                .ToListAsync(ct));
+    }
+
+    public async Task<DeskResult<DeskAttendant>> SetAttendantMoneyAsync(
+        Guid userId,
+        Guid attendantId,
+        bool canSeeMoney,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var attendant = await OwnedAttendants(userId)
+            .Include(row => row.User)
+            .FirstOrDefaultAsync(row => row.Id == attendantId, ct);
+
+        // An attendant asking, or an owner asking about somebody else's staff,
+        // gets the same answer: there is nobody of that id for them to change.
+        if (attendant is null)
+        {
+            return DeskResult<DeskAttendant>.Fail(DeskFailure.AttendantNotFound);
+        }
+
+        var before = attendant.CanSeeMoney;
+        attendant.SetCanSeeMoney(canSeeMoney, timeProvider.GetUtcNow());
+
+        audit.RecordChange(
+            actor,
+            AuditAction.FacilityAttendantMoneyAccessChanged,
+            AuditEntityType.Facility,
+            attendant.FacilityId,
+            new Dictionary<string, string?>
+            {
+                ["attendant"] = attendant.User.Email,
+                ["canSeeMoney"] = before.ToString()
+            },
+            new Dictionary<string, string?>
+            {
+                ["attendant"] = attendant.User.Email,
+                ["canSeeMoney"] = canSeeMoney.ToString()
+            });
+
+        await db.SaveChangesAsync(ct);
+
+        return DeskResult<DeskAttendant>.Success(
+            await OwnedAttendants(userId)
+                .Where(row => row.Id == attendantId)
+                .Select(ToDeskAttendant)
+                .SingleAsync(ct));
+    }
+
+    /// <summary>The attendants still working the venues this person owns.</summary>
+    private IQueryable<Domain.Facilities.FacilityAttendant> OwnedAttendants(Guid userId) =>
+        db.FacilityAttendants
+            .Where(attendant => attendant.IsActive && attendant.Facility.FacilityOwner.UserId == userId);
+
+    private System.Linq.Expressions.Expression<Func<Domain.Facilities.FacilityAttendant, DeskAttendant>> ToDeskAttendant =>
+        attendant => new DeskAttendant(
+            attendant.Id,
+            attendant.FacilityId,
+            attendant.Facility.Name,
+            attendant.User.FullName,
+            attendant.User.Email,
+            // Never invited means the address already had an account, which
+            // is as good as accepted; otherwise, an accepted invitation.
+            !db.AccountInvitationTokens.Any(token => token.UserId == attendant.UserId)
+                || db.AccountInvitationTokens.Any(token => token.UserId == attendant.UserId && token.AcceptedAt != null),
+            attendant.CanSeeMoney);
 
     /// <summary>The same limits on every over-time report: a known grain, forwards, and at most a year.</summary>
     private static DeskFailure CheckRange(HoursQuery query, int mostDays = UtilizationQueryValidator.MostDays)
@@ -804,12 +920,16 @@ public sealed class DeskService(
         // whether the money comes back at all, and it is asked here rather than
         // of a role: an owner is an owner of their own buildings, not of the
         // one they happen to be on the desk of.
+        // "Owned" here means "whose money they may see": the owner's own, and
+        // an attendant's where the owner has shared it.
         var venues = await VenueQuery(userId)
             .AsNoTracking()
             .Select(facility => new
             {
                 facility.Id,
                 Owned = facility.FacilityOwner.UserId == userId
+                    || facility.Attendants.Any(attendant =>
+                        attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney)
             })
             .ToListAsync(ct);
 
