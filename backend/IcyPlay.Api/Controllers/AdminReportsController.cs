@@ -56,6 +56,30 @@ public sealed class AdminReportsController(IPlatformReportService reports) : Con
             : Failure(result.Failure);
     }
 
+    /// <summary>
+    /// The utilisation figures cut by date, court by court — Sold Hours, and
+    /// the trends on Sold Courts and Not Sold Courts.
+    /// </summary>
+    [HttpGet("hours-over-time")]
+    public async Task<IActionResult> HoursOverTime(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.HoursOverTimeAsync(
+            facilityOwnerId,
+            facilityId,
+            new HoursQuery(from, to, grain),
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<HoursOverTime>(result.Value!))
+            : Failure(result.Failure);
+    }
+
     private IActionResult Failure(PlatformReportFailure failure)
     {
         var (status, code, message) = failure switch
@@ -76,6 +100,10 @@ public sealed class AdminReportsController(IPlatformReportService reports) : Con
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for a year or less."),
+            PlatformReportFailure.UnknownGrain => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for it by day, week, month, quarter, half or year."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 

@@ -95,6 +95,35 @@ public sealed class PlatformReportService(AppDbContext db, TimeProvider timeProv
             await Utilization.ReadAsync(db, venueIds, venueIds, new UtilizationQuery(from, to), ct));
     }
 
+    public async Task<PlatformReportResult<HoursOverTime>> HoursOverTimeAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        if (!HoursGrain.IsSupported(query.Grain))
+        {
+            return PlatformReportResult<HoursOverTime>.Fail(PlatformReportFailure.UnknownGrain);
+        }
+
+        if (CheckRange(query.From, query.To) is var wrong and not PlatformReportFailure.None)
+        {
+            return PlatformReportResult<HoursOverTime>.Fail(wrong);
+        }
+
+        var scope = await ScopeAsync(facilityOwnerId, facilityId, ct);
+
+        if (scope.Failure != PlatformReportFailure.None)
+        {
+            return PlatformReportResult<HoursOverTime>.Fail(scope.Failure);
+        }
+
+        return PlatformReportResult<HoursOverTime>.Success(
+            await Utilization.OverTimeAsync(db, [.. scope.Venues.Select(venue => venue.Id)], query, ct));
+    }
+
     /// <summary>The desk's own limits: forwards, and a year at most.</summary>
     private static PlatformReportFailure CheckRange(DateOnly from, DateOnly to, int mostDays = UtilizationQueryValidator.MostDays)
     {

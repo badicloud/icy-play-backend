@@ -932,6 +932,37 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         backwards.Failure.Should().Be(PlatformReportFailure.WindowBackwards);
     }
 
+    /// <summary>
+    /// The admin's hours over time for one owner are the owner's own, period
+    /// by period and court by court.
+    /// </summary>
+    [Fact]
+    public async Task PlatformHoursOverTimeShouldMatchTheOwnersOwn()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Platform Hours Courts");
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+        var ownerId = await context.Facilities
+            .Where(facility => facility.Id == venue.FacilityId)
+            .Select(facility => facility.FacilityOwnerId)
+            .SingleAsync();
+        var sut = new PlatformReportService(context, new FixedTimeProvider(Now));
+        var query = new HoursQuery(Monday, Tuesday, HoursGrain.Day);
+
+        // Act
+        var admin = await sut.HoursOverTimeAsync(ownerId, null, query, CancellationToken.None);
+        var owner = await CreateService(context).HoursOverTimeAsync(venue.OwnerUserId, query, CancellationToken.None);
+        var nonsense = await sut.HoursOverTimeAsync(ownerId, null, query with { Grain = "Fortnight" }, CancellationToken.None);
+
+        // Assert
+        using var _ = new AssertionScope();
+        admin.Succeeded.Should().BeTrue();
+        admin.Value.Should().BeEquivalentTo(owner.Value);
+        admin.Value!.Rows.Sum(row => row.SoldMinutes).Should().Be(60);
+        nonsense.Failure.Should().Be(PlatformReportFailure.UnknownGrain);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,

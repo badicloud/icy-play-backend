@@ -26,6 +26,17 @@ public interface IPlatformReportService
     /// Court utilisation across the venues in scope — the desk's report, with
     /// the money in it: the admin sees what every owner sees of their own.
     /// </summary>
+    /// <summary>
+    /// The utilisation figures cut by date, court by court and period by
+    /// period — what Sold Hours draws, and the trend beside each court on
+    /// Sold Courts and Not Sold Courts.
+    /// </summary>
+    Task<PlatformReportResult<HoursOverTime>> HoursOverTimeAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct);
+
     Task<PlatformReportResult<UtilizationReport>> UtilizationAsync(
         Guid? facilityOwnerId,
         Guid? facilityId,

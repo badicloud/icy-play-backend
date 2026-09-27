@@ -449,8 +449,12 @@ report asks `useReportScope()` who is reading it and fetches from the desk or
 the admin endpoint accordingly — the other query is switched off, not merely
 ignored. `ReportFilters` shows the desk's venue picker or the admin's
 `OwnerVenueFilter`, the breadcrumb comes from `reportTrail`, and the menu's links
-carry `?owner=&venue=` so the scope follows the admin from report to report. So
-far: **Court utilisation** (`/admin/reports/utilization`), with the rental in it.
+carry `?owner=&venue=` so the scope follows the admin from report to report. A report
+page asks for its data through `reportData.ts` (`useUtilizationReport`,
+`useHoursReport`), which picks the console, and links to a sibling report with
+`reportHref`, which keeps the scope. So far: **Court utilisation**, **Sold Hours**,
+**Sold Courts** and **Not Sold Courts** (`/admin/reports/utilization`, `hours`,
+`sold`, `unsold`), with the rental in the first.
 
 ### Other admin pages
 

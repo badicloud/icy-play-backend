@@ -33,7 +33,9 @@ public enum PlatformReportFailure
     /// <summary>A range that ends before it starts.</summary>
     WindowBackwards,
     /// <summary>More days than the report answers for.</summary>
-    WindowTooWide
+    WindowTooWide,
+    /// <summary>Not a grain anybody can ask a report for.</summary>
+    UnknownGrain
 }
 
 public sealed record PlatformReportResult<T>(T? Value, PlatformReportFailure Failure = PlatformReportFailure.None)

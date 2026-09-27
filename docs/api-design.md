@@ -2353,6 +2353,7 @@ Refusals: `NotAttended` for a venue they do not work, `WindowBackwards`, and
 GET /api/v1/admin/reports/owners
 GET /api/v1/admin/reports/snapshot?facilityOwnerId=&facilityId=
 GET /api/v1/admin/reports/court-utilization?from=&to=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/hours-over-time?from=&to=&grain=Day&facilityOwnerId=&facilityId=
 ```
 
 Role: PlatformAdmin. **The venue desk's reports, for the platform**: across
@@ -2371,6 +2372,9 @@ platform most need to agree on.
   **with the rental in it**: the admin sees what each owner sees of their own.
   The same limits as the desk: forwards (`WindowBackwards`) and a year at most
   (`WindowTooWide`), both 400s.
+* `hours-over-time` — the desk's hours over time over the venues in scope:
+  what Sold Hours draws, and the trend on Sold Courts and Not Sold Courts. An
+  unknown `grain` is `UnknownGrain`, a 400.
 
 An owner or venue that does not exist, or a venue that is not the owner's, is a
 404 (`OwnerNotFound`, `VenueNotFound`) rather than a page of zeros an admin
