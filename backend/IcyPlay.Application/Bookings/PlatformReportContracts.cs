@@ -35,7 +35,11 @@ public enum PlatformReportFailure
     /// <summary>More days than the report answers for.</summary>
     WindowTooWide,
     /// <summary>Not a grain anybody can ask a report for.</summary>
-    UnknownGrain
+    UnknownGrain,
+    /// <summary>More than the takings report answers for: five years.</summary>
+    TakingsWindowTooWide,
+    /// <summary>No court of that id at the venues in scope.</summary>
+    CourtNotFound
 }
 
 public sealed record PlatformReportResult<T>(T? Value, PlatformReportFailure Failure = PlatformReportFailure.None)

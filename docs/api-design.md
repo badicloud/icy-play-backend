@@ -2131,6 +2131,8 @@ reads it, on the venue's clock:
   `RenamedOrRetired`, `Photos` or `Details`. One saved edit can be two changes:
   a rename and a new surface read as different things.
 * `kinds` — how many of each, for the filter.
+* `courts` — every court at the venues in scope, retired ones too, for the
+  court picker: the same list whichever court the report is narrowed to.
 * `summary` — courts and bookable courts now and what the range added and
   retired, price changes and on how many courts, closures, and closures on at
   this moment.
@@ -2354,6 +2356,12 @@ GET /api/v1/admin/reports/owners
 GET /api/v1/admin/reports/snapshot?facilityOwnerId=&facilityId=
 GET /api/v1/admin/reports/court-utilization?from=&to=&facilityOwnerId=&facilityId=
 GET /api/v1/admin/reports/hours-over-time?from=&to=&grain=Day&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/moves?from=&to=&grain=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/declines?from=&to=&grain=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/takings?from=&to=&grain=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/missed?from=&to=&grain=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/court-changes?from=&to=&courtId=&facilityOwnerId=&facilityId=
+GET /api/v1/admin/reports/court-mix?from=&to=&includeRetired=&facilityOwnerId=&facilityId=
 ```
 
 Role: PlatformAdmin. **The venue desk's reports, for the platform**: across
@@ -2375,6 +2383,12 @@ platform most need to agree on.
 * `hours-over-time` — the desk's hours over time over the venues in scope:
   what Sold Hours draws, and the trend on Sold Courts and Not Sold Courts. An
   unknown `grain` is `UnknownGrain`, a 400.
+* `moves`, `declines`, `takings`, `missed`, `court-changes`, `court-mix` — the
+  desk's reports of the same names, same shapes, over the venues in scope, each
+  run the same way round (`PlatformReportService.RunAsync`): refuse a bad range,
+  work out the venues, refuse an owner or venue that is not there, then the
+  desk's own code. Takings take five years (`TakingsWindowTooWide` past it); a
+  `courtId` at another owner's venue is `CourtNotFound`, a 404.
 
 An owner or venue that does not exist, or a venue that is not the owner's, is a
 404 (`OwnerNotFound`, `VenueNotFound`) rather than a page of zeros an admin

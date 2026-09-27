@@ -124,6 +124,142 @@ public sealed class PlatformReportService(AppDbContext db, TimeProvider timeProv
             await Utilization.OverTimeAsync(db, [.. scope.Venues.Select(venue => venue.Id)], query, ct));
     }
 
+    public Task<PlatformReportResult<MovesReport>> MovesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct) =>
+        RunAsync(
+            facilityOwnerId,
+            facilityId,
+            Over(query),
+            venues => Moves.ReadAsync(db, venues, query, ct),
+            ct);
+
+    public Task<PlatformReportResult<DeclinesReport>> DeclinesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct) =>
+        RunAsync(
+            facilityOwnerId,
+            facilityId,
+            Over(query),
+            venues => Declines.ReadAsync(db, venues, query, ct),
+            ct);
+
+    public Task<PlatformReportResult<TakingsReport>> TakingsAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct)
+    {
+        // Five years, not one: takings are compared year on year.
+        var wrong = Over(query, TakingsReport.MostDays);
+
+        return RunAsync(
+            facilityOwnerId,
+            facilityId,
+            wrong == PlatformReportFailure.WindowTooWide ? PlatformReportFailure.TakingsWindowTooWide : wrong,
+            venues => Takings.ReadAsync(db, venues, query, ct),
+            ct);
+    }
+
+    public Task<PlatformReportResult<MissedReport>> MissedAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct) =>
+        RunAsync(
+            facilityOwnerId,
+            facilityId,
+            Over(query),
+            venues => Missed.ReadAsync(db, venues, query, timeProvider.GetUtcNow(), ct),
+            ct);
+
+    public async Task<PlatformReportResult<CourtChangesReport>> CourtChangesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        CourtChangesQuery query,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        return await RunAsync(
+            facilityOwnerId,
+            facilityId,
+            CheckRange(query.From, query.To),
+            async venues =>
+            {
+                // A court asked for by id has to be at one of these venues.
+                if (query.CourtId is Guid courtId
+                    && !await db.Courts.AnyAsync(court => court.Id == courtId && venues.Contains(court.FacilityId), ct))
+                {
+                    return null;
+                }
+
+                return await CourtChanges.ReadAsync(db, venues, query, timeProvider.GetUtcNow(), ct);
+            },
+            ct,
+            missing: PlatformReportFailure.CourtNotFound);
+    }
+
+    public Task<PlatformReportResult<CourtMixReport>> CourtMixAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        CourtMixQuery query,
+        CancellationToken ct) =>
+        RunAsync(
+            facilityOwnerId,
+            facilityId,
+            CheckRange(query.From, query.To),
+            venues => CourtMix.ReadAsync(db, venues, query, ct),
+            ct);
+
+    /// <summary>
+    /// Every report the same way round: refuse a bad range, work out the
+    /// venues, refuse an owner or venue that is not there, then hand the
+    /// venues to the desk's own report. A report that answers null means the
+    /// thing it was narrowed to is not in scope, which is <paramref name="missing"/>.
+    /// </summary>
+    private async Task<PlatformReportResult<T>> RunAsync<T>(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        PlatformReportFailure rangeFailure,
+        Func<List<Guid>, Task<T?>> read,
+        CancellationToken ct,
+        PlatformReportFailure missing = PlatformReportFailure.None)
+        where T : class
+    {
+        if (rangeFailure != PlatformReportFailure.None)
+        {
+            return PlatformReportResult<T>.Fail(rangeFailure);
+        }
+
+        var scope = await ScopeAsync(facilityOwnerId, facilityId, ct);
+
+        if (scope.Failure != PlatformReportFailure.None)
+        {
+            return PlatformReportResult<T>.Fail(scope.Failure);
+        }
+
+        var report = await read([.. scope.Venues.Select(venue => venue.Id)]);
+
+        return report is null
+            ? PlatformReportResult<T>.Fail(missing)
+            : PlatformReportResult<T>.Success(report);
+    }
+
+    /// <summary>An over-time report's limits: a known grain, forwards, and at most <paramref name="mostDays"/>.</summary>
+    private static PlatformReportFailure Over(HoursQuery query, int mostDays = UtilizationQueryValidator.MostDays)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        return HoursGrain.IsSupported(query.Grain)
+            ? CheckRange(query.From, query.To, mostDays)
+            : PlatformReportFailure.UnknownGrain;
+    }
+
     /// <summary>The desk's own limits: forwards, and a year at most.</summary>
     private static PlatformReportFailure CheckRange(DateOnly from, DateOnly to, int mostDays = UtilizationQueryValidator.MostDays)
     {

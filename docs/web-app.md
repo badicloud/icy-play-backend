@@ -452,9 +452,13 @@ ignored. `ReportFilters` shows the desk's venue picker or the admin's
 carry `?owner=&venue=` so the scope follows the admin from report to report. A report
 page asks for its data through `reportData.ts` (`useUtilizationReport`,
 `useHoursReport`), which picks the console, and links to a sibling report with
-`reportHref`, which keeps the scope. So far: **Court utilisation**, **Sold Hours**,
-**Sold Courts** and **Not Sold Courts** (`/admin/reports/utilization`, `hours`,
-`sold`, `unsold`), with the rental in the first.
+`reportHref`, which keeps the scope. Every desk report is
+now in the admin console under the same name (`/admin/reports/utilization`,
+`hours`, `sold`, `unsold`, `moves`, `declines`, `takings`, `missed`, `changes`,
+`mix`), with the rental in Court utilisation. Only Platform commission waits, on
+billing. Court Changes picks its courts from the report's own list, retired
+ones included, and starts again from every court when the admin changes owner
+or venue.
 
 ### Other admin pages
 

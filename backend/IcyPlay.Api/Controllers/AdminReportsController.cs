@@ -80,6 +80,111 @@ public sealed class AdminReportsController(IPlatformReportService reports) : Con
             : Failure(result.Failure);
     }
 
+    // The desk's other reports, across the scope. Each is the desk's own,
+    // handed the owner's or venue's venues instead of the desk's.
+
+    /// <summary>Moved Bookings.</summary>
+    [HttpGet("moves")]
+    public async Task<IActionResult> Moves(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.MovesAsync(facilityOwnerId, facilityId, new HoursQuery(from, to, grain), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MovesReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Declined Bookings.</summary>
+    [HttpGet("declines")]
+    public async Task<IActionResult> Declines(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.DeclinesAsync(facilityOwnerId, facilityId, new HoursQuery(from, to, grain), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<DeclinesReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Takings, up to five years.</summary>
+    [HttpGet("takings")]
+    public async Task<IActionResult> Takings(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.TakingsAsync(facilityOwnerId, facilityId, new HoursQuery(from, to, grain), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<TakingsReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Missed Income.</summary>
+    [HttpGet("missed")]
+    public async Task<IActionResult> Missed(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] string grain = HoursGrain.Day,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.MissedAsync(facilityOwnerId, facilityId, new HoursQuery(from, to, grain), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<MissedReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Court Changes, optionally narrowed to one court.</summary>
+    [HttpGet("court-changes")]
+    public async Task<IActionResult> CourtChanges(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] Guid? courtId = null,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.CourtChangesAsync(facilityOwnerId, facilityId, new CourtChangesQuery(from, to, CourtId: courtId), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CourtChangesReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>Court Mix, retired courts listed when asked for.</summary>
+    [HttpGet("court-mix")]
+    public async Task<IActionResult> CourtMix(
+        [FromQuery] DateOnly from,
+        [FromQuery] DateOnly to,
+        [FromQuery] bool includeRetired = false,
+        [FromQuery] Guid? facilityOwnerId = null,
+        [FromQuery] Guid? facilityId = null,
+        CancellationToken ct = default)
+    {
+        var result = await reports.CourtMixAsync(facilityOwnerId, facilityId, new CourtMixQuery(from, to, IncludeRetired: includeRetired), ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CourtMixReport>(result.Value!))
+            : Failure(result.Failure);
+    }
+
     private IActionResult Failure(PlatformReportFailure failure)
     {
         var (status, code, message) = failure switch
@@ -100,6 +205,14 @@ public sealed class AdminReportsController(IPlatformReportService reports) : Con
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Ask for a year or less."),
+            PlatformReportFailure.TakingsWindowTooWide => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Ask for five years or less."),
+            PlatformReportFailure.CourtNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "There is no court with that id at those venues."),
             PlatformReportFailure.UnknownGrain => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

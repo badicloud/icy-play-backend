@@ -591,10 +591,18 @@ public sealed record CourtChangesReport(
     /// <summary>The changes, newest first, up to <see cref="CourtChangesReport.Listed"/>.</summary>
     IReadOnlyCollection<CourtChange> Changes,
     /// <summary>Every change in the range, not only the ones listed.</summary>
-    int Total)
+    int Total,
+    /// <summary>
+    /// Every court at the venues in scope, retired ones too, for the court
+    /// picker — whichever court the report is narrowed to. A retired court
+    /// has a history worth reading.
+    /// </summary>
+    IReadOnlyCollection<CourtOption> Courts)
 {
     public const int Listed = 500;
 }
+
+public sealed record CourtOption(Guid Id, Guid FacilityId, string FacilityName, string Name, bool IsActive);
 
 public sealed record CourtChangesSummary(
     /// <summary>Courts on sale now.</summary>

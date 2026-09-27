@@ -37,6 +37,48 @@ public interface IPlatformReportService
         HoursQuery query,
         CancellationToken ct);
 
+    /// <summary>Moved Bookings, across the scope.</summary>
+    Task<PlatformReportResult<MovesReport>> MovesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>Declined Bookings, across the scope.</summary>
+    Task<PlatformReportResult<DeclinesReport>> DeclinesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>Takings, across the scope. Up to five years, the same as the desk's.</summary>
+    Task<PlatformReportResult<TakingsReport>> TakingsAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>Missed Income, across the scope.</summary>
+    Task<PlatformReportResult<MissedReport>> MissedAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        HoursQuery query,
+        CancellationToken ct);
+
+    /// <summary>Court Changes, across the scope. The query's court has to be one of its venues'.</summary>
+    Task<PlatformReportResult<CourtChangesReport>> CourtChangesAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        CourtChangesQuery query,
+        CancellationToken ct);
+
+    /// <summary>Court Mix, across the scope.</summary>
+    Task<PlatformReportResult<CourtMixReport>> CourtMixAsync(
+        Guid? facilityOwnerId,
+        Guid? facilityId,
+        CourtMixQuery query,
+        CancellationToken ct);
+
     Task<PlatformReportResult<UtilizationReport>> UtilizationAsync(
         Guid? facilityOwnerId,
         Guid? facilityId,

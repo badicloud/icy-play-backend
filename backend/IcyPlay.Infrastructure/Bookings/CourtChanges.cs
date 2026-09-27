@@ -49,7 +49,8 @@ internal static class CourtChanges
                 court.FacilityId,
                 court.Name,
                 court.IsActive,
-                court.Facility.TimeZone))
+                court.Facility.TimeZone,
+                court.Facility.Name))
             .ToDictionaryAsync(court => court.Id, ct);
 
         var zones = await db.Facilities
@@ -145,7 +146,18 @@ internal static class CourtChanges
                     .Where(count => count.Count > 0)
             ],
             [.. changes.Take(CourtChangesReport.Listed)],
-            changes.Count);
+            changes.Count,
+            [
+                .. courts.Values
+                    .OrderBy(court => court.FacilityName)
+                    .ThenBy(court => court.Name)
+                    .Select(court => new CourtOption(
+                        court.Id,
+                        court.FacilityId,
+                        court.FacilityName,
+                        court.Name,
+                        court.IsActive))
+            ]);
     }
 
     /// <summary>
@@ -576,7 +588,13 @@ internal static class CourtChanges
         }
     }
 
-    private sealed record CourtRow(Guid Id, Guid FacilityId, string Name, bool IsActive, string TimeZone);
+    private sealed record CourtRow(
+        Guid Id,
+        Guid FacilityId,
+        string Name,
+        bool IsActive,
+        string TimeZone,
+        string FacilityName);
 
     /// <summary>One audit entry, unpacked, with what every change made from it shares.</summary>
     private sealed record Entry(

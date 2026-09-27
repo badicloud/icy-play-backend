@@ -963,6 +963,55 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         nonsense.Failure.Should().Be(PlatformReportFailure.UnknownGrain);
     }
 
+    /// <summary>
+    /// Every other desk report the admin reads for one owner is that owner's
+    /// own, figure for figure: the admin's are the desk's code over the
+    /// owner's venues, not a second copy of it.
+    /// </summary>
+    [Fact]
+    public async Task PlatformReportsShouldMatchTheOwnersOwn()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Platform Six Courts");
+        var elsewhere = await VenueAsync(context, "Platform Six Elsewhere");
+        await ConfirmAsync(context, venue, venue.Pickleball1, Monday, new TimeOnly(9, 0));
+        var ownerId = await context.Facilities
+            .Where(facility => facility.Id == venue.FacilityId)
+            .Select(facility => facility.FacilityOwnerId)
+            .SingleAsync();
+        var admin = new PlatformReportService(context, new FixedTimeProvider(Now));
+        var desk = CreateService(context);
+        var range = new HoursQuery(Monday, Tuesday, HoursGrain.Day);
+        var ct = CancellationToken.None;
+
+        // Act and assert, report by report.
+        using var _ = new AssertionScope();
+
+        (await admin.MovesAsync(ownerId, null, range, ct)).Value
+            .Should().BeEquivalentTo((await desk.MovesAsync(venue.OwnerUserId, range, ct)).Value);
+        (await admin.DeclinesAsync(ownerId, null, range, ct)).Value
+            .Should().BeEquivalentTo((await desk.DeclinesAsync(venue.OwnerUserId, range, ct)).Value);
+        (await admin.TakingsAsync(ownerId, null, range, ct)).Value
+            .Should().BeEquivalentTo((await desk.TakingsAsync(venue.OwnerUserId, range, ct)).Value);
+        (await admin.MissedAsync(ownerId, null, range, ct)).Value
+            .Should().BeEquivalentTo((await desk.MissedAsync(venue.OwnerUserId, range, ct)).Value);
+
+        var mix = new CourtMixQuery(Monday, Tuesday);
+        (await admin.CourtMixAsync(ownerId, null, mix, ct)).Value
+            .Should().BeEquivalentTo((await desk.CourtMixAsync(venue.OwnerUserId, mix, ct)).Value);
+
+        var changes = new CourtChangesQuery(Monday, Tuesday);
+        (await admin.CourtChangesAsync(ownerId, null, changes, ct)).Value
+            .Should().BeEquivalentTo((await desk.CourtChangesAsync(venue.OwnerUserId, changes, ct)).Value);
+
+        // A court at somebody else's venue, and a range longer than takings go.
+        (await admin.CourtChangesAsync(ownerId, null, changes with { CourtId = elsewhere.CourtId }, ct)).Failure
+            .Should().Be(PlatformReportFailure.CourtNotFound);
+        (await admin.TakingsAsync(ownerId, null, range with { From = Monday.AddYears(-6) }, ct)).Failure
+            .Should().Be(PlatformReportFailure.TakingsWindowTooWide);
+    }
+
     private static Task ConfirmAsync(
         AppDbContext context,
         Venue venue,
