@@ -595,7 +595,7 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
             : Failure(result.Failure);
     }
 
-    /// <summary>
+    /// <summary>What this venue has set for itself.</summary>
     [HttpGet("settings")]
     public async Task<IActionResult> Settings(CancellationToken ct)
     {
@@ -608,6 +608,25 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
 
         return result.Succeeded
             ? Ok(new ApiEnvelope<DeskSettings>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Every change to the venue's dials, newest first, whoever made it — the
+    /// desk, or the platform on the venue's behalf.
+    /// </summary>
+    [HttpGet("settings/history")]
+    public async Task<IActionResult> SettingsHistory(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.SettingsHistoryAsync(userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<IReadOnlyCollection<DeskSettingsChange>>(result.Value!))
             : Failure(result.Failure);
     }
 

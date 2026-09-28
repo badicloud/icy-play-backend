@@ -650,13 +650,14 @@ to pay into lives on the owner.
 | GcashAccountName | nvarchar(200) | Shown beside the number, so a customer can check the name before sending. |
 | GcashQrCodeUrl | nvarchar(1000) | Cloudinary `secure_url`. |
 | PartialBookingExpiryMinutes | int | How long an unpaid hold survives. Default 5, clamped to 5–240. |
-| MoveLimit | int | How many moves a customer gets on one booking. Default 3, clamped to 1–20. |
+| MoveLimit | int | How many moves a customer gets on one booking. Default 3, clamped to 1–20. Only approved moves count. |
+| MoveNoticeDays | int | How many days before a booking starts moves close. Default 2, clamped to 1–7. Not asked of a booking already under way. |
 
 These are on the owner rather than in a `PaymentMethods` table because there is
 one way to pay today. A second method is a table; a first one is four columns.
 
-`MoveLimit` is per venue because it is **their** court being held while somebody
-makes up their mind. See [booking.md](booking.md#moving-a-booking).
+`MoveLimit` and `MoveNoticeDays` are per venue because it is **their** court
+being held while somebody makes up their mind. See [booking.md](booking.md#moving-a-booking).
 
 ### Bookings
 
@@ -744,10 +745,13 @@ difference. See [booking.md](booking.md#upgrading-a-booking).
 | MoveReason | nvarchar(30) | Why the customer wants to move — see [booking.md](booking.md#why-it-moved). Null only on requests from before customers were asked. |
 | MoveReasonNote | nvarchar(200) | The customer's few words, if any. Required when the reason is `Other`. |
 
-**Only upgrades exist here.** A move to the same price or cheaper does not
-create a row at all: it is immediate and free, and the request table is for the
-one case that cannot be — money has to change hands, and the venue has to see it
-arrive before it gives up the better court.
+**Every move is a row here.** A move to the same price or cheaper has
+`BalanceDue = 0` and starts at `AwaitingApproval` — there is nothing to pay, so
+it goes straight to the desk. An upgrade starts at `AwaitingPayment` and reaches
+the desk once its receipt is in. While a row is `AwaitingApproval` its slots
+count as taken in availability, so the hours are held for the customer until the
+venue answers. `Declined` rows are not counted against the move limit; only an
+approval increments `Bookings.MoveCount`.
 
 **The money is fixed when the request is made**, not worked out again at
 approval. A rate the venue changes in between must not change what somebody has

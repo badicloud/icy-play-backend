@@ -1264,7 +1264,11 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         public Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct) =>
             Task.CompletedTask;
 
-        public Task BookingMovedAsync(Booking booking, BookingMoveNotice notice, CancellationToken ct) =>
+        public Task MoveRequestedAsync(BookingUpgradeRequest move, CancellationToken ct) => Task.CompletedTask;
+
+        public Task MoveApprovedAsync(BookingUpgradeRequest move, string fromCourtName, CancellationToken ct) =>
             Task.CompletedTask;
+
+        public Task MoveDeclinedAsync(BookingUpgradeRequest move, CancellationToken ct) => Task.CompletedTask;
     }
 }

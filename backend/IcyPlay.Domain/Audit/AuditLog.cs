@@ -85,6 +85,8 @@ public static class AuditAction
     public const string FacilityOwnerPaymentDetailsUpdated = "FacilityOwnerPaymentDetailsUpdated";
     /// <summary>The dials the venue sets from its own desk.</summary>
     public const string FacilityOwnerDeskSettingsUpdated = "FacilityOwnerDeskSettingsUpdated";
+    /// <summary>The move limit and notice, set for a venue by the platform admin.</summary>
+    public const string FacilityOwnerMoveRulesUpdated = "FacilityOwnerMoveRulesUpdated";
     public const string FacilityOwnerInvitationSent = "FacilityOwnerInvitationSent";
     /// <summary>
     /// Demonstration venues were removed in bulk. Kept even though the rows
@@ -114,6 +116,14 @@ public static class AuditAction
     public const string BookingUpgradePaymentSubmitted = "BookingUpgradePaymentSubmitted";
     public const string BookingUpgradeApproved = "BookingUpgradeApproved";
     public const string BookingUpgradeDeclined = "BookingUpgradeDeclined";
+
+    /// <summary>
+    /// A move with nothing to pay, from being asked for to being answered. The
+    /// upgrade has its own three because money changes hands in the middle.
+    /// </summary>
+    public const string BookingMoveRequested = "BookingMoveRequested";
+    public const string BookingMoveApproved = "BookingMoveApproved";
+    public const string BookingMoveDeclined = "BookingMoveDeclined";
 
     /// <summary>
     /// A hold that ran out with nothing paid.

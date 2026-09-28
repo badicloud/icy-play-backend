@@ -6,6 +6,7 @@ using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Audit;
+using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Persistence;
@@ -253,6 +254,8 @@ public sealed class FacilityOwnerOnboardingService(
                 candidate.GcashAccountName,
                 candidate.GcashQrCodeUrl,
                 candidate.PartialBookingExpiryMinutes,
+                candidate.MoveLimit,
+                candidate.MoveNoticeDays,
                 candidate.IsActive,
                 candidate.CreatedAt,
                 candidate.UpdatedAt,
@@ -387,6 +390,8 @@ public sealed class FacilityOwnerOnboardingService(
             owner.GcashAccountName,
             owner.GcashQrCodeUrl,
             owner.PartialBookingExpiryMinutes,
+            owner.MoveLimit > 0 ? owner.MoveLimit : BookingMove.DefaultLimit,
+            owner.MoveNoticeDays > 0 ? owner.MoveNoticeDays : BookingMove.DefaultNoticeDays,
             !string.IsNullOrWhiteSpace(owner.GcashNumber) ||
                 !string.IsNullOrWhiteSpace(owner.GcashQrCodeUrl),
             owner.IsActive,

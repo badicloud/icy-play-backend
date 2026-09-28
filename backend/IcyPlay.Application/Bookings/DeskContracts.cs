@@ -157,8 +157,8 @@ public sealed record DeskQuery(
     int PageSize = 10);
 
 /// <summary>
-/// The two dials a venue sets for itself, both about how long it is prepared
-/// to hold a court for somebody who has not paid yet.
+/// The dials a venue sets for itself: how long it holds a court for somebody
+/// who has not paid yet, and how much moving it puts up with.
 /// </summary>
 public sealed record DeskSettings(
     /// <summary>Minutes a court is held while the customer pays.</summary>
@@ -168,11 +168,47 @@ public sealed record DeskSettings(
     int SmallestExpiry,
     int LargestExpiry,
     int SmallestMoveLimit,
-    int LargestMoveLimit);
+    int LargestMoveLimit,
+    /// <summary>How many days before a booking starts moves close.</summary>
+    int MoveNoticeDays,
+    int SmallestMoveNoticeDays,
+    int LargestMoveNoticeDays);
 
+/// <summary>
+/// One time the venue's dials were changed: who did it, when, and what each
+/// one went from and to.
+///
+/// Read back from the audit trail rather than kept on the side, so the desk
+/// and the admin console are reading the same record. A change made by the
+/// platform on the venue's behalf is here too, marked as such — a venue whose
+/// hold shortened overnight should be able to see that it was not one of its
+/// own people.
+/// </summary>
+public sealed record DeskSettingsChange(
+    Guid Id,
+    DateTimeOffset ChangedAt,
+    /// <summary>Null when the account that made it no longer exists.</summary>
+    string? ChangedBy,
+    /// <summary>True when the platform admin made it, not somebody at the venue.</summary>
+    bool ByPlatform,
+    IReadOnlyCollection<DeskSettingChange> Changes,
+    string? Reason);
+
+/// <summary>
+/// One dial, before and after. The setting is its stored name —
+/// partialBookingExpiryMinutes, moveLimit or moveNoticeDays — and the screen
+/// words it.
+/// </summary>
+public sealed record DeskSettingChange(string Setting, string? From, string? To);
+
+/// <summary>
+/// The notice is optional so a caller that predates it does not set it to
+/// nothing by leaving it out: missing means "leave it as it is".
+/// </summary>
 public sealed record UpdateDeskSettingsRequest(
     int PartialBookingExpiryMinutes,
-    int MoveLimit);
+    int MoveLimit,
+    int? MoveNoticeDays = null);
 
 /// <summary>
 /// Turning a payment down: a reason from <see cref="Domain.Bookings.RejectReason"/>,

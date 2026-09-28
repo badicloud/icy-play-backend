@@ -61,6 +61,9 @@ go. So a missing template is quiet: check the logs, not the screen.
 | `booking-payment-submitted.html` | `booking-payment-submitted` | The facility administrator | The same moment |
 | `booking-confirmed.html` | `booking-confirmed` | The customer | A person at the venue has checked the payment |
 | `booking-declined.html` | `booking-declined` | The customer | A person at the venue has checked the payment and turned it down |
+| `booking-move-requested.html` | `booking-move-requested` | The facility administrator | A customer asks for a free move (same price or cheaper) |
+| `booking-move-approved.html` | `booking-move-approved` | The customer | The desk approves a free move |
+| `booking-move-declined.html` | `booking-move-declined` | The customer | The desk declines a move, free or an upgrade |
 
 ### The three a booking sends
 
@@ -81,9 +84,14 @@ is confirmed, and a customer who turns up on the strength of the wrong email
 finds somebody else on the court. It says so twice: in the eyebrow
 (*Partially booked*) and in the sentence.
 
-**The venue's letter goes to the owner's account email** — the person who signs
-in and works the queue — rather than the billing address, which is where
-invoices go and may be an accountant who has never seen a court.
+**The venue's letters go to everybody at its desk**: the owner's account email
+and every attendant still on that venue who has accepted their invitation (email
+verified). One letter each, addressed by name, so nobody's address is shown to
+the others. Not the billing address, which is where invoices go and may be an
+accountant who has never seen a court; and not an attendant who was invited but
+never signed up, or who has been taken off — they cannot open the queue the
+letter points to. This covers `booking-payment-submitted`,
+`booking-upgrade-submitted` and `booking-move-requested`.
 
 ## Variables
 
@@ -131,6 +139,83 @@ the hours are back on sale.
 | `total_amount` | 1,645.00 |
 | `decline_reason` | `Wrong amount — paid ₱800 only`, or `Payment not received.` — the reason the desk picked and its note, as one sentence |
 | `venue_contact` | `0917 555 0101 · desk@cheche.ph` — the venue's phone and email, or the owner's account email when it has neither |
+| `booking_url` | The customer's booking page |
+| `support_email` | icyplaybooking@gmail.com |
+| `current_year` | 2026 |
+
+### The three a move sends
+
+Every move now waits for the venue. An upgrade (dearer hours) keeps its own
+letters — received, submitted, approved — because money changes hands; a free
+move uses these. The decline letter is shared: an upgrade the desk turns down
+gets it too, with a line about the money.
+
+```text
+Customer asks to move (nothing to pay)
+  └─ venue      "A customer wants to move"   NOT moved yet, hours held
+
+Venue approves
+  └─ customer   "Your booking has moved"      the new court — go here
+
+Venue declines (free or upgrade)
+  └─ customer   "Your booking has not moved"  still on the old court, not counted
+```
+
+### `booking-move-requested`
+
+| Variable | Example |
+| --- | --- |
+| `recipient_name` | IcyPay Facility |
+| `business_name` | IcyPay company |
+| `customer_name` | Maria Santos |
+| `customer_email` | maria@example.com |
+| `facility_name` | CheChe Facility |
+| `sport_name` | Pickleball |
+| `from_court_name` | Che court 1 · Pickleball 1 — where it is now |
+| `from_dates` | 15 Sep 2026 |
+| `from_hours` | `7:00 AM – 9:00 AM`, or `15 Sep 8:00 AM – 10:00 PM; 16 Sep …` over several days |
+| `to_court_name` | Che court 1 · Pickleball 2 — where they want it |
+| `to_dates` | 16 Sep 2026 |
+| `to_hours` | `11:00 AM – 1:00 PM` |
+| `move_reason` | `Weather`, or `Other — Friend is late` |
+| `requests_url` | The desk's move requests queue |
+| `support_email` | icyplaybooking@gmail.com |
+| `current_year` | 2026 |
+
+### `booking-move-approved`
+
+Sent after the booking has moved, so `court_name`, `booking_dates` and
+`booking_hours` are where it is **now**.
+
+| Variable | Example |
+| --- | --- |
+| `recipient_name` | Maria Santos |
+| `from_court_name` | Che court 1 · Pickleball 1 |
+| `court_name` | Che court 1 · Pickleball 2 |
+| `facility_name` | CheChe Facility |
+| `sport_name` | Pickleball |
+| `booking_dates` | 16 Sep 2026 |
+| `booking_hours` | `11:00 AM – 1:00 PM` |
+| `booking_url` | The customer's booking page |
+| `support_email` | icyplaybooking@gmail.com |
+| `current_year` | 2026 |
+
+### `booking-move-declined`
+
+| Variable | Example |
+| --- | --- |
+| `recipient_name` | Maria Santos |
+| `court_name` | Che court 1 · Pickleball 1 — still theirs |
+| `booking_dates` | 15 Sep 2026 |
+| `booking_hours` | `7:00 AM – 9:00 AM` |
+| `facility_name` | CheChe Facility |
+| `sport_name` | Pickleball |
+| `asked_court_name` | Che court 1 · Pickleball 2 |
+| `asked_dates` | 16 Sep 2026 |
+| `asked_hours` | `11:00 AM – 1:00 PM` |
+| `decline_reason` | What the desk wrote, or `The venue could not make the move.` |
+| `money_note` | Empty on a free move. On a paid upgrade: `You sent ₱400.00 for the difference. The venue has it, so ask them to send it back.` The template shows that block only when it is set (`{% if var:money_note %}`, which needs `TemplateLanguage`, and the sender turns it on) |
+| `venue_contact` | `0917 555 0101 · desk@cheche.ph` |
 | `booking_url` | The customer's booking page |
 | `support_email` | icyplaybooking@gmail.com |
 | `current_year` | 2026 |

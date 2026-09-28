@@ -206,11 +206,17 @@ same hours, which is not a move.
 
 Options arrive **cheapest first**, and a court that costs more carries its
 balance on the card. Picking one goes to the upgrade checkout rather than moving
-anything.
+anything. A free one is **sent to the venue** — the button says *Send to the
+venue*, and a snackbar says the booking stays where it is until they approve.
+The panel at the top says how many moves are left, that only approved ones
+count, and how many days before the start moves close.
+
+The booking card says why the button has gone when the venue's notice has
+closed moves (`isInsideMoveNotice`), rather than simply not showing it.
 
 **Why are you moving it?** — `MoveReasonPicker`, shared by the dialog and the
 upgrade checkout. The reasons are chips; a note box opens once one is picked,
-optional except on Other. *Move it* and *Pay and proceed* stay grey until there
+optional except on Other. *Send to the venue* and *Pay and proceed* stay grey until there
 is an answer the server will take. On an upgrade it is asked **on the checkout,
 not in the dialog**, because the dialog hands over to the checkout through its
 address and a customer's own words do not belong in a URL.
@@ -229,16 +235,24 @@ size is something else.
 ## The venue's desk
 
 `/desk` — the booking queue (`Waiting` and `Confirmed`), the court diary, and
-`/desk/upgrades`, which is the same two-pile shape: what is waiting is work and
-what is settled is a record. Declining takes a reason, which the customer is
-shown.
+`/desk/upgrades` (*Move requests*), which is the same two-pile shape: what is
+waiting is work and what is settled is a record. Every move lands there; each
+row is badged **Move** or **Upgrade**, and only one with money owed is called an
+upgrade, on the row, the overview banner and the decline dialog. Declining
+takes a reason, which the customer is emailed.
+
+`/desk/settings` holds the hold length, the move limit and the move notice (in
+days), with a **change history** underneath: who changed which dial, from what
+to what, and an *IcyPlay admin* badge when the platform set it. The admin sets
+the same two move dials from the facility owner page (*Booking moves*), and the
+owner page's Activity timeline names them.
 
 A booking's **history** is readable from both the desk and the customer's own
 page, and it is the same account of the same events.
 
 **The bell.** For an owner or an attendant, the account button in the header
 carries a bell with a red count while anything is waiting on the desk:
-payments to check plus upgrades to approve, across every venue they work. It
+payments to check plus move requests to answer, across every venue they work. It
 shakes, rests and shakes again, and holds still for anybody who has asked for
 less motion. The menu under it has a row for each, linking to its queue. It
 reads the same two counts as the desk overview, from the same cached queries,

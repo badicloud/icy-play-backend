@@ -472,16 +472,25 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "Those hours cost the same or less, so there is nothing to pay. " +
-                "You can move onto them straight away."),
+                "Ask the venue to move you onto them instead."),
             BookingFailure.MoveCostsMore => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "That court costs more than this booking has been paid for. " +
-                "Ask the venue if you would like to move onto it."),
+                "Upgrade to it and pay the difference instead."),
+            BookingFailure.TooLateToMove => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking starts too soon to be moved. " +
+                "The venue stops taking moves a set number of days before a booking starts."),
+            BookingFailure.CourtOnlyOnceStarted => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking has started, so its hours stay as they are. You can still ask to change court."),
             BookingFailure.MoveRequestNotFound => (
                 StatusCodes.Status404NotFound,
                 ErrorCodes.NotFound,
-                "No upgrade is waiting on this booking. The hold may have run out, " +
+                "No move is waiting on this booking. The hold may have run out, " +
                 "in which case those hours are back on sale."),
             BookingFailure.MoveNotPaid => (
                 StatusCodes.Status409Conflict,

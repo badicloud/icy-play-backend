@@ -196,6 +196,12 @@ public sealed record BookingDetail(
     /// </summary>
     string? UpgradeStatus,
     string? UpgradeToCourtName,
+    /// <summary>
+    /// What the open move asks the customer to pay: nought on a free move,
+    /// which goes straight to the venue, and the difference on an upgrade.
+    /// Null when nothing is open.
+    /// </summary>
+    decimal? UpgradeBalanceDue,
     IReadOnlyCollection<BookedSlot> Slots,
     /// <summary>
     /// How many moves this booking has left. Zero once they are used up, and
@@ -213,12 +219,23 @@ public sealed record BookingDetail(
     /// </summary>
     int MoveLimit,
     /// <summary>
+    /// How many days before it starts this venue stops taking moves — the
+    /// venue's own dial, so the page can say why the button has gone.
+    /// </summary>
+    int MoveNoticeDays,
+    /// <summary>
     /// Whether it can be moved right now — which is more than having moves
-    /// left, because the last day before it starts closes the door. Answered
-    /// here rather than worked out in the browser, so the rule lives in one
-    /// place and the reader's clock cannot disagree with the venue's.
+    /// left: the venue's notice before it starts closes the door, and a move
+    /// already waiting on the venue has to be answered first. Answered here
+    /// rather than worked out in the browser, so the rule lives in one place
+    /// and the reader's clock cannot disagree with the venue's.
     /// </summary>
     bool CanBeMoved,
+    /// <summary>
+    /// Whether it has not started and is already inside the venue's notice, so
+    /// moves are closed until — and unless — it is under way.
+    /// </summary>
+    bool IsInsideMoveNotice,
     /// <summary>
     /// Whether the booking has started, on the venue's clock.
     ///
@@ -360,10 +377,9 @@ public enum BookingFailure
     /// <summary>
     /// The court asked for costs more than the booking has been settled for.
     ///
-    /// A move happens at once now, and nothing collects money on the way: the
-    /// venue is not asked to approve it and the customer is not sent to a
-    /// checkout. So a dearer court cannot be moved onto without somebody
-    /// quietly paying the difference, and that somebody would be the venue.
+    /// A free move collects no money on the way, so a dearer court cannot be
+    /// asked for through it without somebody quietly paying the difference —
+    /// and that somebody would be the venue. Dearer hours are an upgrade.
     /// </summary>
     MoveCostsMore,
     /// <summary>
@@ -400,7 +416,17 @@ public enum BookingFailure
     /// noon has bought a morning on one court and an afternoon on another,
     /// which is not the thing they bought.
     /// </summary>
-    DayBookingInPlay
+    DayBookingInPlay,
+    /// <summary>
+    /// The booking has not started and is inside the venue's notice. The hours
+    /// it would give back are too close to be sold again.
+    /// </summary>
+    TooLateToMove,
+    /// <summary>
+    /// The booking is under way, so its hours are fixed. What is left of it can
+    /// change court, and only court.
+    /// </summary>
+    CourtOnlyOnceStarted
 }
 
 /// <summary>

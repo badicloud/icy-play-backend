@@ -92,6 +92,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.GcashQrCodeUrl).HasMaxLength(1000);
             entity.Property(x => x.PartialBookingExpiryMinutes)
                 .HasDefaultValue(PaymentHold.DefaultMinutes);
+            entity.Property(x => x.MoveNoticeDays)
+                .HasDefaultValue(BookingMove.DefaultNoticeDays);
             entity.Ignore(x => x.CanTakePayment);
             entity.Ignore(x => x.IsSeeded);
             // Filtered, because the question is only ever asked one way round:
@@ -302,6 +304,43 @@ public sealed class AppDbContext : DbContext
                     Subject = "Your booking at {{var:facility_name}} was not accepted",
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 25, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("3d8e1f52-a4c7-4b19-9e06-7f2b5c81d4a3"),
+                    Key = EmailTemplateKey.BookingMoveRequested,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8384428L,
+                    // "Waiting for you" in the subject: this one IS work, unlike
+                    // the old "no action needed" letter it replaces.
+                    Subject = "{{var:customer_name}} wants to move to {{var:to_court_name}} — waiting for you",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 28, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("9a42c6e0-5b1d-4f83-a7e9-0c6d3b28f715"),
+                    Key = EmailTemplateKey.BookingMoveApproved,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8384442L,
+                    Subject = "Your booking has moved to {{var:court_name}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 28, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("e71b09d4-2c58-4a6f-b3d2-84f5a19c6e20"),
+                    Key = EmailTemplateKey.BookingMoveDeclined,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8384444L,
+                    // Where they still are, in the subject, so somebody who reads
+                    // nothing else goes to the right court.
+                    Subject = "Your booking has not moved — you're still on {{var:court_name}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 28, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
                 });
         });

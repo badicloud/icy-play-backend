@@ -109,6 +109,16 @@ public sealed class FacilityOwner : Entity
     public int MoveLimit { get; private set; } = BookingMove.DefaultLimit;
 
     /// <summary>
+    /// How many days before a booking starts this venue stops taking moves.
+    ///
+    /// Per venue, like the limit: a hall that fills up the week before can
+    /// resell a returned Saturday with two days' warning, a quiet one wants a
+    /// week to have any chance. Once the booking has started this no longer
+    /// applies — what is left of it may still change court.
+    /// </summary>
+    public int MoveNoticeDays { get; private set; } = BookingMove.DefaultNoticeDays;
+
+    /// <summary>
     /// When the seeder raised this venue, and null for every real one.
     ///
     /// A stored fact rather than a guess at the name. Removing demonstration
@@ -139,6 +149,12 @@ public sealed class FacilityOwner : Entity
     public void SetMoveLimit(int moveLimit, DateTimeOffset now)
     {
         MoveLimit = BookingMove.ClampLimit(moveLimit);
+        UpdatedAt = now;
+    }
+
+    public void SetMoveNotice(int noticeDays, DateTimeOffset now)
+    {
+        MoveNoticeDays = BookingMove.ClampNoticeDays(noticeDays);
         UpdatedAt = now;
     }
 

@@ -53,6 +53,38 @@ public sealed class UpdatePaymentDetailsRequestValidator
     }
 }
 
+/// <summary>
+/// How much moving a venue puts up with: how many times one booking may move,
+/// and how many days before it starts moves close. The same two dials the
+/// venue sets from its own desk, set here by the platform on its behalf.
+/// </summary>
+public sealed record UpdateMoveRulesRequest(
+    int MoveLimit,
+    int MoveNoticeDays,
+    string? Reason);
+
+public sealed class UpdateMoveRulesRequestValidator : AbstractValidator<UpdateMoveRulesRequest>
+{
+    public UpdateMoveRulesRequestValidator()
+    {
+        RuleFor(x => x.MoveLimit)
+            .InclusiveBetween(
+                IcyPlay.Domain.Bookings.BookingMove.SmallestLimit,
+                IcyPlay.Domain.Bookings.BookingMove.LargestLimit)
+            .WithMessage(
+                $"A booking can be moved between {IcyPlay.Domain.Bookings.BookingMove.SmallestLimit} " +
+                $"and {IcyPlay.Domain.Bookings.BookingMove.LargestLimit} times.");
+        RuleFor(x => x.MoveNoticeDays)
+            .InclusiveBetween(
+                IcyPlay.Domain.Bookings.BookingMove.SmallestNoticeDays,
+                IcyPlay.Domain.Bookings.BookingMove.LargestNoticeDays)
+            .WithMessage(
+                $"Moves can close between {IcyPlay.Domain.Bookings.BookingMove.SmallestNoticeDays} " +
+                $"and {IcyPlay.Domain.Bookings.BookingMove.LargestNoticeDays} days before a booking starts.");
+        RuleFor(x => x.Reason).MaximumLength(500);
+    }
+}
+
 public sealed record UpdateFacilityRequest(
     string Name,
     string? Description,

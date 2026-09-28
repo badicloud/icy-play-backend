@@ -68,31 +68,29 @@ public sealed class BookingNotifier(
                 ct);
         }
 
-        await SendAsync(
-            new TransactionalEmailMessage(
-                EmailTemplateKey.BookingPaymentSubmitted,
-                parties.AdministratorEmail,
-                parties.AdministratorName,
-                new Dictionary<string, object>
-                {
-                    ["recipient_name"] = parties.AdministratorName,
-                    ["business_name"] = parties.BusinessName,
-                    ["customer_name"] = parties.CustomerName,
-                    ["customer_email"] = parties.CustomerEmail,
-                    ["court_name"] = booking.CourtName,
-                    ["facility_name"] = booking.FacilityName,
-                    ["sport_name"] = booking.SportName,
-                    ["booking_dates"] = Dates(days),
-                    ["booked_hours"] = booking.BookedHours,
-                    ["total_amount"] = Money(booking.Total),
-                    ["receipt_url"] = booking.ReceiptUrl ?? string.Empty,
-                    // The picture to look at, and the queue to act in. They
-                    // are different places and the letter needs both.
-                    ["confirmations_url"] = Settings.ConfirmationsUrl,
-                    ["booking_url"] = BookingUrl(booking.Id),
-                    ["support_email"] = Settings.SupportEmail,
-                    ["current_year"] = timeProvider.GetUtcNow().Year
-                }),
+        await SendToDeskAsync(
+            parties,
+            EmailTemplateKey.BookingPaymentSubmitted,
+            name => new Dictionary<string, object>
+            {
+                ["recipient_name"] = name,
+                ["business_name"] = parties.BusinessName,
+                ["customer_name"] = parties.CustomerName,
+                ["customer_email"] = parties.CustomerEmail,
+                ["court_name"] = booking.CourtName,
+                ["facility_name"] = booking.FacilityName,
+                ["sport_name"] = booking.SportName,
+                ["booking_dates"] = Dates(days),
+                ["booked_hours"] = booking.BookedHours,
+                ["total_amount"] = Money(booking.Total),
+                ["receipt_url"] = booking.ReceiptUrl ?? string.Empty,
+                // The picture to look at, and the queue to act in. They
+                // are different places and the letter needs both.
+                ["confirmations_url"] = Settings.ConfirmationsUrl,
+                ["booking_url"] = BookingUrl(booking.Id),
+                ["support_email"] = Settings.SupportEmail,
+                ["current_year"] = timeProvider.GetUtcNow().Year
+            },
             booking.Id,
             ct);
     }
@@ -209,34 +207,32 @@ public sealed class BookingNotifier(
                 ct);
         }
 
-        await SendAsync(
-            new TransactionalEmailMessage(
-                EmailTemplateKey.BookingUpgradeSubmitted,
-                about.Parties.AdministratorEmail,
-                about.Parties.AdministratorName,
-                new Dictionary<string, object>
-                {
-                    ["recipient_name"] = about.Parties.AdministratorName,
-                    ["business_name"] = about.Parties.BusinessName,
-                    ["customer_name"] = about.Parties.CustomerName,
-                    ["customer_email"] = about.Parties.CustomerEmail,
-                    ["from_court_name"] = about.FromCourtName,
-                    ["to_court_name"] = upgrade.ToCourtName,
-                    ["facility_name"] = about.FacilityName,
-                    ["sport_name"] = about.SportName,
-                    ["upgrade_dates"] = Dates(upgrade),
-                    ["upgrade_hours"] = Hours(upgrade),
-                    // All three figures, because the desk is checking a bank
-                    // statement against one of them and the wrong one is the
-                    // obvious one. What landed is the difference.
-                    ["rental_now"] = Money(upgrade.RentalNow),
-                    ["rental_new"] = Money(upgrade.RentalNew),
-                    ["balance_due"] = Money(upgrade.BalanceDue),
-                    ["receipt_url"] = upgrade.ReceiptUrl ?? string.Empty,
-                    ["upgrades_url"] = Settings.UpgradesUrl,
-                    ["support_email"] = Settings.SupportEmail,
-                    ["current_year"] = timeProvider.GetUtcNow().Year
-                }),
+        await SendToDeskAsync(
+            about.Parties,
+            EmailTemplateKey.BookingUpgradeSubmitted,
+            name => new Dictionary<string, object>
+            {
+                ["recipient_name"] = name,
+                ["business_name"] = about.Parties.BusinessName,
+                ["customer_name"] = about.Parties.CustomerName,
+                ["customer_email"] = about.Parties.CustomerEmail,
+                ["from_court_name"] = about.FromCourtName,
+                ["to_court_name"] = upgrade.ToCourtName,
+                ["facility_name"] = about.FacilityName,
+                ["sport_name"] = about.SportName,
+                ["upgrade_dates"] = Dates(upgrade),
+                ["upgrade_hours"] = Hours(upgrade),
+                // All three figures, because the desk is checking a bank
+                // statement against one of them and the wrong one is the
+                // obvious one. What landed is the difference.
+                ["rental_now"] = Money(upgrade.RentalNow),
+                ["rental_new"] = Money(upgrade.RentalNew),
+                ["balance_due"] = Money(upgrade.BalanceDue),
+                ["receipt_url"] = upgrade.ReceiptUrl ?? string.Empty,
+                ["upgrades_url"] = Settings.UpgradesUrl,
+                ["support_email"] = Settings.SupportEmail,
+                ["current_year"] = timeProvider.GetUtcNow().Year
+            },
             upgrade.BookingId,
             ct);
     }
@@ -275,46 +271,197 @@ public sealed class BookingNotifier(
             ct);
     }
 
-    public async Task BookingMovedAsync(
-        Booking booking,
-        BookingMoveNotice notice,
-        CancellationToken ct)
+    public async Task MoveRequestedAsync(BookingUpgradeRequest move, CancellationToken ct)
     {
-        ArgumentNullException.ThrowIfNull(booking);
-        ArgumentNullException.ThrowIfNull(notice);
+        ArgumentNullException.ThrowIfNull(move);
 
-        var parties = await PartiesAsync(booking.Id, ct);
+        var about = await UpgradeAsync(move.Id, ct);
 
-        if (parties is null)
+        if (about is null)
         {
             return;
         }
 
-        // The venue only. The customer just did this and is looking at the
-        // screen that did it; a letter telling them what they have this second
-        // done is noise.
+        var now = await HeldAsync(move.BookingId, ct);
+
+        // The venue only. The customer just asked and is looking at the screen
+        // that says it is with the venue; a letter repeating it is noise.
+        await SendToDeskAsync(
+            about.Parties,
+            EmailTemplateKey.BookingMoveRequested,
+            name => new Dictionary<string, object>
+            {
+                ["recipient_name"] = name,
+                ["business_name"] = about.Parties.BusinessName,
+                ["customer_name"] = about.Parties.CustomerName,
+                ["customer_email"] = about.Parties.CustomerEmail,
+                ["facility_name"] = about.FacilityName,
+                ["sport_name"] = about.SportName,
+                // Where it is, and where they would like it to be. The
+                // desk is deciding between the two, so both are spelled out.
+                ["from_court_name"] = about.FromCourtName,
+                ["from_dates"] = now.Dates,
+                ["from_hours"] = now.Hours,
+                ["to_court_name"] = move.ToCourtName,
+                ["to_dates"] = Dates(move),
+                ["to_hours"] = Ranges(move.Slots.Select(slot => (slot.Date, slot.StartsAt, slot.EndsAt))),
+                ["move_reason"] = Reason(move),
+                ["requests_url"] = Settings.UpgradesUrl,
+                ["support_email"] = Settings.SupportEmail,
+                ["current_year"] = timeProvider.GetUtcNow().Year
+            },
+            move.BookingId,
+            ct);
+    }
+
+    public async Task MoveApprovedAsync(
+        BookingUpgradeRequest move,
+        string fromCourtName,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(move);
+
+        var about = await UpgradeAsync(move.Id, ct);
+
+        if (about is null || about.Parties.CustomerEmail.Length == 0)
+        {
+            return;
+        }
+
+        var now = await HeldAsync(move.BookingId, ct);
+
         await SendAsync(
             new TransactionalEmailMessage(
-                EmailTemplateKey.BookingMoved,
-                parties.AdministratorEmail,
-                parties.AdministratorName,
+                EmailTemplateKey.BookingMoveApproved,
+                about.Parties.CustomerEmail,
+                about.Parties.CustomerName,
                 new Dictionary<string, object>
                 {
-                    ["recipient_name"] = parties.AdministratorName,
-                    ["business_name"] = parties.BusinessName,
-                    ["customer_name"] = parties.CustomerName,
-                    ["customer_email"] = parties.CustomerEmail,
-                    ["from_court_name"] = notice.FromCourtName,
-                    ["to_court_name"] = booking.CourtName,
-                    ["sport_name"] = booking.SportName,
-                    ["was_when"] = notice.WasWhen,
-                    ["now_when"] = notice.NowWhen,
-                    ["bookings_url"] = Settings.CourtBookingsUrl,
+                    ["recipient_name"] = about.Parties.CustomerName,
+                    ["from_court_name"] = fromCourtName,
+                    // The booking has moved, so what it holds now IS the
+                    // answer: the court to walk to and when.
+                    ["court_name"] = about.FromCourtName,
+                    ["facility_name"] = about.FacilityName,
+                    ["sport_name"] = about.SportName,
+                    ["booking_dates"] = now.Dates,
+                    ["booking_hours"] = now.Hours,
+                    ["booking_url"] = BookingUrl(move.BookingId),
                     ["support_email"] = Settings.SupportEmail,
                     ["current_year"] = timeProvider.GetUtcNow().Year
                 }),
-            booking.Id,
+            move.BookingId,
             ct);
+    }
+
+    public async Task MoveDeclinedAsync(BookingUpgradeRequest move, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(move);
+
+        var about = await UpgradeAsync(move.Id, ct);
+
+        if (about is null || about.Parties.CustomerEmail.Length == 0)
+        {
+            return;
+        }
+
+        var now = await HeldAsync(move.BookingId, ct);
+
+        await SendAsync(
+            new TransactionalEmailMessage(
+                EmailTemplateKey.BookingMoveDeclined,
+                about.Parties.CustomerEmail,
+                about.Parties.CustomerName,
+                new Dictionary<string, object>
+                {
+                    ["recipient_name"] = about.Parties.CustomerName,
+                    // Still theirs, said first: nobody should turn up at the
+                    // court they asked for.
+                    ["court_name"] = about.FromCourtName,
+                    ["booking_dates"] = now.Dates,
+                    ["booking_hours"] = now.Hours,
+                    ["facility_name"] = about.FacilityName,
+                    ["sport_name"] = about.SportName,
+                    ["asked_court_name"] = move.ToCourtName,
+                    ["asked_dates"] = Dates(move),
+                    ["asked_hours"] = Ranges(move.Slots.Select(slot => (slot.Date, slot.StartsAt, slot.EndsAt))),
+                    ["decline_reason"] = move.DeclineReason ?? "The venue could not make the move.",
+                    // Only an upgrade had money sent for it, and the venue has
+                    // it — IcyPlay never does. Empty on a free move, so the
+                    // template prints nothing.
+                    ["money_note"] = move.IsFree || move.ReceiptUrl is null
+                        ? string.Empty
+                        : $"You sent ₱{Money(move.BalanceDue)} for the difference. The venue has it, so ask them to send it back.",
+                    ["venue_contact"] = about.Parties.VenueContact,
+                    ["booking_url"] = BookingUrl(move.BookingId),
+                    ["support_email"] = Settings.SupportEmail,
+                    ["current_year"] = timeProvider.GetUtcNow().Year
+                }),
+            move.BookingId,
+            ct);
+    }
+
+    /// <summary>The customer's reason, as the desk reads it.</summary>
+    private static string Reason(BookingUpgradeRequest move) =>
+        move.MoveReason is null
+            ? "Not given."
+            : string.IsNullOrWhiteSpace(move.MoveReasonNote)
+                ? MoveReason.Label(move.MoveReason)
+                : $"{MoveReason.Label(move.MoveReason)} — {move.MoveReasonNote.Trim()}";
+
+    /// <summary>What the booking holds right now, as dates and hours.</summary>
+    private async Task<(string Dates, string Hours)> HeldAsync(Guid bookingId, CancellationToken ct)
+    {
+        var slots = await db.BookingSlots
+            .AsNoTracking()
+            .Where(slot => slot.BookingId == bookingId)
+            .Select(slot => new { slot.Date, slot.StartsAt, slot.EndsAt })
+            .ToListAsync(ct);
+
+        return (
+            Dates([.. slots.Select(slot => slot.Date).Distinct().OrderBy(date => date)]),
+            Ranges(slots.Select(slot => (slot.Date, slot.StartsAt, slot.EndsAt))));
+    }
+
+    /// <summary>
+    /// Hours as runs — "8:00 AM – 11:00 AM" rather than three start times —
+    /// with the date in front of each day's once there is more than one day.
+    /// </summary>
+    private static string Ranges(IEnumerable<(DateOnly Date, TimeOnly StartsAt, TimeOnly EndsAt)> slots)
+    {
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        var days = slots
+            .OrderBy(slot => slot.Date)
+            .ThenBy(slot => slot.StartsAt)
+            .GroupBy(slot => slot.Date)
+            .ToArray();
+
+        var parts = new List<string>();
+
+        foreach (var day in days)
+        {
+            var runs = new List<(TimeOnly From, TimeOnly To)>();
+
+            foreach (var slot in day)
+            {
+                if (runs.Count > 0 && runs[^1].To == slot.StartsAt)
+                {
+                    runs[^1] = (runs[^1].From, slot.EndsAt);
+                }
+                else
+                {
+                    runs.Add((slot.StartsAt, slot.EndsAt));
+                }
+            }
+
+            var said = string.Join(
+                ", ",
+                runs.Select(run => $"{run.From.ToString("h:mm tt", culture)} – {run.To.ToString("h:mm tt", culture)}"));
+
+            parts.Add(days.Length > 1 ? $"{day.Key.ToString("d MMM", culture)} {said}" : said);
+        }
+
+        return string.Join("; ", parts);
     }
 
     /// <summary>
@@ -343,6 +490,12 @@ public sealed class BookingNotifier(
                     .FirstOrDefault(),
                 Owner = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner,
                 Administrator = candidate.Booking.BookableCourt.Court.Facility.FacilityOwner.User,
+                Desk = candidate.Booking.BookableCourt.Court.Facility.Attendants
+                    .Where(attendant => attendant.IsActive
+                        && attendant.User.IsActive
+                        && attendant.User.EmailVerifiedAt != null)
+                    .Select(attendant => new DeskPerson(attendant.User.FullName, attendant.User.Email))
+                    .ToList(),
                 candidate.Booking.BookableCourt.Court.Facility.ContactPhone,
                 candidate.Booking.BookableCourt.Court.Facility.ContactEmail
             })
@@ -360,7 +513,8 @@ public sealed class BookingNotifier(
                     row.Owner.BusinessName,
                     row.Administrator.FullName,
                     row.Administrator.Email,
-                    VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email)));
+                    VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email),
+                    row.Desk));
     }
 
     private sealed record AboutUpgrade(
@@ -428,6 +582,12 @@ public sealed class BookingNotifier(
                     .FirstOrDefault(),
                 Owner = candidate.BookableCourt.Court.Facility.FacilityOwner,
                 Administrator = candidate.BookableCourt.Court.Facility.FacilityOwner.User,
+                Desk = candidate.BookableCourt.Court.Facility.Attendants
+                    .Where(attendant => attendant.IsActive
+                        && attendant.User.IsActive
+                        && attendant.User.EmailVerifiedAt != null)
+                    .Select(attendant => new DeskPerson(attendant.User.FullName, attendant.User.Email))
+                    .ToList(),
                 candidate.BookableCourt.Court.Facility.ContactPhone,
                 candidate.BookableCourt.Court.Facility.ContactEmail
             })
@@ -441,7 +601,8 @@ public sealed class BookingNotifier(
                 row.Owner.BusinessName,
                 row.Administrator.FullName,
                 row.Administrator.Email,
-                VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email));
+                VenueContact(row.ContactPhone, row.ContactEmail, row.Administrator.Email),
+                row.Desk);
     }
 
     /// <summary>
@@ -464,7 +625,45 @@ public sealed class BookingNotifier(
         string BusinessName,
         string AdministratorName,
         string AdministratorEmail,
-        string VenueContact);
+        string VenueContact,
+        IReadOnlyList<DeskPerson> Attendants);
+
+    /// <summary>Somebody at a venue's desk, as a letter addresses them.</summary>
+    private sealed record DeskPerson(string FullName, string Email);
+
+    /// <summary>
+    /// Writes one letter to each person at the venue's desk: the owner, and
+    /// every attendant still on it who has set up their account.
+    ///
+    /// Everybody, rather than the owner alone, because the attendants are the
+    /// ones working the queue — a letter only the owner gets is a customer
+    /// waiting while the one person who could answer is not told. Someone
+    /// invited but not yet signed up — their email not yet verified by
+    /// accepting the invitation — is left out: they cannot open the queue the
+    /// letter sends them to. One letter each rather than one with many
+    /// recipients, so each is addressed by name and nobody's address is shown
+    /// to the others.
+    /// </summary>
+    private async Task SendToDeskAsync(
+        Parties parties,
+        string templateKey,
+        Func<string, Dictionary<string, object>> variables,
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        var desk = new[] { new DeskPerson(parties.AdministratorName, parties.AdministratorEmail) }
+            .Concat(parties.Attendants)
+            .Where(person => !string.IsNullOrWhiteSpace(person.Email))
+            .DistinctBy(person => person.Email.Trim().ToUpperInvariant());
+
+        foreach (var person in desk)
+        {
+            await SendAsync(
+                new TransactionalEmailMessage(templateKey, person.Email, person.FullName, variables(person.FullName)),
+                bookingId,
+                ct);
+        }
+    }
 
     /// <summary>
     /// Money as a person reads it. Formatted here rather than in the template

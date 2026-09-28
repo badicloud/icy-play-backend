@@ -103,6 +103,9 @@ internal static class BookingHistory
             AuditAction.BookingCreated => "Booking made.",
             AuditAction.BookingPaymentSubmitted => "Payment sent to the venue to check.",
             AuditAction.BookingMoved => "Moved to another court.",
+            AuditAction.BookingMoveRequested => "Asked the venue to move this booking.",
+            AuditAction.BookingMoveApproved => "The venue agreed to the move.",
+            AuditAction.BookingMoveDeclined => "The venue declined the move. The booking stays where it is.",
             AuditAction.BookingConfirmed => "The venue confirmed your booking.",
             AuditAction.BookingRejected => "The venue could not accept the payment.",
             AuditAction.BookingHoldExpired =>

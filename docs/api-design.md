@@ -2495,6 +2495,19 @@ PUT /api/v1/admin/facility-owners/{id}/payment-details
 Role: PlatformAdmin. The GCash number, account name and QR code a customer pays
 into, and how long an unpaid hold survives.
 
+### Move rules
+
+```http
+PUT /api/v1/admin/facility-owners/{id}/move-rules
+{ "moveLimit": 3, "moveNoticeDays": 2, "reason": "Owner rang" }
+```
+
+Role: PlatformAdmin. How many times one of the venue's bookings may move (1–20)
+and how many days before it starts moves close (1–7). Validated rather than
+clamped — an admin typing 30 days has made a mistake worth hearing about. The
+venue can set both from its own desk; either way the change is audited
+(`FacilityOwnerMoveRulesUpdated`) and shows in the venue's settings history.
+
 ### Moving a booking
 
 ```http
@@ -2541,21 +2554,26 @@ and they cannot be named until a court is.
 | `move-window` | The hour grid for one date, with how many hours have to be picked. `Hourly` only — a day taken open to close has no hours to choose. |
 | `move-options` | Every court this booking could move to, each quoted, cheapest first. |
 | `move-quote` | What one named court would come to. Asks only; refuses nothing a screen is still deciding. |
-| `move` | Does it. |
+| `move` | Asks the venue. The booking is unchanged and the answer carries the waiting request (`upgradeStatus: AwaitingApproval`, `upgradeBalanceDue: 0`). |
 
 Runs in a serializable transaction for the same reason taking a booking does,
 and the booking's own hours are excluded from what counts as taken — otherwise a
 move overlapping the dates it is leaving would refuse on the strength of the very
 booking being moved.
 
-Refusals: `NotMovable`, `MoveLimitReached`, `NotTheSameOffering`,
-`DayBookingInPlay`, `BookingFinished`, `KindDoesNotMatchSlots`, `SlotTaken`,
-`OutsideOpeningHours`, `NotPriced`, `MoveCostsMore`, `NothingWouldChange`.
+Refusals: `NotMovable`, `MoveLimitReached`, `TooLateToMove`,
+`MoveAlreadyRequested`, `NotTheSameOffering`, `DayBookingInPlay`,
+`BookingFinished`, `CourtOnlyOnceStarted`, `KindDoesNotMatchSlots`,
+`SlotTaken`, `OutsideOpeningHours`, `NotPriced`, `MoveCostsMore`,
+`NothingWouldChange`. The notice, the limit and the status are asked at every
+door — `move-window`, `move-options`, `move-quote`, `move` and `upgrade`.
 
-`BookingDetail` carries `movesLeft` and `canBeMoved` so a page can offer the
-button or explain its absence without working the rules out again. `canBeMoved`
-is answered on the server, because it is measured on the venue's clock, not the
-reader's.
+`BookingDetail` carries `movesLeft`, `moveLimit`, `moveNoticeDays`,
+`canBeMoved` and `isInsideMoveNotice` so a page can offer the button or explain
+its absence without working the rules out again, and `upgradeBalanceDue` beside
+`upgradeStatus` so it can say whether the waiting move is free or paid. These
+are answered on the server, because they are measured on the venue's clock, not
+the reader's. `canBeMoved` is false while a move is waiting.
 
 ### Upgrading a booking
 
@@ -2573,7 +2591,7 @@ court. Rules and lifecycle: [booking.md](booking.md#upgrading-a-booking).
 `POST …/upgrade` takes the same body a move does and answers the request with
 its `balanceDue` and the hours it is holding. A move that costs the same or less
 is not an upgrade and is refused with `NothingToUpgrade` — it should have gone
-to `move`, which is free and immediate.
+to `move`, which is free and goes straight to the venue.
 
 `GET …/upgrade` answers the one open request, or null. **One at a time**
 (`MoveAlreadyRequested`): two, and the customer can be paying for hours while
@@ -2583,7 +2601,7 @@ the venue is approving different ones.
 the same shape as a booking's own receipt endpoint. The hours are held until the
 venue answers from that moment — the customer cannot be blamed for a queue.
 
-### The upgrade queue
+### The move request queue
 
 ```http
 GET  /api/v1/desk/upgrades?tab=Waiting&facilityId=&page=1&pageSize=10
@@ -2592,17 +2610,41 @@ POST /api/v1/desk/upgrades/{upgradeId}/decline
 ```
 
 Roles: FacilityOwner, FacilityAttendant, scoped exactly as the booking desk is.
-`tab` is `Waiting` (paid, nobody has looked) or `Settled`.
+The address still says "upgrades"; the queue is every move. `tab` is
+`Waiting` (every free move, and upgrades once paid — oldest first, by when the
+receipt came in or else when it was asked for) or `Settled`. A row's
+`balanceDue` says which kind it is: nought is a plain move, and only a row with
+something owed is called an upgrade on screen.
 
 `approve` re-checks rather than trusting the quote, because time has passed
-since it was made: still waiting (`UpgradeNotWaiting`), a receipt attached
-(`NoReceipt`), the hours still adding up (`UpgradeStale`), the target hours
-still free (`UpgradeHoursTaken`). Then the booking moves at the price it was
-quoted, and the balance is recorded against `PaidTotal`.
+since it was made: still waiting (`UpgradeNotWaiting`), a receipt attached when
+there is money owed (`NoReceipt`), the hours still adding up (`UpgradeStale`),
+the target hours still free (`UpgradeHoursTaken`). Then the booking moves at the
+price it was quoted, the move is counted, the balance (if any) is recorded
+against `PaidTotal`, and the customer is emailed — `booking-move-approved` for a
+free move, `booking-upgrade-approved` for a paid one.
 
-`decline` takes a reason, leaves the booking exactly where it was, and tells the
-customer. Unlike a rejected booking, a declined upgrade **does** write — there
-is nothing for the customer to answer, only something they need to know.
+`decline` takes a reason, leaves the booking exactly where it was, counts
+nothing, and emails the customer (`booking-move-declined`, with a line about the
+money on an upgrade).
+
+### Desk settings
+
+```http
+GET /api/v1/desk/settings
+PUT /api/v1/desk/settings   { "partialBookingExpiryMinutes": 30, "moveLimit": 3, "moveNoticeDays": 2 }
+GET /api/v1/desk/settings/history
+```
+
+Roles: FacilityOwner, FacilityAttendant. The venue's own dials, clamped rather
+than refused. `moveNoticeDays` is optional on the `PUT` — left out, it is left
+alone, so an older caller cannot set it to nothing.
+
+`history` is every change to those three dials, newest first, read from the
+audit trail: who made it, when, each dial's before and after, the reason if one
+was given, and `byPlatform` when the platform admin made it on the venue's
+behalf (from the admin's payment details or move rules). Changes that touched
+none of the three — a new GCash number — are left out.
 
 ### A booking's history
 

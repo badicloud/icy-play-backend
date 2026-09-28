@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260927233131_AddMoveNotice")]
+    partial class AddMoveNotice
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -583,36 +586,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             Key = "booking-declined",
                             Provider = "Mailjet",
                             Subject = "Your booking at {{var:facility_name}} was not accepted"
-                        },
-                        new
-                        {
-                            Id = new Guid("3d8e1f52-a4c7-4b19-9e06-7f2b5c81d4a3"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 28, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8384428L,
-                            IsActive = true,
-                            Key = "booking-move-requested",
-                            Provider = "Mailjet",
-                            Subject = "{{var:customer_name}} wants to move to {{var:to_court_name}} — waiting for you"
-                        },
-                        new
-                        {
-                            Id = new Guid("9a42c6e0-5b1d-4f83-a7e9-0c6d3b28f715"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 28, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8384442L,
-                            IsActive = true,
-                            Key = "booking-move-approved",
-                            Provider = "Mailjet",
-                            Subject = "Your booking has moved to {{var:court_name}}"
-                        },
-                        new
-                        {
-                            Id = new Guid("e71b09d4-2c58-4a6f-b3d2-84f5a19c6e20"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 28, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8384444L,
-                            IsActive = true,
-                            Key = "booking-move-declined",
-                            Provider = "Mailjet",
-                            Subject = "Your booking has not moved — you're still on {{var:court_name}}"
                         });
                 });
 

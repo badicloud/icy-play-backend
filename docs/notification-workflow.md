@@ -142,7 +142,10 @@ in [`email-templates/`](email-templates/README.md); the senders are on
 | `booking-payment-received` | Customer | Their receipt has arrived |
 | `booking-confirmed` | Customer | The desk confirms |
 | `booking-declined` | Customer | The desk turns the payment down |
-| `booking-moved` | Venue | A customer moves a booking themselves |
+| `booking-move-requested` | Venue | A customer asks for a free move — nothing has moved yet |
+| `booking-move-approved` | Customer | The desk approved a free move |
+| `booking-move-declined` | Customer | The desk declined a move, free or an upgrade |
+| `booking-moved` | Venue | *Retired.* Sent when free moves were immediate; nothing sends it now |
 | `booking-upgrade-received` | Customer | Their upgrade payment has arrived |
 | `booking-upgrade-submitted` | Venue | An upgrade is waiting on the desk, with all three figures on it |
 | `booking-upgrade-approved` | Customer | The desk approved it |
@@ -157,15 +160,22 @@ then the reason the desk picked, then who to speak to about the money: the
 venue, whose phone and email it carries (the owner's email when the venue has
 published neither), because IcyPlay never holds it.
 
-**The venue is told when a booking moves itself.** A free move needs nobody's
-permission and has already happened, so nothing waits on this letter — but the
-venue's diary has changed without anybody at the venue touching it, and this is
-the only thing that says so.
+**Every move is asked of the venue, and answered to the customer.** A free move
+writes to the venue when it is asked for — the letter says plainly that nothing
+has moved and the hours are held until they answer — and to the customer when
+the desk approves or declines it. An upgrade keeps its own letters on the way
+in (received, submitted, approved) because money changes hands, and shares the
+declined letter, which adds a line about the money only when some was sent.
 
 **The desk's upgrade letter carries all three figures** — what the hours cost
 now, what the new ones cost, and the difference. Somebody at the desk is
 checking a bank statement against one of them, and the wrong one is the obvious
 one. What actually landed is the difference.
+
+**A letter to the venue goes to its whole desk** — the owner and each active
+attendant who has accepted their invitation, one letter each. The attendants are
+the ones working the queue, and a letter only the owner reads is a customer
+waiting while the person who could answer is not told.
 
 **Every one of these goes after the save, best effort.** The decision has been
 made and the booking has moved; a mail provider being down must not report a

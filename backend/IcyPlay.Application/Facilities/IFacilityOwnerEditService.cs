@@ -20,6 +20,16 @@ public interface IFacilityOwnerEditService
         AuditActor actor,
         CancellationToken ct);
 
+    /// <summary>
+    /// Sets how many times one of the venue's bookings may move, and how many
+    /// days before it starts moves close.
+    /// </summary>
+    Task<EditResult> UpdateMoveRulesAsync(
+        Guid facilityOwnerId,
+        UpdateMoveRulesRequest request,
+        AuditActor actor,
+        CancellationToken ct);
+
     Task<EditResult> UpdateBusinessAsync(
         Guid facilityOwnerId,
         UpdateBusinessRequest request,

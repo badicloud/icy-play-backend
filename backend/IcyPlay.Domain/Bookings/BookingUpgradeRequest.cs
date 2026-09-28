@@ -4,17 +4,21 @@ using IcyPlay.Domain.Facilities;
 namespace IcyPlay.Domain.Bookings;
 
 /// <summary>
-/// A customer asking to move a booking onto hours that cost more than the ones
-/// they hold, and offering to pay the difference.
+/// A customer asking to move a booking, waiting on the venue to say yes.
 ///
-/// Moving a booking is otherwise immediate: the customer picks a court and it
-/// happens, because asking a venue to approve every change put people in a
-/// queue nobody was answering. This exists for the one case that cannot be
-/// instant — money has to change hands, and the venue has to see it arrive
-/// before it gives up the better court.
+/// Every move is one of these now. They used to be immediate unless they cost
+/// more, and venues found their diary rearranged by people they had never
+/// spoken to — so the desk agrees each one, free or not.
 ///
-/// Only upgrades come through here. A move to the same price or cheaper does
-/// not create one of these at all.
+/// Two kinds, told apart by <see cref="BalanceDue"/>:
+///
+/// * **Free** — the same price or cheaper. Nothing to pay, so it goes straight
+///   to the venue: <see cref="UpgradeStatus.AwaitingApproval"/> from the start.
+/// * **Upgrade** — dearer hours. The customer pays the difference first and the
+///   venue approves once it has seen the money arrive.
+///
+/// Either way it holds the hours it is asking for while it waits, and the
+/// booking itself does not change until the venue approves.
 /// </summary>
 public sealed class BookingUpgradeRequest : Entity
 {
@@ -49,7 +53,10 @@ public sealed class BookingUpgradeRequest : Entity
         BalanceDue = Math.Max(0m, rentalNew - rentalNow);
 
         HoldsUntil = requestedAt.AddMinutes(PaymentHold.Clamp(holdMinutes));
-        Status = UpgradeStatus.AwaitingPayment;
+
+        // Nothing to pay is nothing to wait for from the customer: a free move
+        // is the venue's to answer from the moment it is asked.
+        Status = BalanceDue > 0m ? UpgradeStatus.AwaitingPayment : UpgradeStatus.AwaitingApproval;
         CreatedAt = requestedAt;
     }
 
@@ -166,6 +173,12 @@ public sealed class BookingUpgradeRequest : Entity
     {
         get; private set;
     }
+
+    /// <summary>
+    /// A move with nothing to pay: the same price or cheaper. The venue answers
+    /// it without a receipt, because there is no money to look for.
+    /// </summary>
+    public bool IsFree => BalanceDue == 0m;
 
     /// <summary>Whether this is still waiting on somebody.</summary>
     public bool IsOpen =>

@@ -7,15 +7,6 @@ namespace IcyPlay.Application.Bookings;
 /// booking service, because sending mail fails in ways taking a booking does
 /// not — a mail provider being down must not look like a court not being held.
 /// </summary>
-/// <summary>
-/// What a booking looked like before it moved, and what it looks like now.
-///
-/// Both said in words rather than handed over as slots, because the caller is
-/// the one that owns how a booking's hours are phrased, and two places
-/// phrasing the same thing drift apart.
-/// </summary>
-public sealed record BookingMoveNotice(string FromCourtName, string WasWhen, string NowWhen);
-
 public interface IBookingNotifier
 {
     /// <summary>
@@ -49,17 +40,28 @@ public interface IBookingNotifier
     Task UpgradeApprovedAsync(BookingUpgradeRequest upgrade, CancellationToken ct);
 
     /// <summary>
-    /// Tells the venue a booking has moved itself.
+    /// Tells the venue a customer is asking to move, free, and that the hours
+    /// they asked for are held until somebody at the desk answers.
     ///
-    /// A free move needs nobody's permission and takes effect at once, so the
-    /// desk's diary changed without anybody at the desk doing anything. This
-    /// is the only thing that tells them.
-    ///
-    /// The before state is passed in because it no longer exists: a booking
-    /// only ever knows where it is now, and by the time this is called it has
-    /// already moved.
+    /// Nothing has moved. The letter says so, because a desk that reads it as
+    /// done leaves the request sitting and the customer waiting.
     /// </summary>
-    Task BookingMovedAsync(Booking booking, BookingMoveNotice notice, CancellationToken ct);
+    Task MoveRequestedAsync(BookingUpgradeRequest move, CancellationToken ct);
+
+    /// <summary>
+    /// Tells the customer the venue agreed to their free move, and where they
+    /// are playing now. An approved upgrade has its own letter.
+    ///
+    /// The court it moved FROM is passed in, because by the time this is sent
+    /// the booking has moved and only knows where it is now.
+    /// </summary>
+    Task MoveApprovedAsync(BookingUpgradeRequest move, string fromCourtName, CancellationToken ct);
+
+    /// <summary>
+    /// Tells the customer the venue said no to a move — free or paid for — and
+    /// why, and that the booking is still where it was.
+    /// </summary>
+    Task MoveDeclinedAsync(BookingUpgradeRequest move, CancellationToken ct);
 
     /// <summary>
     /// Thanks the customer and confirms their court. The one letter they get,

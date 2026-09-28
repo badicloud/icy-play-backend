@@ -842,6 +842,93 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task UpdateSettingsAsync_ShouldSetTheMoveNoticeOnlyWhenItIsSent()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Notice Dial Courts");
+        var sut = CreateService(context);
+
+        // Act: set it, then save again from a caller that does not know it.
+        var set = await sut.UpdateSettingsAsync(
+            venue.OwnerUserId,
+            new UpdateDeskSettingsRequest(PaymentHold.DefaultMinutes, BookingMove.DefaultLimit, 5),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+        var kept = await sut.UpdateSettingsAsync(
+            venue.OwnerUserId,
+            new UpdateDeskSettingsRequest(20, BookingMove.DefaultLimit),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+        var clamped = await sut.UpdateSettingsAsync(
+            venue.OwnerUserId,
+            new UpdateDeskSettingsRequest(20, BookingMove.DefaultLimit, 30),
+            Desk(venue.OwnerUserId),
+            CancellationToken.None);
+
+        // Assert: left out means left alone, and a month is a week.
+        using (new AssertionScope())
+        {
+            set.Value!.MoveNoticeDays.Should().Be(5);
+            kept.Value!.MoveNoticeDays.Should().Be(5);
+            clamped.Value!.MoveNoticeDays.Should().Be(BookingMove.LargestNoticeDays);
+            clamped.Value.SmallestMoveNoticeDays.Should().Be(BookingMove.SmallestNoticeDays);
+        }
+    }
+
+    [Fact]
+    public async Task SettingsHistoryAsync_ShouldSayWhoChangedWhichDialAndFromWhat()
+    {
+        // Arrange: an attendant shortens the hold, then the platform sets the
+        // move rules on the venue's behalf.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Settings History Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var sut = CreateService(context);
+
+        await sut.UpdateSettingsAsync(
+            attendant,
+            new UpdateDeskSettingsRequest(20, BookingMove.DefaultLimit),
+            Desk(attendant),
+            CancellationToken.None);
+
+        var owner = await context.FacilityOwners.SingleAsync(row => row.UserId == venue.OwnerUserId);
+        var before = owner.MoveNoticeDays;
+        owner.SetMoveNotice(4, Now.AddMinutes(1));
+        new AuditLogger(context, new FixedTimeProvider(Now.AddMinutes(1))).RecordChange(
+            new AuditActor(Guid.NewGuid(), UserRoleName.PlatformAdmin),
+            AuditAction.FacilityOwnerMoveRulesUpdated,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            new Dictionary<string, string?> { ["moveNoticeDays"] = before.ToString() },
+            new Dictionary<string, string?> { ["moveNoticeDays"] = "4" },
+            "Owner rang");
+        await context.SaveChangesAsync();
+
+        // Act
+        var history = await sut.SettingsHistoryAsync(venue.OwnerUserId, CancellationToken.None);
+
+        // Assert: newest first, each dial from and to, and the platform's own
+        // change marked as the platform's.
+        using (new AssertionScope())
+        {
+            history.Succeeded.Should().BeTrue();
+            var entries = history.Value!.ToArray();
+            entries.Should().HaveCount(2);
+
+            entries[0].ByPlatform.Should().BeTrue();
+            entries[0].Reason.Should().Be("Owner rang");
+            entries[0].Changes.Should().ContainSingle()
+                .Which.Should().Be(new DeskSettingChange("moveNoticeDays", before.ToString(), "4"));
+
+            entries[1].ByPlatform.Should().BeFalse();
+            entries[1].ChangedBy.Should().NotBeNullOrWhiteSpace();
+            entries[1].Changes.Should().ContainSingle()
+                .Which.Setting.Should().Be("partialBookingExpiryMinutes");
+        }
+    }
+
+    [Fact]
     public async Task UpdateSettingsAsync_ShouldClampRatherThanRefuse()
     {
         // Arrange
@@ -1145,10 +1232,25 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             return Task.CompletedTask;
         }
 
-        public Task BookingMovedAsync(
-            Booking booking,
-            BookingMoveNotice notice,
-            CancellationToken ct) => Task.CompletedTask;
+        /// <summary>Free moves the customer was told the venue agreed to.</summary>
+        public List<Guid> MovesApproved { get; } = [];
+
+        /// <summary>Moves, free or paid for, the customer was told the venue turned down.</summary>
+        public List<Guid> MovesDeclined { get; } = [];
+
+        public Task MoveRequestedAsync(BookingUpgradeRequest move, CancellationToken ct) => Task.CompletedTask;
+
+        public Task MoveApprovedAsync(BookingUpgradeRequest move, string fromCourtName, CancellationToken ct)
+        {
+            MovesApproved.Add(move.Id);
+            return Task.CompletedTask;
+        }
+
+        public Task MoveDeclinedAsync(BookingUpgradeRequest move, CancellationToken ct)
+        {
+            MovesDeclined.Add(move.Id);
+            return Task.CompletedTask;
+        }
     }
 
     /// <summary>Keeps every letter handed to it, so a test can read what would have gone out.</summary>

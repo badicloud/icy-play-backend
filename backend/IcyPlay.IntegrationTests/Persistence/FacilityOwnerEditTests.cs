@@ -4,6 +4,7 @@ using IcyPlay.Application.Audit;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Audit;
+using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
@@ -59,6 +60,38 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             after.Should().HaveCount(1);
             Fields(entry.OldValuesJson)["billingPhone"].Should().Be("+639171234567");
             entry.Reason.Should().Be("Owner rang to correct it");
+        }
+    }
+
+    [Fact]
+    public async Task UpdateMoveRulesAsync_ShouldSetBothDialsAndRecordTheChange()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Move Rules Courts");
+
+        // Act: a week's notice and two moves, for a venue that is always full.
+        var result = await sut.UpdateMoveRulesAsync(
+            owner.FacilityOwnerId,
+            new UpdateMoveRulesRequest(2, 7, "Owner asked for a week"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert: stored, and the trail says what each went from and to — the
+        // venue's own settings history reads this same entry.
+        var stored = await context.FacilityOwners
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == owner.FacilityOwnerId);
+        var entry = await LatestAsync(context, AuditAction.FacilityOwnerMoveRulesUpdated);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            stored.MoveLimit.Should().Be(2);
+            stored.MoveNoticeDays.Should().Be(7);
+            Fields(entry.OldValuesJson)["moveNoticeDays"].Should().Be(BookingMove.DefaultNoticeDays.ToString());
+            Fields(entry.NewValuesJson)["moveNoticeDays"].Should().Be("7");
+            entry.Reason.Should().Be("Owner asked for a week");
         }
     }
 

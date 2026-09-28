@@ -250,9 +250,22 @@ nothing ever holds the customer's money. Moving is what is offered instead — a
 that is why it is generous about where a booking may go, and strict about what
 it may cost.
 
-A move is **immediate**. The customer picks a court and it happens: the venue is
-not asked to approve it, and the customer is not sent to a checkout. Asking a
-venue to approve every change put people in a queue nobody was answering.
+**Every move waits for the venue.** The customer picks a court and hours, and
+that becomes a request (`BookingUpgradeRequest` with nothing owed) in the desk's
+*Move requests* queue. Until somebody at the desk approves it the booking stays
+exactly where it is, and the hours asked for are **held** — availability treats
+them as taken, so nobody else is sold them while the desk decides. Moves used
+to be immediate; venues found their diary rearranged by people they had never
+spoken to.
+
+* **Approved** — the booking moves, the move is counted against the limit, and
+  the customer is emailed (`booking-move-approved`).
+* **Declined** — nothing changes, **nothing is counted**, and the customer is
+  emailed the desk's reason (`booking-move-declined`). They may ask again.
+* **One at a time** (`MoveAlreadyRequested`), free or paid for.
+
+A move onto dearer hours is an [upgrade](#upgrading-a-booking): the same request,
+paid for first, then approved the same way.
 
 ### What may change
 
@@ -270,10 +283,13 @@ those are recorded on it as they were sold. The refusal is `NotTheSameOffering`.
 | Rule | Refusal |
 | --- | --- |
 | **Confirmed only.** A booking whose payment the venue has not checked might still be turned down, and moving one shuffles courts around an agreement that may never stand. An unpaid hold needs no moving: let it lapse and book the other date. | `NotMovable` |
-| **Within the venue's move limit.** `FacilityOwner.MoveLimit` — default 3, clamped 1–20. | `MoveLimitReached` |
+| **Within the venue's move limit.** `FacilityOwner.MoveLimit` — default 3, clamped 1–20. Only approved moves count. | `MoveLimitReached` |
+| **Not inside the venue's notice.** `FacilityOwner.MoveNoticeDays` — default 2, whole days 1–7. A booking that has not started is refused once its first hour is closer than that on the venue's clock (`BookingMove.IsInsideNotice`). A booking already under way is not asked. | `TooLateToMove` |
+| **No other move waiting.** | `MoveAlreadyRequested` |
 | **Same sport, same venue.** | `NotTheSameOffering` |
 | **A day booking whose day has begun does not move.** | `DayBookingInPlay` |
 | **Something must still be ahead of it.** Every hour played is a refund, and there are none. | `BookingFinished` |
+| **Once under way, court only.** The remaining hours keep their dates and times. | `CourtOnlyOnceStarted` |
 | **The shape is kept** — see per kind, below. | `KindDoesNotMatchSlots` |
 | **The hours are open on the target court.** | `SlotTaken`, `OutsideOpeningHours`, `NotPriced` |
 | **It must not cost more.** | `MoveCostsMore` → offer an upgrade |
@@ -453,8 +469,8 @@ booking does. Once the receipt is in, it holds the hours until the venue answers
 
 ### The rules
 
-* **The same move limit.** An upgrade is still a move, and paying for one must
-  not be a way around the venue's figure.
+* **The same move limit and notice.** An upgrade is still a move, and paying
+  for one must not be a way around the venue's figures.
 * **One open request at a time** (`MoveAlreadyRequested`). Two, and the customer
   can be paying for hours while the venue is approving different ones.
 * **Everything a move must satisfy**, because the quote is the same one: same
@@ -462,9 +478,9 @@ booking does. Once the receipt is in, it holds the hours until the venue answers
 * **A reason**, the same as a free move's (see [why it moved](#why-it-moved)).
   Asked on the checkout before the request is sent, kept on the request, and
   counted as a move on the day the desk approves it.
-* **There must be something to pay** (`NothingToUpgrade`). A free move is
-  immediate, and sending somebody to a checkout for nought pesos is a step whose
-  only effect is to make them wonder what they are being charged for.
+* **There must be something to pay** (`NothingToUpgrade`). A free move goes
+  straight to the venue, and sending somebody to a checkout for nought pesos is a
+  step whose only effect is to make them wonder what they are being charged for.
 
 ### What is owed
 

@@ -440,8 +440,8 @@ public static class BookingKind
 /// What a booking may still have done to it, and when.
 ///
 /// The limits are here rather than in the service because they are the deal, not
-/// an implementation detail: three moves, nothing inside the last day, and only
-/// onto the same kind of day so the price cannot change underneath anybody.
+/// an implementation detail: a few moves, none inside the venue's notice before
+/// the booking starts, and every one of them agreed by the venue.
 /// </summary>
 public static class BookingMove
 {
@@ -461,6 +461,37 @@ public static class BookingMove
     public const int LargestLimit = 20;
 
     public static int ClampLimit(int limit) => Math.Clamp(limit, SmallestLimit, LargestLimit);
+
+    /// <summary>
+    /// How many days before a booking starts the venue stops taking moves, unless
+    /// it has set its own figure.
+    ///
+    /// Two days, because a move is now a request the desk has to answer, and
+    /// the hours it gives back need time to be sold again. A court handed back
+    /// the evening before is a court that stands empty.
+    ///
+    /// Whole days, one to seven. Less than a day is not notice, and more than a
+    /// week is a venue that does not take moves at all — which is a different
+    /// decision and should be made as one.
+    /// </summary>
+    public const int DefaultNoticeDays = 2;
+
+    public const int SmallestNoticeDays = 1;
+    public const int LargestNoticeDays = 7;
+
+    public static int ClampNoticeDays(int days) => Math.Clamp(days, SmallestNoticeDays, LargestNoticeDays);
+
+    /// <summary>
+    /// Whether a booking that has not started is too close to its start to move.
+    ///
+    /// Asked on the venue's wall clock, with the first hour's own date and time,
+    /// so "two days" means forty-eight hours before the ball is served and not
+    /// two midnights. A booking that has started is not asked this at all: its
+    /// remaining hours may still change court, which is what a move is for once
+    /// a floodlight fails.
+    /// </summary>
+    public static bool IsInsideNotice(DateTime firstStartsAt, DateTime venueNow, int noticeDays) =>
+        firstStartsAt > venueNow && firstStartsAt - venueNow < TimeSpan.FromDays(ClampNoticeDays(noticeDays));
 
     /// <summary>
     /// Whether a booking in this state may still be moved.

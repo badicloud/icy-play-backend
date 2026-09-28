@@ -75,6 +75,28 @@ public static class EmailTemplateKey
     public const string BookingMoved = "booking-moved";
 
     /// <summary>
+    /// Tells the venue a customer is asking to move, free, and waiting on them.
+    ///
+    /// The move has not happened. The hours asked for are held while the desk
+    /// decides; the booking stays where it is until somebody approves it.
+    /// </summary>
+    public const string BookingMoveRequested = "booking-move-requested";
+
+    /// <summary>
+    /// Tells the customer the venue agreed to their free move, and where they
+    /// are playing now. The confirmation, and the only letter in this flow
+    /// that can safely say which court to walk to.
+    /// </summary>
+    public const string BookingMoveApproved = "booking-move-approved";
+
+    /// <summary>
+    /// Tells the customer the venue said no to a move, and why. Says first that
+    /// the booking is still where it was, so nobody turns up at the court they
+    /// asked for. Sent for a declined upgrade too, with a line about the money.
+    /// </summary>
+    public const string BookingMoveDeclined = "booking-move-declined";
+
+    /// <summary>
     /// Tells the customer the venue checked their payment and turned it down,
     /// why, and what to do. Says first that the court is NOT held: somebody who
     /// turns up on a declined booking finds the court sold to someone else.

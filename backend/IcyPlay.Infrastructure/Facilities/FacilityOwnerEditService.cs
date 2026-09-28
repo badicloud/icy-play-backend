@@ -422,6 +422,53 @@ public sealed class FacilityOwnerEditService(
         return EditResult.Success();
     }
 
+    public async Task<EditResult> UpdateMoveRulesAsync(
+        Guid facilityOwnerId,
+        UpdateMoveRulesRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        var owner = await db.FacilityOwners
+            .SingleOrDefaultAsync(candidate => candidate.Id == facilityOwnerId, ct);
+
+        if (owner is null)
+        {
+            return EditResult.Fail(EditFailure.NotFound);
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var before = MoveRulesSnapshot(owner);
+
+        owner.SetMoveLimit(request.MoveLimit, now);
+        owner.SetMoveNotice(request.MoveNoticeDays, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.FacilityOwnerMoveRulesUpdated,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            before,
+            MoveRulesSnapshot(owner),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation(
+            "Move rules for owner {FacilityOwnerId} were updated by {ActorUserId}.",
+            owner.Id,
+            actor.UserId);
+
+        return EditResult.Success();
+    }
+
+    private static Dictionary<string, string?> MoveRulesSnapshot(FacilityOwner owner) =>
+        new()
+        {
+            ["moveLimit"] = owner.MoveLimit.ToString(CultureInfo.InvariantCulture),
+            ["moveNoticeDays"] = owner.MoveNoticeDays.ToString(CultureInfo.InvariantCulture)
+        };
+
     /// <summary>
     /// The QR code's link is not recorded: it is long, it changes whenever the
     /// picture is replaced, and the trail wants to say THAT the code changed

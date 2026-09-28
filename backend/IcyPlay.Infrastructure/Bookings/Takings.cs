@@ -57,6 +57,7 @@ internal static class Takings
         var upgraded = await db.BookingUpgradeRequests
             .AsNoTracking()
             .Where(upgrade => upgrade.Status == UpgradeStatus.Approved
+                && upgrade.BalanceDue > 0m
                 && venueIds.Contains(upgrade.ToBookableCourt.Court.FacilityId)
                 && upgrade.SettledAt >= earliest
                 && upgrade.SettledAt < latest)

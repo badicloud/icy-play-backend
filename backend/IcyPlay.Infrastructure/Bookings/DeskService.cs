@@ -989,9 +989,10 @@ public sealed class DeskService(
         var page = Math.Max(1, query.Page);
         var pageSize = Math.Clamp(query.PageSize, 1, LargestPage);
 
-        // Only what the customer has actually sent. One still waiting to be paid
-        // for is nobody's work at the desk, and putting it in this queue would
-        // have somebody checking for a receipt that is not coming yet.
+        // Only what is actually the desk's to answer: every free move, and an
+        // upgrade once its receipt is in. One still waiting to be paid for is
+        // nobody's work at the desk, and putting it in this queue would have
+        // somebody checking for a receipt that is not coming yet.
         var rows = query.Tab == DeskUpgradeTab.Waiting
             ? db.BookingUpgradeRequests.Where(row => row.Status == UpgradeStatus.AwaitingApproval)
             : db.BookingUpgradeRequests.Where(row =>
@@ -1003,10 +1004,12 @@ public sealed class DeskService(
         var total = await rows.CountAsync(ct);
 
         // Waiting is ordered by how long it has been waiting, oldest first:
-        // somebody who paid an hour ago should not be behind somebody who paid
-        // a minute ago. Settled is history, and history reads newest first.
+        // somebody who asked an hour ago should not be behind somebody who
+        // asked a minute ago. A free move has waited since it was asked for,
+        // an upgrade since it was paid. Settled is history, and history reads
+        // newest first.
         var ordered = query.Tab == DeskUpgradeTab.Waiting
-            ? rows.OrderBy(row => row.ReceiptUploadedAt).ThenBy(row => row.CreatedAt)
+            ? rows.OrderBy(row => row.ReceiptUploadedAt ?? row.CreatedAt)
             : rows.OrderByDescending(row => row.SettledAt);
 
         var items = await ordered
@@ -1050,7 +1053,8 @@ public sealed class DeskService(
             return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotWaiting);
         }
 
-        if (upgrade.ReceiptUrl is null)
+        // A free move has no money to look for. An upgrade does.
+        if (!upgrade.IsFree && upgrade.ReceiptUrl is null)
         {
             return DeskResult<DeskUpgrade>.Fail(DeskFailure.NoReceipt);
         }
@@ -1124,21 +1128,27 @@ public sealed class DeskService(
 
         upgrade.Approve(userId, utcNow);
 
+        var because = upgrade.MoveReason is null
+            ? string.Empty
+            : BookingService.Because(upgrade.MoveReason, upgrade.MoveReasonNote);
+
         Record(
             actor,
-            AuditAction.BookingUpgradeApproved,
+            upgrade.IsFree ? AuditAction.BookingMoveApproved : AuditAction.BookingUpgradeApproved,
             booking,
             null,
-            $"Upgrade approved. Moved from {wasOn} to {booking.CourtName}, and {upgrade.BalanceDue:N2} was paid."
-            + (upgrade.MoveReason is null ? string.Empty : BookingService.Because(upgrade.MoveReason, upgrade.MoveReasonNote)));
+            (upgrade.IsFree
+                ? $"Move approved. Moved from {wasOn} to {booking.CourtName}."
+                : $"Upgrade approved. Moved from {wasOn} to {booking.CourtName}, and {upgrade.BalanceDue:N2} was paid.")
+            + because);
 
-        // Counted as the customer's move, because it is: they asked for it and
-        // paid for it, and the desk only said the money was there. The reason
-        // is theirs, carried from when they asked.
+        // Counted as the customer's move, because it is: they asked for it, and
+        // the desk only agreed to it. The reason is theirs, carried from when
+        // they asked.
         db.BookingMoves.Add(new BookingMoveRecord(
             booking.Id,
             utcNow,
-            MoveKind.Upgrade,
+            upgrade.IsFree ? MoveKind.Free : MoveKind.Upgrade,
             upgrade.MoveReason,
             upgrade.MoveReasonNote,
             wasOn,
@@ -1155,7 +1165,12 @@ public sealed class DeskService(
 
         // After the save, and best effort, the same as a confirmation: the
         // booking has moved whether or not the letter goes.
-        await TellTheCustomerAboutAsync(upgrade, ct);
+        await TellTheCustomerAsync(
+            upgrade,
+            upgrade.IsFree
+                ? notifier.MoveApprovedAsync(upgrade, wasOn, ct)
+                : notifier.UpgradeApprovedAsync(upgrade, ct),
+            "approved");
 
         return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
     }
@@ -1183,44 +1198,50 @@ public sealed class DeskService(
 
         Record(
             actor,
-            AuditAction.BookingUpgradeDeclined,
+            upgrade.IsFree ? AuditAction.BookingMoveDeclined : AuditAction.BookingUpgradeDeclined,
             upgrade.Booking,
             reason,
-            $"Upgrade to {upgrade.ToCourtName} was declined. The booking stays where it is.");
+            upgrade.IsFree
+                ? $"Move to {upgrade.ToCourtName} was declined. The booking stays where it is."
+                : $"Upgrade to {upgrade.ToCourtName} was declined. The booking stays where it is.");
 
         await db.SaveChangesAsync(ct);
 
-        // No letter yet, for the same reason a rejected booking gets none: a
-        // refusal needs somewhere for the customer to answer from, and that is
-        // the message thread, which is not built.
         logger.LogInformation(
-            "Upgrade {UpgradeId} was declined at the desk. The customer has not been emailed.",
+            "Move request {UpgradeId} was declined at the desk.",
             upgradeId);
+
+        // Told, free or paid for: the customer is waiting on an answer, and a
+        // move that silently never happens sends them to the court they asked
+        // for. Not counted against their moves — they did not get one.
+        await TellTheCustomerAsync(upgrade, notifier.MoveDeclinedAsync(upgrade, ct), "declined");
 
         return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
     }
 
     /// <summary>
-    /// Tells the customer their upgrade went through.
+    /// Tells the customer what the desk decided about their move.
     ///
-    /// Nothing here throws. The booking has moved and the money has changed
-    /// hands; a mail provider being down does not undo either, and reporting
-    /// the approval as failed would have somebody press it twice.
+    /// Nothing here throws. The answer is saved; a mail provider being down
+    /// does not undo it, and reporting it as failed would have somebody press
+    /// it twice.
     /// </summary>
-    private async Task TellTheCustomerAboutAsync(
+    private async Task TellTheCustomerAsync(
         BookingUpgradeRequest upgrade,
-        CancellationToken ct)
+        Task letter,
+        string answer)
     {
         try
         {
-            await notifier.UpgradeApprovedAsync(upgrade, ct);
+            await letter;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(
                 exception,
-                "Could not tell the customer upgrade {UpgradeId} was approved. It was.",
-                upgrade.Id);
+                "Could not tell the customer move request {UpgradeId} was {Answer}. It was.",
+                upgrade.Id,
+                answer);
         }
     }
 
@@ -1424,6 +1445,119 @@ public sealed class DeskService(
             : DeskResult<DeskSettings>.Success(Settings(owner));
     }
 
+    public async Task<DeskResult<IReadOnlyCollection<DeskSettingsChange>>> SettingsHistoryAsync(
+        Guid userId,
+        CancellationToken ct)
+    {
+        var owner = await OwnerForAsync(userId, ct);
+
+        if (owner is null)
+        {
+            return DeskResult<IReadOnlyCollection<DeskSettingsChange>>.Fail(DeskFailure.NotAttended);
+        }
+
+        // The desk's own saves, and the two ways the platform sets the same
+        // dials for the venue. Payment details carry the GCash number too,
+        // which is not a setting the desk has and is not shown here.
+        string[] actions =
+        [
+            AuditAction.FacilityOwnerDeskSettingsUpdated,
+            AuditAction.FacilityOwnerMoveRulesUpdated,
+            AuditAction.FacilityOwnerPaymentDetailsUpdated
+        ];
+
+        var entries = await db.AuditLogs
+            .AsNoTracking()
+            .Where(entry => entry.EntityType == AuditEntityType.FacilityOwner
+                && entry.EntityId == owner.Id
+                && actions.Contains(entry.Action))
+            .OrderByDescending(entry => entry.CreatedAt)
+            .Take(SettingsHistoryLength)
+            .Select(entry => new
+            {
+                entry.Id,
+                entry.CreatedAt,
+                entry.ActorUserId,
+                entry.ActorRole,
+                entry.OldValuesJson,
+                entry.NewValuesJson,
+                entry.Reason
+            })
+            .ToListAsync(ct);
+
+        var actorIds = entries
+            .Where(entry => entry.ActorUserId is not null)
+            .Select(entry => entry.ActorUserId!.Value)
+            .Distinct()
+            .ToArray();
+
+        var names = await db.Users
+            .AsNoTracking()
+            .Where(user => actorIds.Contains(user.Id))
+            .Select(user => new { user.Id, user.FullName })
+            .ToDictionaryAsync(user => user.Id, user => user.FullName, ct);
+
+        var history = new List<DeskSettingsChange>();
+
+        foreach (var entry in entries)
+        {
+            var before = Values(entry.OldValuesJson);
+            var after = Values(entry.NewValuesJson);
+
+            // Only the dials, and only the ones that moved. The trail records
+            // just the fields that changed, so a field missing from "after"
+            // did not change in that save.
+            var changes = DeskSettingFields
+                .Where(field => after.ContainsKey(field))
+                .Select(field => new DeskSettingChange(
+                    field,
+                    before.GetValueOrDefault(field),
+                    after.GetValueOrDefault(field)))
+                .Where(change => change.From != change.To)
+                .ToArray();
+
+            if (changes.Length == 0)
+            {
+                continue;
+            }
+
+            history.Add(new DeskSettingsChange(
+                entry.Id,
+                entry.CreatedAt,
+                entry.ActorUserId is Guid actorId ? names.GetValueOrDefault(actorId) : null,
+                entry.ActorRole == Domain.Identity.UserRoleName.PlatformAdmin,
+                changes,
+                entry.Reason));
+        }
+
+        return DeskResult<IReadOnlyCollection<DeskSettingsChange>>.Success(history);
+    }
+
+    /// <summary>How far back the settings history reads. Dials change rarely.</summary>
+    private const int SettingsHistoryLength = 50;
+
+    /// <summary>The dials the desk has, as the trail names them.</summary>
+    private static readonly string[] DeskSettingFields =
+        ["partialBookingExpiryMinutes", "moveLimit", "moveNoticeDays"];
+
+    private static Dictionary<string, string?> Values(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return [];
+        }
+
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json) ?? [];
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            // An entry nobody can read says nothing about the dials.
+            return [];
+        }
+    }
+
     public async Task<DeskResult<DeskSettings>> UpdateSettingsAsync(
         Guid userId,
         UpdateDeskSettingsRequest request,
@@ -1447,6 +1581,11 @@ public sealed class DeskService(
         owner.SetPaymentHold(request.PartialBookingExpiryMinutes, now);
         owner.SetMoveLimit(request.MoveLimit, now);
 
+        if (request.MoveNoticeDays is int noticeDays)
+        {
+            owner.SetMoveNotice(noticeDays, now);
+        }
+
         audit.RecordChange(
             actor,
             AuditAction.FacilityOwnerDeskSettingsUpdated,
@@ -1466,14 +1605,18 @@ public sealed class DeskService(
         PaymentHold.MinimumMinutes,
         PaymentHold.MaximumMinutes,
         BookingMove.SmallestLimit,
-        BookingMove.LargestLimit);
+        BookingMove.LargestLimit,
+        owner.MoveNoticeDays,
+        BookingMove.SmallestNoticeDays,
+        BookingMove.LargestNoticeDays);
 
     private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
         new()
         {
             ["partialBookingExpiryMinutes"] =
                 owner.PartialBookingExpiryMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["moveLimit"] = owner.MoveLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ["moveLimit"] = owner.MoveLimit.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["moveNoticeDays"] = owner.MoveNoticeDays.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
 
     /// <summary>

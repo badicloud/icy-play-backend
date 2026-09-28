@@ -171,6 +171,14 @@ public interface IDeskService
     Task<DeskResult<DeskSettings>> SettingsAsync(Guid userId, CancellationToken ct);
 
     /// <summary>
+    /// Every change to those dials, newest first — made at the desk or by the
+    /// platform on the venue's behalf.
+    /// </summary>
+    Task<DeskResult<IReadOnlyCollection<DeskSettingsChange>>> SettingsHistoryAsync(
+        Guid userId,
+        CancellationToken ct);
+
+    /// <summary>
     /// How much of what this person's venues had open actually got used, court
     /// by court and part by part.
     ///

@@ -22,6 +22,10 @@ public sealed record FacilityOwnerDetail(
     string? GcashAccountName,
     string? GcashQrCodeUrl,
     int PartialBookingExpiryMinutes,
+    /// <summary>How many times a customer may move one booking.</summary>
+    int MoveLimit,
+    /// <summary>How many days before a booking starts moves close.</summary>
+    int MoveNoticeDays,
     /// <summary>False while the venue has given neither a number nor a QR code.</summary>
     bool CanTakePayment,
     bool IsActive,
