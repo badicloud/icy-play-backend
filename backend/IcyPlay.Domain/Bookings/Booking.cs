@@ -510,6 +510,35 @@ public static class BookingMove
         status is BookingStatus.Confirmed;
 }
 
+/// <summary>
+/// How far ahead a court can be booked, which each venue sets for itself.
+///
+/// A ceiling exists because a hold costs nothing to make: without one, a single
+/// account could sit on a court for a year. Per venue, because how far ahead a
+/// venue is willing to commit its courts is its own business — a hall that
+/// rents to leagues by the month plans further out than one that sells
+/// evenings.
+///
+/// Counted in days including today: fifteen is today and the fourteen after
+/// it, which is what the booking page's strip shows.
+/// </summary>
+public static class BookingWindow
+{
+    /// <summary>Two weeks and today. What a venue gets until it chooses.</summary>
+    public const int DefaultDays = 15;
+
+    /// <summary>A week: less than that and a customer cannot plan a weekend.</summary>
+    public const int SmallestDays = 7;
+
+    /// <summary>A month, the most any venue can open.</summary>
+    public const int LargestDays = 30;
+
+    public static int ClampDays(int days) => Math.Clamp(days, SmallestDays, LargestDays);
+
+    /// <summary>The last date that can be booked, from the venue's today.</summary>
+    public static DateOnly LastDay(DateOnly today, int days) => today.AddDays(ClampDays(days) - 1);
+}
+
 public static class BookingStatuses
 {
     public static readonly IReadOnlyCollection<BookingStatus> Live =

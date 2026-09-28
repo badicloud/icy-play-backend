@@ -422,9 +422,9 @@ public sealed class FacilityOwnerEditService(
         return EditResult.Success();
     }
 
-    public async Task<EditResult> UpdateMoveRulesAsync(
+    public async Task<EditResult> UpdateBookingRulesAsync(
         Guid facilityOwnerId,
-        UpdateMoveRulesRequest request,
+        UpdateBookingRulesRequest request,
         AuditActor actor,
         CancellationToken ct)
     {
@@ -439,32 +439,34 @@ public sealed class FacilityOwnerEditService(
         }
 
         var now = timeProvider.GetUtcNow();
-        var before = MoveRulesSnapshot(owner);
+        var before = BookingRulesSnapshot(owner);
 
+        owner.SetBookingWindow(request.BookingWindowDays, now);
         owner.SetMoveLimit(request.MoveLimit, now);
         owner.SetMoveNotice(request.MoveNoticeDays, now);
 
         audit.RecordChange(
             actor,
-            AuditAction.FacilityOwnerMoveRulesUpdated,
+            AuditAction.FacilityOwnerBookingRulesUpdated,
             AuditEntityType.FacilityOwner,
             owner.Id,
             before,
-            MoveRulesSnapshot(owner),
+            BookingRulesSnapshot(owner),
             request.Reason);
 
         await db.SaveChangesAsync(ct);
         logger.LogInformation(
-            "Move rules for owner {FacilityOwnerId} were updated by {ActorUserId}.",
+            "Booking rules for owner {FacilityOwnerId} were updated by {ActorUserId}.",
             owner.Id,
             actor.UserId);
 
         return EditResult.Success();
     }
 
-    private static Dictionary<string, string?> MoveRulesSnapshot(FacilityOwner owner) =>
+    private static Dictionary<string, string?> BookingRulesSnapshot(FacilityOwner owner) =>
         new()
         {
+            ["bookingWindowDays"] = owner.BookingWindowDays.ToString(CultureInfo.InvariantCulture),
             ["moveLimit"] = owner.MoveLimit.ToString(CultureInfo.InvariantCulture),
             ["moveNoticeDays"] = owner.MoveNoticeDays.ToString(CultureInfo.InvariantCulture)
         };

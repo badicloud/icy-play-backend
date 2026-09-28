@@ -172,7 +172,11 @@ public sealed record DeskSettings(
     /// <summary>How many days before a booking starts moves close.</summary>
     int MoveNoticeDays,
     int SmallestMoveNoticeDays,
-    int LargestMoveNoticeDays);
+    int LargestMoveNoticeDays,
+    /// <summary>How many days ahead customers can book, today included.</summary>
+    int BookingWindowDays,
+    int SmallestBookingWindowDays,
+    int LargestBookingWindowDays);
 
 /// <summary>
 /// One time the venue's dials were changed: who did it, when, and what each
@@ -196,19 +200,21 @@ public sealed record DeskSettingsChange(
 
 /// <summary>
 /// One dial, before and after. The setting is its stored name —
-/// partialBookingExpiryMinutes, moveLimit or moveNoticeDays — and the screen
-/// words it.
+/// partialBookingExpiryMinutes, moveLimit, moveNoticeDays or bookingWindowDays
+/// — and the screen words it.
 /// </summary>
 public sealed record DeskSettingChange(string Setting, string? From, string? To);
 
 /// <summary>
-/// The notice is optional so a caller that predates it does not set it to
-/// nothing by leaving it out: missing means "leave it as it is".
+/// The notice and the window are optional so a caller that predates them does
+/// not set them to nothing by leaving them out: missing means "leave it as it
+/// is".
 /// </summary>
 public sealed record UpdateDeskSettingsRequest(
     int PartialBookingExpiryMinutes,
     int MoveLimit,
-    int? MoveNoticeDays = null);
+    int? MoveNoticeDays = null,
+    int? BookingWindowDays = null);
 
 /// <summary>
 /// Turning a payment down: a reason from <see cref="Domain.Bookings.RejectReason"/>,

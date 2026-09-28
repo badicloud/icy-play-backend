@@ -2428,7 +2428,11 @@ booking and attendant work actually shipped, where the two differ.
 GET /api/v1/catalog/bookable-courts/{bookableCourtId}/availability?date=2026-09-20
 ```
 
-Anonymous. A visitor should see whether Saturday morning is free before being
+Anonymous. The day outlook beside it carries one entry per day of the venue's
+[booking window](booking.md#how-far-ahead) — its length is the window — and a
+booking or move past that window is refused with `TooFarAhead`.
+
+A visitor should see whether Saturday morning is free before being
 asked to make an account; signing in is the price of holding an hour, not of
 looking at one.
 
@@ -2495,18 +2499,20 @@ PUT /api/v1/admin/facility-owners/{id}/payment-details
 Role: PlatformAdmin. The GCash number, account name and QR code a customer pays
 into, and how long an unpaid hold survives.
 
-### Move rules
+### Booking rules
 
 ```http
-PUT /api/v1/admin/facility-owners/{id}/move-rules
-{ "moveLimit": 3, "moveNoticeDays": 2, "reason": "Owner rang" }
+PUT /api/v1/admin/facility-owners/{id}/booking-rules
+{ "bookingWindowDays": 15, "moveLimit": 3, "moveNoticeDays": 2, "reason": "Owner rang" }
 ```
 
-Role: PlatformAdmin. How many times one of the venue's bookings may move (1–20)
-and how many days before it starts moves close (1–7). Validated rather than
-clamped — an admin typing 30 days has made a mistake worth hearing about. The
-venue can set both from its own desk; either way the change is audited
-(`FacilityOwnerMoveRulesUpdated`) and shows in the venue's settings history.
+Role: PlatformAdmin. How many days ahead the venue's courts can be booked (7–30,
+today included), how many times one of its bookings may move (1–20), and how
+many days before it starts moves close (1–7). Validated rather than clamped — an
+admin typing 60 days has made a mistake worth hearing about. The venue can set
+all three from its own desk; either way the change is audited
+(`FacilityOwnerBookingRulesUpdated`; older entries from the move-only version are
+`FacilityOwnerMoveRulesUpdated`) and shows in the venue's settings history.
 
 ### Moving a booking
 
@@ -2632,19 +2638,20 @@ money on an upgrade).
 
 ```http
 GET /api/v1/desk/settings
-PUT /api/v1/desk/settings   { "partialBookingExpiryMinutes": 30, "moveLimit": 3, "moveNoticeDays": 2 }
+PUT /api/v1/desk/settings   { "partialBookingExpiryMinutes": 30, "moveLimit": 3, "moveNoticeDays": 2, "bookingWindowDays": 15 }
 GET /api/v1/desk/settings/history
 ```
 
 Roles: FacilityOwner, FacilityAttendant. The venue's own dials, clamped rather
-than refused. `moveNoticeDays` is optional on the `PUT` — left out, it is left
-alone, so an older caller cannot set it to nothing.
+than refused. `moveNoticeDays` and `bookingWindowDays` are optional on the
+`PUT` — left out, they are left alone, so an older caller cannot set them to
+nothing.
 
-`history` is every change to those three dials, newest first, read from the
+`history` is every change to those four dials, newest first, read from the
 audit trail: who made it, when, each dial's before and after, the reason if one
 was given, and `byPlatform` when the platform admin made it on the venue's
-behalf (from the admin's payment details or move rules). Changes that touched
-none of the three — a new GCash number — are left out.
+behalf (from the admin's payment details or booking rules). Changes that touched
+none of the four — a new GCash number — are left out.
 
 ### A booking's history
 

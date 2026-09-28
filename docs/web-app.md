@@ -241,11 +241,16 @@ row is badged **Move** or **Upgrade**, and only one with money owed is called an
 upgrade, on the row, the overview banner and the decline dialog. Declining
 takes a reason, which the customer is emailed.
 
-`/desk/settings` holds the hold length, the move limit and the move notice (in
-days), with a **change history** underneath: who changed which dial, from what
-to what, and an *IcyPlay admin* badge when the platform set it. The admin sets
-the same two move dials from the facility owner page (*Booking moves*), and the
-owner page's Activity timeline names them.
+`/desk/settings` holds the booking window, the hold length, the move limit and
+the move notice (in days), with a **change history** underneath: who changed
+which dial, from what to what, and an *IcyPlay admin* badge when the platform
+set it. The admin sets the window and the two move dials from the facility owner
+page (*Booking rules*), and the owner page's Activity timeline names them.
+
+The booking page's day strip is as long as the venue's window — the length of
+the day outlook. It is shown whole, except at the full month, where it opens at
+a fortnight with *Show all 30 days*; the move dialog's date strip follows the
+same rule.
 
 A booking's **history** is readable from both the desk and the customer's own
 page, and it is the same account of the same events.

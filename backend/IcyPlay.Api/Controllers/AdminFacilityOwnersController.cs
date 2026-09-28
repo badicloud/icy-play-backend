@@ -305,17 +305,18 @@ public sealed class AdminFacilityOwnersController(
             ct);
 
     /// <summary>
-    /// How many times one of the venue's bookings may move, and how many days
-    /// before it starts moves close. The venue can set both from its own desk.
+    /// How many days ahead the venue's courts can be booked, how many times one
+    /// of its bookings may move, and how many days before it starts moves
+    /// close. The venue can set all three from its own desk.
     /// </summary>
-    [HttpPut("{id:guid}/move-rules")]
-    public Task<IActionResult> UpdateMoveRules(
+    [HttpPut("{id:guid}/booking-rules")]
+    public Task<IActionResult> UpdateBookingRules(
         Guid id,
-        UpdateMoveRulesRequest request,
+        UpdateBookingRulesRequest request,
         CancellationToken ct) =>
         EditAsync(
             request,
-            actor => edits.UpdateMoveRulesAsync(id, request, actor, ct),
+            actor => edits.UpdateBookingRulesAsync(id, request, actor, ct),
             ct);
 
     [HttpPut("{id:guid}/contracts/{contractId:guid}/document")]

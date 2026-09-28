@@ -103,7 +103,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         using (new AssertionScope())
         {
             outlook.Succeeded.Should().BeTrue();
-            window.Should().HaveCount(BookingWindow.DaysAhead + 1);
+            window.Should().HaveCount(BookingWindow.DefaultDays);
             window.First().Date.Should().Be(Today);
 
             wednesday.OpenHours.Should().Be(15);
@@ -701,7 +701,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task CreateAsync_ShouldRefuseADateFurtherAheadThanThePlatformTakes()
+    public async Task CreateAsync_ShouldRefuseADateFurtherAheadThanTheVenueTakes()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -713,7 +713,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var booking = await sut.CreateAsync(
             Hourly(
                 floor.Pickleball1,
-                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DaysAhead + 1),
+                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DefaultDays),
                 SevenAm),
             floor.Customer,
             CancellationToken.None);
@@ -731,11 +731,12 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var floor = await FloorAsync(context, "Booking Edge Of Window Courts");
         var sut = CreateService(context);
 
-        // Act: the thirtieth day itself, which the strip does offer.
+        // Act: the last day of the default window — today and fourteen more —
+        // which the strip does offer.
         var booking = await sut.CreateAsync(
             Hourly(
                 floor.Pickleball1,
-                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DaysAhead),
+                DateOnly.FromDateTime(Now.UtcDateTime).AddDays(BookingWindow.DefaultDays - 1),
                 SevenAm),
             floor.Customer,
             CancellationToken.None);
@@ -743,6 +744,41 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         // Assert: the boundary is inclusive, so what the page shows and what the
         // server takes are the same set of days.
         booking.Succeeded.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateAsync_ShouldFollowTheWindowTheVenueSets()
+    {
+        // Arrange: a venue that opens a whole month.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Month Ahead Courts");
+        var sut = CreateService(context);
+        var ownerUserId = await OwnerUserIdAsync(context, floor);
+        var owner = await context.FacilityOwners.SingleAsync(row => row.UserId == ownerUserId);
+        owner.SetBookingWindow(BookingWindow.LargestDays, Now);
+        await context.SaveChangesAsync();
+
+        var today = DateOnly.FromDateTime(Now.UtcDateTime);
+
+        // Act
+        var outlook = await sut.OutlookAsync(floor.Pickleball1, CancellationToken.None);
+        var lastDay = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, today.AddDays(BookingWindow.LargestDays - 1), SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+        var dayAfter = await sut.CreateAsync(
+            Hourly(floor.Pickleball1, today.AddDays(BookingWindow.LargestDays), SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert: the strip is as long as the venue's window, and the server
+        // takes exactly the days the strip shows.
+        using (new AssertionScope())
+        {
+            outlook.Value!.Should().HaveCount(BookingWindow.LargestDays);
+            lastDay.Succeeded.Should().BeTrue();
+            dayAfter.Failure.Should().Be(BookingFailure.TooFarAhead);
+        }
     }
 
     [Fact]

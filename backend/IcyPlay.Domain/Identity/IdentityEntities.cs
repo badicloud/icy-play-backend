@@ -119,6 +119,13 @@ public sealed class FacilityOwner : Entity
     public int MoveNoticeDays { get; private set; } = BookingMove.DefaultNoticeDays;
 
     /// <summary>
+    /// How many days ahead customers can book this venue's courts, today
+    /// included. What the booking page's day strip shows, and what the server
+    /// refuses beyond.
+    /// </summary>
+    public int BookingWindowDays { get; private set; } = BookingWindow.DefaultDays;
+
+    /// <summary>
     /// When the seeder raised this venue, and null for every real one.
     ///
     /// A stored fact rather than a guess at the name. Removing demonstration
@@ -155,6 +162,12 @@ public sealed class FacilityOwner : Entity
     public void SetMoveNotice(int noticeDays, DateTimeOffset now)
     {
         MoveNoticeDays = BookingMove.ClampNoticeDays(noticeDays);
+        UpdatedAt = now;
+    }
+
+    public void SetBookingWindow(int days, DateTimeOffset now)
+    {
+        BookingWindowDays = BookingWindow.ClampDays(days);
         UpdatedAt = now;
     }
 

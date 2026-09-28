@@ -94,6 +94,8 @@ public sealed class AppDbContext : DbContext
                 .HasDefaultValue(PaymentHold.DefaultMinutes);
             entity.Property(x => x.MoveNoticeDays)
                 .HasDefaultValue(BookingMove.DefaultNoticeDays);
+            entity.Property(x => x.BookingWindowDays)
+                .HasDefaultValue(BookingWindow.DefaultDays);
             entity.Ignore(x => x.CanTakePayment);
             entity.Ignore(x => x.IsSeeded);
             // Filtered, because the question is only ever asked one way round:

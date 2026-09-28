@@ -842,7 +842,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task UpdateSettingsAsync_ShouldSetTheMoveNoticeOnlyWhenItIsSent()
+    public async Task UpdateSettingsAsync_ShouldSetTheNoticeAndWindowOnlyWhenTheyAreSent()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -852,7 +852,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         // Act: set it, then save again from a caller that does not know it.
         var set = await sut.UpdateSettingsAsync(
             venue.OwnerUserId,
-            new UpdateDeskSettingsRequest(PaymentHold.DefaultMinutes, BookingMove.DefaultLimit, 5),
+            new UpdateDeskSettingsRequest(PaymentHold.DefaultMinutes, BookingMove.DefaultLimit, 5, 21),
             Desk(venue.OwnerUserId),
             CancellationToken.None);
         var kept = await sut.UpdateSettingsAsync(
@@ -862,7 +862,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
         var clamped = await sut.UpdateSettingsAsync(
             venue.OwnerUserId,
-            new UpdateDeskSettingsRequest(20, BookingMove.DefaultLimit, 30),
+            new UpdateDeskSettingsRequest(20, BookingMove.DefaultLimit, 30, 90),
             Desk(venue.OwnerUserId),
             CancellationToken.None);
 
@@ -870,8 +870,11 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         using (new AssertionScope())
         {
             set.Value!.MoveNoticeDays.Should().Be(5);
+            set.Value.BookingWindowDays.Should().Be(21);
             kept.Value!.MoveNoticeDays.Should().Be(5);
+            kept.Value.BookingWindowDays.Should().Be(21);
             clamped.Value!.MoveNoticeDays.Should().Be(BookingMove.LargestNoticeDays);
+            clamped.Value.BookingWindowDays.Should().Be(BookingWindow.LargestDays);
             clamped.Value.SmallestMoveNoticeDays.Should().Be(BookingMove.SmallestNoticeDays);
         }
     }

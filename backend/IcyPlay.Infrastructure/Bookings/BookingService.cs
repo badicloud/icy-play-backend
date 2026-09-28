@@ -64,9 +64,12 @@ public sealed class BookingService(
         // The venue's today, not the server's: in Manila a UTC clock is eight
         // hours behind, and a window starting on the wrong day greys out a day
         // that is still on sale.
+        // The venue's own window, and exactly that many days: the booking
+        // page's strip is drawn from this, so a day the venue does not sell yet
+        // is never shown to be picked.
         var today = offering.Today(now);
         var dates = Enumerable
-            .Range(0, BookingWindow.DaysAhead + 1)
+            .Range(0, BookingWindow.ClampDays(offering.WindowDays))
             .Select(today.AddDays)
             .ToArray();
 
@@ -129,7 +132,7 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.DateInThePast);
         }
 
-        if (dates[^1] > today.AddDays(BookingWindow.DaysAhead))
+        if (dates[^1] > BookingWindow.LastDay(today, offering.WindowDays))
         {
             return BookingResult<BookingDetail>.Fail(BookingFailure.TooFarAhead);
         }
@@ -425,7 +428,7 @@ public sealed class BookingService(
             return BookingResult<MoveWindow>.Fail(BookingFailure.DateInThePast);
         }
 
-        if (date > today.AddDays(BookingWindow.DaysAhead))
+        if (date > BookingWindow.LastDay(today, offering.WindowDays))
         {
             return BookingResult<MoveWindow>.Fail(BookingFailure.TooFarAhead);
         }
@@ -1227,6 +1230,16 @@ public sealed class BookingService(
         // does not go through: it becomes an upgrade the customer is asked to
         // pay for and the venue is asked to accept. Nobody is handed hours
         // they have not paid for, which is the thing the count was protecting.
+        // Not onto a date the venue does not sell yet. A date the booking
+        // already holds is let through: a venue that shortens its window must
+        // not strand the bookings it has already taken further out.
+        var lastDay = BookingWindow.LastDay(DateOnly.FromDateTime(venueNow.DateTime), target.WindowDays);
+
+        if (going.Any(slot => slot.Date > lastDay && booking.Slots.All(held => held.Date != slot.Date)))
+        {
+            return BookingResult<MoveQuote>.Fail(BookingFailure.TooFarAhead);
+        }
+
         if (booking.Kind == BookingKind.Hourly && going.Length != toMove.Length)
         {
             return BookingResult<MoveQuote>.Fail(BookingFailure.KindDoesNotMatchSlots);
@@ -1845,6 +1858,7 @@ public sealed class BookingService(
             facility.TimeZone,
             contract.PlatformHourlyRate,
             owner.PartialBookingExpiryMinutes,
+            owner.BookingWindowDays > 0 ? owner.BookingWindowDays : BookingWindow.DefaultDays,
             [.. closed.Select(period => (period.StartsAt, period.EndsAt))]);
     }
 
@@ -1980,7 +1994,7 @@ public sealed class BookingService(
         // because a move is a booking made again — and asked of every date,
         // because they are picked one at a time and need not sit together.
         var today = offering.Today(timeProvider.GetUtcNow());
-        var horizon = today.AddDays(BookingWindow.DaysAhead);
+        var horizon = BookingWindow.LastDay(today, offering.WindowDays);
 
         if (dates.Any(date => date < today || date > horizon))
         {
@@ -2584,6 +2598,8 @@ public sealed class BookingService(
         string TimeZone,
         decimal PlatformHourlyRate,
         int HoldMinutes,
+        /// <summary>How many days ahead this venue sells, today included.</summary>
+        int WindowDays,
         IReadOnlyCollection<(DateTimeOffset StartsAt, DateTimeOffset? EndsAt)> Closures)
     {
         /// <summary>

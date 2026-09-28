@@ -256,6 +256,7 @@ public sealed class FacilityOwnerOnboardingService(
                 candidate.PartialBookingExpiryMinutes,
                 candidate.MoveLimit,
                 candidate.MoveNoticeDays,
+                candidate.BookingWindowDays,
                 candidate.IsActive,
                 candidate.CreatedAt,
                 candidate.UpdatedAt,
@@ -392,6 +393,7 @@ public sealed class FacilityOwnerOnboardingService(
             owner.PartialBookingExpiryMinutes,
             owner.MoveLimit > 0 ? owner.MoveLimit : BookingMove.DefaultLimit,
             owner.MoveNoticeDays > 0 ? owner.MoveNoticeDays : BookingMove.DefaultNoticeDays,
+            owner.BookingWindowDays > 0 ? owner.BookingWindowDays : BookingWindow.DefaultDays,
             !string.IsNullOrWhiteSpace(owner.GcashNumber) ||
                 !string.IsNullOrWhiteSpace(owner.GcashQrCodeUrl),
             owner.IsActive,

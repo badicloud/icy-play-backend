@@ -499,7 +499,8 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
             BookingFailure.TooFarAhead => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
-                $"Courts can be booked up to {BookingWindow.DaysAhead} days ahead."),
+                "That date is further ahead than this venue takes bookings. " +
+                "The booking page shows how far ahead you can book."),
             BookingFailure.TooManySlots => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

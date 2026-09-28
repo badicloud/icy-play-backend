@@ -1462,6 +1462,7 @@ public sealed class DeskService(
         string[] actions =
         [
             AuditAction.FacilityOwnerDeskSettingsUpdated,
+            AuditAction.FacilityOwnerBookingRulesUpdated,
             AuditAction.FacilityOwnerMoveRulesUpdated,
             AuditAction.FacilityOwnerPaymentDetailsUpdated
         ];
@@ -1538,7 +1539,7 @@ public sealed class DeskService(
 
     /// <summary>The dials the desk has, as the trail names them.</summary>
     private static readonly string[] DeskSettingFields =
-        ["partialBookingExpiryMinutes", "moveLimit", "moveNoticeDays"];
+        ["bookingWindowDays", "partialBookingExpiryMinutes", "moveLimit", "moveNoticeDays"];
 
     private static Dictionary<string, string?> Values(string? json)
     {
@@ -1586,6 +1587,11 @@ public sealed class DeskService(
             owner.SetMoveNotice(noticeDays, now);
         }
 
+        if (request.BookingWindowDays is int windowDays)
+        {
+            owner.SetBookingWindow(windowDays, now);
+        }
+
         audit.RecordChange(
             actor,
             AuditAction.FacilityOwnerDeskSettingsUpdated,
@@ -1608,7 +1614,10 @@ public sealed class DeskService(
         BookingMove.LargestLimit,
         owner.MoveNoticeDays,
         BookingMove.SmallestNoticeDays,
-        BookingMove.LargestNoticeDays);
+        BookingMove.LargestNoticeDays,
+        owner.BookingWindowDays,
+        BookingWindow.SmallestDays,
+        BookingWindow.LargestDays);
 
     private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
         new()
@@ -1616,7 +1625,8 @@ public sealed class DeskService(
             ["partialBookingExpiryMinutes"] =
                 owner.PartialBookingExpiryMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["moveLimit"] = owner.MoveLimit.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["moveNoticeDays"] = owner.MoveNoticeDays.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            ["moveNoticeDays"] = owner.MoveNoticeDays.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["bookingWindowDays"] = owner.BookingWindowDays.ToString(System.Globalization.CultureInfo.InvariantCulture)
         };
 
     /// <summary>

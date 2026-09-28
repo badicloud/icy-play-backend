@@ -26,6 +26,8 @@ public sealed record FacilityOwnerDetail(
     int MoveLimit,
     /// <summary>How many days before a booking starts moves close.</summary>
     int MoveNoticeDays,
+    /// <summary>How many days ahead customers can book, today included.</summary>
+    int BookingWindowDays,
     /// <summary>False while the venue has given neither a number nor a QR code.</summary>
     bool CanTakePayment,
     bool IsActive,

@@ -54,19 +54,28 @@ public sealed class UpdatePaymentDetailsRequestValidator
 }
 
 /// <summary>
-/// How much moving a venue puts up with: how many times one booking may move,
-/// and how many days before it starts moves close. The same two dials the
-/// venue sets from its own desk, set here by the platform on its behalf.
+/// How a venue's courts are booked and moved: how many days ahead they can be
+/// booked, how many times one booking may move, and how many days before it
+/// starts moves close. The same dials the venue sets from its own desk, set
+/// here by the platform on its behalf.
 /// </summary>
-public sealed record UpdateMoveRulesRequest(
+public sealed record UpdateBookingRulesRequest(
+    int BookingWindowDays,
     int MoveLimit,
     int MoveNoticeDays,
     string? Reason);
 
-public sealed class UpdateMoveRulesRequestValidator : AbstractValidator<UpdateMoveRulesRequest>
+public sealed class UpdateBookingRulesRequestValidator : AbstractValidator<UpdateBookingRulesRequest>
 {
-    public UpdateMoveRulesRequestValidator()
+    public UpdateBookingRulesRequestValidator()
     {
+        RuleFor(x => x.BookingWindowDays)
+            .InclusiveBetween(
+                IcyPlay.Domain.Bookings.BookingWindow.SmallestDays,
+                IcyPlay.Domain.Bookings.BookingWindow.LargestDays)
+            .WithMessage(
+                $"Customers can book between {IcyPlay.Domain.Bookings.BookingWindow.SmallestDays} " +
+                $"and {IcyPlay.Domain.Bookings.BookingWindow.LargestDays} days ahead.");
         RuleFor(x => x.MoveLimit)
             .InclusiveBetween(
                 IcyPlay.Domain.Bookings.BookingMove.SmallestLimit,

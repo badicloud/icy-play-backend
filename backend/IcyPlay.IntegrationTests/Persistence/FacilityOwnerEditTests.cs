@@ -64,16 +64,17 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task UpdateMoveRulesAsync_ShouldSetBothDialsAndRecordTheChange()
+    public async Task UpdateBookingRulesAsync_ShouldSetEveryDialAndRecordTheChange()
     {
         // Arrange
         await using var context = database.CreateContext();
         var (owner, sut) = await OnboardAsync(context, "Move Rules Courts");
 
-        // Act: a week's notice and two moves, for a venue that is always full.
-        var result = await sut.UpdateMoveRulesAsync(
+        // Act: a month ahead, a week's notice and two moves, for a venue that
+        // is always full.
+        var result = await sut.UpdateBookingRulesAsync(
             owner.FacilityOwnerId,
-            new UpdateMoveRulesRequest(2, 7, "Owner asked for a week"),
+            new UpdateBookingRulesRequest(30, 2, 7, "Owner asked for a week"),
             Admin(),
             CancellationToken.None);
 
@@ -82,13 +83,15 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         var stored = await context.FacilityOwners
             .AsNoTracking()
             .SingleAsync(candidate => candidate.Id == owner.FacilityOwnerId);
-        var entry = await LatestAsync(context, AuditAction.FacilityOwnerMoveRulesUpdated);
+        var entry = await LatestAsync(context, AuditAction.FacilityOwnerBookingRulesUpdated);
 
         using (new AssertionScope())
         {
             result.Succeeded.Should().BeTrue();
             stored.MoveLimit.Should().Be(2);
             stored.MoveNoticeDays.Should().Be(7);
+            stored.BookingWindowDays.Should().Be(30);
+            Fields(entry.NewValuesJson)["bookingWindowDays"].Should().Be("30");
             Fields(entry.OldValuesJson)["moveNoticeDays"].Should().Be(BookingMove.DefaultNoticeDays.ToString());
             Fields(entry.NewValuesJson)["moveNoticeDays"].Should().Be("7");
             entry.Reason.Should().Be("Owner asked for a week");

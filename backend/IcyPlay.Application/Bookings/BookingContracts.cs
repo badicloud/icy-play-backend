@@ -429,19 +429,6 @@ public enum BookingFailure
     CourtOnlyOnceStarted
 }
 
-/// <summary>
-/// How far ahead a court can be held.
-///
-/// A ceiling exists because a hold costs nothing to make and, today, never
-/// expires: without one, a single account could sit on a court for a year. The
-/// booking page says so on the day strip, and this is what makes that true
-/// rather than a sentence the browser tells itself.
-/// </summary>
-public static class BookingWindow
-{
-    public const int DaysAhead = 30;
-}
-
 public sealed record BookingResult<T>(T? Value, BookingFailure Failure = BookingFailure.None)
 {
     public bool Succeeded => Failure == BookingFailure.None;

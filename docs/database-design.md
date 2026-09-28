@@ -652,6 +652,7 @@ to pay into lives on the owner.
 | PartialBookingExpiryMinutes | int | How long an unpaid hold survives. Default 5, clamped to 5–240. |
 | MoveLimit | int | How many moves a customer gets on one booking. Default 3, clamped to 1–20. Only approved moves count. |
 | MoveNoticeDays | int | How many days before a booking starts moves close. Default 2, clamped to 1–7. Not asked of a booking already under way. |
+| BookingWindowDays | int | How many days ahead customers can book, today included. Default 15, clamped to 7–30. |
 
 These are on the owner rather than in a `PaymentMethods` table because there is
 one way to pay today. A second method is a table; a first one is four columns.

@@ -148,13 +148,27 @@ wants and which kind it is claiming.
 Every hour is **priced again on the server**. What the customer was shown is a
 quote; the only number that binds anyone is the one written here.
 
+### How far ahead
+
+Each venue sets its own **booking window**: `FacilityOwner.BookingWindowDays`,
+default 15, clamped to 7–30, counted **today included** (`BookingWindow` in the
+domain). Fifteen is today and the fourteen days after it; the last bookable date
+is `BookingWindow.LastDay(today, days)` on the venue's clock. A date past it is
+refused with `TooFarAhead` — on a booking, on the move grid, and on a move's
+quote (except onto a date the booking already holds, so a venue that shortens
+its window does not strand bookings already taken further out).
+
+The day outlook carries **exactly that many days**, and the booking page draws
+its strip from it: the whole window at once, or — only when the venue opens the
+full month — a fortnight first and *Show all 30 days* for the rest.
+
 ### Refusals, in the order they are asked
 
 The order is deliberate, because the answer is advice. A customer told "that
 hour has gone, pick again" when they asked for a whole day has been pointed at a
 door that is not there.
 
-1. the date has gone, or the kind does not match the dates sent
+1. the date has gone, is past the venue's [window](#how-far-ahead), or the kind does not match the dates sent
 2. maintenance, or a day the venue is shut
 3. an hour outside opening hours, or a sport with no price
 4. **a whole day with an hour already gone** — "book by the hour instead"
