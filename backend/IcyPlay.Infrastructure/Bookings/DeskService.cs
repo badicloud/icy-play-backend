@@ -3,6 +3,7 @@ using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Common;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -32,17 +33,34 @@ public sealed class DeskService(
     /// </summary>
     private const int WidestWindowInDays = 42;
 
-    public async Task<IReadOnlyCollection<DeskVenue>> VenuesAsync(Guid userId, CancellationToken ct) =>
-        await VenueQuery(userId)
+    public async Task<IReadOnlyCollection<DeskVenue>> VenuesAsync(Guid userId, CancellationToken ct)
+    {
+        var rows = await VenueQuery(userId)
             .AsNoTracking()
             .OrderBy(facility => facility.Name)
-            .Select(facility => new DeskVenue(
+            .Select(facility => new
+            {
                 facility.Id,
                 facility.Name,
-                facility.FacilityOwner.UserId == userId
+                facility.TimeZone,
+                CanSeeMoney = facility.FacilityOwner.UserId == userId
                     || facility.Attendants.Any(attendant =>
-                        attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney)))
+                        attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney)
+            })
             .ToListAsync(ct);
+
+        var now = timeProvider.GetUtcNow();
+
+        // Each venue's own today, worked out here where the clock is trusted.
+        return
+        [
+            .. rows.Select(row => new DeskVenue(
+                row.Id,
+                row.Name,
+                row.CanSeeMoney,
+                DateOnly.FromDateTime(VenueClock.LocalNowIn(row.TimeZone, now).DateTime)))
+        ];
+    }
 
     public async Task<DeskResult<PagedResult<DeskBooking>>> ListAsync(
         Guid userId,
@@ -248,30 +266,89 @@ public sealed class DeskService(
             })
             .ToListAsync(ct);
 
+        var booked = rows
+            // Only what still holds the hour. A hold whose clock ran out
+            // without a receipt has let go, and drawing it as taken would
+            // send somebody away from an hour they could have sold.
+            .Where(row => BookingStatuses.IsLive(row.Status)
+                && !(row.Status == BookingStatus.PendingPayment
+                    && row.ReceiptUrl == null
+                    && now >= row.HoldsUntil))
+            .Select(row => new ScheduleEntry(
+                row.Id,
+                courtId,
+                row.BookableCourtId,
+                UnitLabel(row.SportName, row.DivisionNumber, row.Divisions),
+                row.SportKey,
+                row.Status.ToString(),
+                row.CustomerName ?? "Unknown customer",
+                row.Date,
+                row.StartsAt,
+                row.EndsAt));
+
         return DeskResult<IReadOnlyCollection<ScheduleEntry>>.Success(
         [
-            .. rows
-                // Only what still holds the hour. A hold whose clock ran out
-                // without a receipt has let go, and drawing it as taken would
-                // send somebody away from an hour they could have sold.
-                .Where(row => BookingStatuses.IsLive(row.Status)
-                    && !(row.Status == BookingStatus.PendingPayment
-                        && row.ReceiptUrl == null
-                        && now >= row.HoldsUntil))
-                .OrderBy(row => row.Date)
-                .ThenBy(row => row.StartsAt)
-                .Select(row => new ScheduleEntry(
-                    row.Id,
-                    courtId,
-                    row.BookableCourtId,
-                    UnitLabel(row.SportName, row.DivisionNumber, row.Divisions),
-                    row.SportKey,
-                    row.Status.ToString(),
-                    row.CustomerName ?? "Unknown customer",
-                    row.Date,
-                    row.StartsAt,
-                    row.EndsAt))
+            .. booked
+                .Concat(await OpenPlayEntriesAsync(courtId, from, to, ct))
+                .OrderBy(entry => entry.Date)
+                .ThenBy(entry => entry.StartsAt)
         ]);
+    }
+
+    /// <summary>
+    /// The hours published open plays hold on this court, drawn on the diary
+    /// beside the bookings so the desk sees why an hour is not for sale. The id
+    /// is the open play's and the name is its title; the status says which it is.
+    /// </summary>
+    private async Task<IEnumerable<ScheduleEntry>> OpenPlayEntriesAsync(
+        Guid courtId,
+        DateOnly from,
+        DateOnly to,
+        CancellationToken ct)
+    {
+        var dates = Enumerable.Range(0, to.DayNumber - from.DayNumber + 1)
+            .Select(offset => from.AddDays(offset))
+            .ToArray();
+
+        var holds = await OpenPlayHolds.OnCourtAsync(db, courtId, dates, ct);
+
+        if (holds.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = holds.Select(hold => hold.OpenPlayId).Distinct().ToArray();
+
+        var units = await db.OpenPlays
+            .AsNoTracking()
+            .Where(openPlay => ids.Contains(openPlay.Id))
+            .Select(openPlay => new
+            {
+                openPlay.Id,
+                openPlay.BookableCourtId,
+                SportName = openPlay.BookableCourt.CourtSport.Sport.Name,
+                SportKey = openPlay.BookableCourt.CourtSport.Sport.Key,
+                openPlay.BookableCourt.DivisionNumber,
+                openPlay.BookableCourt.CourtSport.Divisions
+            })
+            .ToDictionaryAsync(unit => unit.Id, ct);
+
+        return holds.Select(hold =>
+        {
+            var unit = units[hold.OpenPlayId];
+
+            return new ScheduleEntry(
+                hold.OpenPlayId,
+                courtId,
+                unit.BookableCourtId,
+                UnitLabel(unit.SportName, unit.DivisionNumber, unit.Divisions),
+                unit.SportKey,
+                ScheduleEntryKind.OpenPlay,
+                hold.Title,
+                hold.Date,
+                hold.StartsAt,
+                hold.EndsAt);
+        });
     }
 
     public async Task<DeskResult<PagedResult<DeskBooking>>> CourtBookingsAsync(
@@ -1304,6 +1381,18 @@ public sealed class DeskService(
                 slot.BookableCourt.DivisionNumber
             })
             .ToListAsync(ct);
+
+        // A published open play holds its hours as firmly as a booking does.
+        var openPlays = await OpenPlayHolds.OnCourtAsync(db, target.CourtId, dates, ct);
+
+        held.AddRange(openPlays.Select(hold => new
+        {
+            hold.Date,
+            hold.StartsAt,
+            hold.EndsAt,
+            hold.CourtSportId,
+            hold.DivisionNumber
+        }));
 
         return held
             .Where(slot => target.ClashesWith(slot.CourtSportId, slot.DivisionNumber))

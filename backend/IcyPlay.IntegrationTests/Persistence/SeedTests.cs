@@ -5,8 +5,10 @@ using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.OpenPlays;
 using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Facilities;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
@@ -18,10 +20,23 @@ using Microsoft.Extensions.Options;
 namespace IcyPlay.IntegrationTests.Persistence;
 
 [Collection(DatabaseCollection.Name)]
-public sealed class SeedTests(SqlServerDatabaseFixture database)
+public sealed class SeedTests(SqlServerDatabaseFixture database) : IAsyncLifetime
 {
     private static readonly DateTimeOffset Now =
         new(2026, 9, 14, 1, 0, 0, TimeSpan.Zero);
+
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    /// <summary>
+    /// Clears every demo venue after each test. The database is shared across
+    /// the collection, and the tests that count what was seeded or removed
+    /// would otherwise count what an earlier test left behind.
+    /// </summary>
+    public async Task DisposeAsync()
+    {
+        await using var context = database.CreateContext();
+        await CreateSut(context, CreateCatalog(context)).RemoveSeededAsync(Admin(), CancellationToken.None);
+    }
 
     [Fact]
     public async Task BuildVenueAsync_ShouldRaiseAVenueTheCatalogueWillActuallyOffer()
@@ -460,6 +475,200 @@ public sealed class SeedTests(SqlServerDatabaseFixture database)
         // Assert
         again.Should().Be(new SeedRemovalResult(0, 0, 0, 0));
     }
+
+    [Fact]
+    public async Task BuildOpenPlaysAsync_ShouldPutEverySampleOnTheDemoVenue()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await CreateSut(context, CreateCatalog(context))
+            .BuildVenueAsync(Admin(), null, CancellationToken.None);
+        var sut = CreateOpenPlaySut(context);
+
+        // Act
+        var built = await sut.BuildAsync(Admin(), CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+        var onVenue = await context.OpenPlays
+            .Where(openPlay => openPlay.FacilityId == venue.FacilityId)
+            .ToListAsync();
+
+        using (new AssertionScope())
+        {
+            onVenue.Should().HaveCount(5);
+            onVenue.Should().OnlyContain(openPlay => openPlay.SeededAt != null);
+            onVenue.Select(openPlay => openPlay.Level).Distinct().Should().HaveCountGreaterThan(1);
+            built.OpenPlays.Should().Contain(summary => summary.FacilityName == venue.FacilityName);
+        }
+    }
+
+    [Fact]
+    public async Task BuildOpenPlaysAsync_WhenRunTwice_ShouldSkipRatherThanDoubleBookTheCourts()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await CreateSut(context, CreateCatalog(context))
+            .BuildVenueAsync(Admin(), null, CancellationToken.None);
+        var sut = CreateOpenPlaySut(context);
+        await sut.BuildAsync(Admin(), CancellationToken.None);
+
+        // Act
+        var again = await sut.BuildAsync(Admin(), CancellationToken.None);
+
+        // Assert: the same hours on the same court would be two sessions sold
+        // on one floor.
+        using (new AssertionScope())
+        {
+            again.OpenPlays.Should().NotContain(summary => summary.FacilityName == venue.FacilityName);
+            again.Skipped.Count(line => line.Contains(venue.FacilityName)).Should().Be(5);
+            (await context.OpenPlays.CountAsync(openPlay => openPlay.FacilityId == venue.FacilityId))
+                .Should().Be(5);
+        }
+    }
+
+    [Fact]
+    public async Task RemoveOpenPlaysAsync_ShouldTakeTheSamplesAndLeaveTheVenueAndARealOpenPlay()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await CreateSut(context, CreateCatalog(context))
+            .BuildVenueAsync(Admin(), null, CancellationToken.None);
+        var sut = CreateOpenPlaySut(context);
+        await sut.BuildAsync(Admin(), CancellationToken.None);
+
+        // One the desk made by hand, on a court the samples do not use. It
+        // carries no marker, so it is not sample data whatever venue it is on.
+        var court = await context.BookableCourts
+            .Where(bookable => bookable.Court.FacilityId == venue.FacilityId
+                && bookable.Court.Name == "Court 5"
+                && bookable.CourtSport.Sport.Key == "volleyball")
+            .SingleAsync();
+        var real = new OpenPlay(
+            venue.FacilityId, court.Id, court.CourtId, "Real volleyball night", OpenPlayLevel.AllLevels,
+            12, 100m, new(18, 0), new(20, 0), OpenPlayDays.Friday, new DateOnly(2026, 9, 18), null,
+            60, null, Guid.NewGuid(), Now);
+        context.OpenPlays.Add(real);
+        await context.SaveChangesAsync();
+
+        // Act
+        var removed = await sut.RemoveSeededAsync(Admin(), CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+
+        using (new AssertionScope())
+        {
+            removed.OpenPlays.Should().BeGreaterThanOrEqualTo(5);
+            (await context.OpenPlays.CountAsync(openPlay => openPlay.SeededAt != null)).Should().Be(0);
+            (await context.OpenPlays.CountAsync(openPlay => openPlay.Id == real.Id)).Should().Be(1);
+            (await context.Facilities.CountAsync(facility => facility.Id == venue.FacilityId)).Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task RemoveSeededAsync_ShouldTakeTheOpenPlaysOnTheVenueWithIt()
+    {
+        // Arrange: an open play holds its court under Restrict, so a venue
+        // removal that forgets them stops half way.
+        await using var context = database.CreateContext();
+        var sut = CreateSut(context, CreateCatalog(context));
+        var venue = await sut.BuildVenueAsync(Admin(), null, CancellationToken.None);
+        await CreateOpenPlaySut(context).BuildAsync(Admin(), CancellationToken.None);
+
+        // Act
+        await sut.RemoveSeededAsync(Admin(), CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+
+        using (new AssertionScope())
+        {
+            (await context.Facilities.CountAsync(facility => facility.Id == venue.FacilityId)).Should().Be(0);
+            (await context.OpenPlays.CountAsync(openPlay => openPlay.FacilityId == venue.FacilityId)).Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task BuildOpenPlaysAsync_WhenThereIsNoDemoVenue_ShouldRefuse()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        await CreateSut(context, CreateCatalog(context)).RemoveSeededAsync(Admin(), CancellationToken.None);
+        var sut = CreateOpenPlaySut(context);
+
+        // Act
+        var build = () => sut.BuildAsync(Admin(), CancellationToken.None);
+
+        // Assert
+        await build.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task OpenPlayCatalog_ShouldListTheSamplesWithThePlatformTopUpAndTheEarlyBird()
+    {
+        // Arrange: Now is Monday 14 September, nine in the morning in Manila.
+        await using var context = database.CreateContext();
+        var venue = await CreateSut(context, CreateCatalog(context))
+            .BuildVenueAsync(Admin(), null, CancellationToken.None);
+        await CreateOpenPlaySut(context).BuildAsync(Admin(), CancellationToken.None);
+        var sut = new OpenPlayCatalog(context, new FixedTimeProvider(Now));
+
+        // Act
+        var listed = await sut.ListAsync(null, venue.FacilityId, CancellationToken.None);
+
+        // Assert
+        var badminton = listed.Single(entry => entry.Title == "Badminton Open Play");
+        var saturday = listed.Single(entry => entry.Title == "Saturday Night Dinkers");
+
+        using (new AssertionScope())
+        {
+            listed.Should().HaveCount(5);
+
+            // Tonight, seven o'clock: still open, and too late for its
+            // one-day early bird.
+            badminton.UpcomingSessions.First().Date.Should().Be(new DateOnly(2026, 9, 14));
+            badminton.UpcomingSessions.First().IsOpenForRegistration.Should().BeTrue();
+            badminton.UpcomingSessions.First().PriceNow.Should().Be(180m + 15m);
+
+            // Saturday is five days out, inside its three-day early bird.
+            saturday.Price.Should().Be(150m + 15m);
+            saturday.UpcomingSessions.First().Date.Should().Be(new DateOnly(2026, 9, 19));
+            saturday.UpcomingSessions.First().EarlyBirdNow.Should().BeTrue();
+            saturday.UpcomingSessions.First().PriceNow.Should().Be(150m - 30m + 15m);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayCatalog_ShouldLeaveOutACancelledDate()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await CreateSut(context, CreateCatalog(context))
+            .BuildVenueAsync(Admin(), null, CancellationToken.None);
+        await CreateOpenPlaySut(context).BuildAsync(Admin(), CancellationToken.None);
+
+        var badminton = await context.OpenPlays
+            .SingleAsync(openPlay => openPlay.FacilityId == venue.FacilityId
+                && openPlay.Title == "Badminton Open Play");
+        var tonight = new OpenPlaySession(badminton.Id, new DateOnly(2026, 9, 14), Now);
+        tonight.Cancel("Not enough players", Guid.NewGuid(), Now);
+        context.OpenPlaySessions.Add(tonight);
+        await context.SaveChangesAsync();
+
+        var sut = new OpenPlayCatalog(context, new FixedTimeProvider(Now));
+
+        // Act
+        var listed = await sut.ListAsync("badminton", venue.FacilityId, CancellationToken.None);
+
+        // Assert: a cancelled date is released, so it is not offered.
+        listed.Single().UpcomingSessions.First().Date.Should().Be(new DateOnly(2026, 9, 16));
+    }
+
+    private static OpenPlaySeedService CreateOpenPlaySut(AppDbContext context) => new(
+        context,
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        new FixedTimeProvider(Now));
 
     private static SeedService CreateSut(AppDbContext context, IActivityCatalog catalog) => new(
         context,

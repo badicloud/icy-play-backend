@@ -6,6 +6,7 @@ using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -2112,6 +2113,17 @@ public sealed class BookingService(
             .ToListAsync(ct);
 
         held.AddRange(asked);
+
+        // The hours a published open play holds. Its players have been told
+        // the court is theirs, so it is not for sale to anybody else.
+        var openPlays = await OpenPlayHolds.OnCourtAsync(db, offering.Court.Id, dates, ct);
+
+        held.AddRange(openPlays.Select(hold => new Holding(
+            hold.Date,
+            hold.StartsAt,
+            hold.EndsAt,
+            hold.CourtSportId,
+            hold.DivisionNumber)));
 
         return
         [

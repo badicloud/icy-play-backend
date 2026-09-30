@@ -5,6 +5,7 @@ using IcyPlay.Application.Facilities;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.WebUtilities;
@@ -274,6 +275,18 @@ public sealed class SeedService(
         var removedBookings = await db.Bookings
             .Where(booking => bookingIds.Contains(booking.Id))
             .ExecuteDeleteAsync(ct);
+
+        // Open plays hold their facility and bookable court under Restrict, so
+        // they go before either. All of them on these venues, sample or not:
+        // the venue is going, and an open play on a court that no longer exists
+        // is not one anybody can play.
+        var openPlayIds = await db.OpenPlays
+            .Where(openPlay => facilityIds.Contains(openPlay.FacilityId)
+                || bookableIds.Contains(openPlay.BookableCourtId))
+            .Select(openPlay => openPlay.Id)
+            .ToArrayAsync(ct);
+
+        await OpenPlaySeedService.RemoveOpenPlaysAsync(db, openPlayIds, ct);
 
         await db.BookableCourts
             .Where(bookable => courtIds.Contains(bookable.CourtId))

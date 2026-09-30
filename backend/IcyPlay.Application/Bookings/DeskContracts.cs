@@ -49,7 +49,12 @@ public sealed record DeskBooking(
 /// reports are theirs to read: always for the owner, and for an attendant only
 /// when the owner has said so.
 /// </summary>
-public sealed record DeskVenue(Guid Id, string Name, bool CanSeeMoney = true);
+/// <param name="Today">
+/// The date at the venue now, from the server's clock in the venue's time zone.
+/// What a date picker greys out before, so the browser's own clock, which may
+/// be wrong or elsewhere, never decides it. Null where nobody asks.
+/// </param>
+public sealed record DeskVenue(Guid Id, string Name, bool CanSeeMoney = true, DateOnly? Today = null);
 
 /// <summary>
 /// One attendant as their owner sees them on the desk: who, which venue, and
@@ -101,6 +106,10 @@ public sealed record DeskCourtUnit(
 /// sending each one a customer's address, a receipt and a list of rates would
 /// be sending far more than the page can show. The rest arrives when somebody
 /// clicks an hour.
+///
+/// An open play's hours come through here too, with <see cref="ScheduleEntryKind.OpenPlay"/>
+/// as the status, the open play's id in place of a booking's, and its title in
+/// place of a customer's name.
 /// </summary>
 public sealed record ScheduleEntry(
     Guid BookingId,
@@ -113,6 +122,12 @@ public sealed record ScheduleEntry(
     DateOnly Date,
     TimeOnly StartsAt,
     TimeOnly EndsAt);
+
+/// <summary>What a diary entry is when it is not a booking.</summary>
+public static class ScheduleEntryKind
+{
+    public const string OpenPlay = "OpenPlay";
+}
 
 /// <summary>
 /// What the diary is being asked for.

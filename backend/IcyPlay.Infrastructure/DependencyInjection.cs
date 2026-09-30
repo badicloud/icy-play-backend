@@ -3,6 +3,7 @@ using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Identity;
+using IcyPlay.Application.OpenPlays;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
@@ -10,6 +11,7 @@ using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Identity;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
@@ -70,6 +72,11 @@ public static class DependencyInjection
         services.AddScoped<ICourtService, CourtService>();
         services.AddScoped<ISportService, SportService>();
         services.AddScoped<ISeedService, SeedService>();
+        services.AddScoped<IOpenPlaySeedService, OpenPlaySeedService>();
+        services.AddScoped<IOpenPlayCatalog, OpenPlayCatalog>();
+        services.AddScoped<OpenPlayService>();
+        services.AddScoped<IDeskOpenPlayService>(provider => provider.GetRequiredService<OpenPlayService>());
+        services.AddScoped<IAdminOpenPlayService>(provider => provider.GetRequiredService<OpenPlayService>());
         services.AddScoped<IHolidayService, HolidayService>();
         services.AddMemoryCache();
         // One signal outlives the requests that clear it.

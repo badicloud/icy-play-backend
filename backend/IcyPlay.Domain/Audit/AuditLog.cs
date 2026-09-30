@@ -103,6 +103,17 @@ public static class AuditAction
     /// happened, and it outlives what it describes by design.
     /// </summary>
     public const string SeededDataRemoved = "SeededDataRemoved";
+    /// <summary>Sample open plays were put on the demonstration venues.</summary>
+    public const string SeededOpenPlaysBuilt = "SeededOpenPlaysBuilt";
+    /// <summary>Sample open plays were removed in bulk, with their sessions and registrations.</summary>
+    public const string SeededOpenPlaysRemoved = "SeededOpenPlaysRemoved";
+    public const string OpenPlayCreated = "OpenPlayCreated";
+    public const string OpenPlayUpdated = "OpenPlayUpdated";
+    public const string OpenPlayPublished = "OpenPlayPublished";
+    public const string OpenPlayUnpublished = "OpenPlayUnpublished";
+    public const string OpenPlayEnded = "OpenPlayEnded";
+    public const string OpenPlayDraftDeleted = "OpenPlayDraftDeleted";
+    public const string OpenPlayPhotoChanged = "OpenPlayPhotoChanged";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
     public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
@@ -182,4 +193,5 @@ public static class AuditEntityType
     public const string Sport = "Sport";
     public const string Holiday = "Holiday";
     public const string Booking = "Booking";
+    public const string OpenPlay = "OpenPlay";
 }

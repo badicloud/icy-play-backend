@@ -681,7 +681,11 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             CancellationToken.None);
 
         // Act
-        var activity = await sut.ListActivityAsync(owner.FacilityOwnerId, CancellationToken.None);
+        var activity = (await sut.ListActivityAsync(
+            owner.FacilityOwnerId,
+            1,
+            ActivityPaging.LargestPage,
+            CancellationToken.None)).Items;
 
         // Assert
         using (new AssertionScope())
@@ -693,6 +697,64 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             // Recorded against the facility, still gathered under its owner.
             activity.Should().Contain(entry => entry.Action == AuditAction.FacilityUpdated);
             activity.Select(entry => entry.CreatedAt).Should().BeInDescendingOrder();
+        }
+    }
+
+    [Fact]
+    public async Task ListActivityAsync_ShouldHandOutTheTrailAPageAtATimeWithNothingRepeatedOrMissed()
+    {
+        // Arrange: the onboarding entry plus five edits, read two at a time.
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Paged Activity Courts");
+
+        for (var edit = 1; edit <= 5; edit++)
+        {
+            await sut.UpdateBusinessAsync(
+                owner.FacilityOwnerId,
+                new UpdateBusinessRequest($"Ventures {edit}", "billing@example.com", "+639171234567", "DTI-123456", null),
+                Admin(),
+                CancellationToken.None);
+        }
+
+        var everything = (await sut.ListActivityAsync(
+            owner.FacilityOwnerId, 1, ActivityPaging.LargestPage, CancellationToken.None)).Items;
+
+        // Act
+        var first = await sut.ListActivityAsync(owner.FacilityOwnerId, 1, 2, CancellationToken.None);
+        var second = await sut.ListActivityAsync(owner.FacilityOwnerId, 2, 2, CancellationToken.None);
+        var pages = new List<ActivityEntry>(first.Items);
+
+        for (var page = 2; page <= first.TotalPages; page++)
+        {
+            pages.AddRange((await sut.ListActivityAsync(owner.FacilityOwnerId, page, 2, CancellationToken.None)).Items);
+        }
+
+        // Assert
+        using (new AssertionScope())
+        {
+            first.Items.Should().HaveCount(2);
+            first.TotalItems.Should().Be(everything.Count);
+            second.Items.Should().NotIntersectWith(first.Items);
+            // Read page by page, the trail is the same trail, in the same order.
+            pages.Select(entry => entry.Id).Should().Equal(everything.Select(entry => entry.Id));
+        }
+    }
+
+    [Fact]
+    public async Task ListActivityAsync_WhenAskedForTooMuch_ShouldCapThePage()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Capped Activity Courts");
+
+        // Act
+        var page = await sut.ListActivityAsync(owner.FacilityOwnerId, 0, 10_000, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            page.Page.Should().Be(1);
+            page.PageSize.Should().Be(ActivityPaging.LargestPage);
         }
     }
 

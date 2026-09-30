@@ -2,6 +2,7 @@ using System.Security.Claims;
 using IcyPlay.Api.Common;
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Facilities;
+using IcyPlay.Application.OpenPlays;
 using IcyPlay.Domain.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,7 +21,7 @@ namespace IcyPlay.Api.Controllers;
 [ApiController]
 [Authorize(Roles = UserRoleName.PlatformAdmin)]
 [Route("api/v1/admin/seed")]
-public sealed class AdminSeedController(ISeedService seed) : ControllerBase
+public sealed class AdminSeedController(ISeedService seed, IOpenPlaySeedService openPlays) : ControllerBase
 {
     /// <summary>
     /// Who may build one. Lower case, and compared lower case: an address typed
@@ -120,6 +121,79 @@ public sealed class AdminSeedController(ISeedService seed) : ControllerBase
         var removed = await seed.RemoveSeededAsync(actor, ct);
 
         return Ok(new ApiEnvelope<SeedRemovalResult>(removed));
+    }
+
+    /// <summary>
+    /// Puts sample open plays on every demo venue. Demo venues only: an open
+    /// play blocks its court hours, and a sample one would turn real customers
+    /// away from a real venue.
+    /// </summary>
+    [HttpPost("open-plays")]
+    public async Task<IActionResult> BuildOpenPlays(CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        if (!Is(MayBuild))
+        {
+            return NotFound(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.NotFound, "No such endpoint.")));
+        }
+
+        try
+        {
+            var result = await openPlays.BuildAsync(actor, ct);
+
+            return Ok(new ApiEnvelope<OpenPlaySeedResult>(result));
+        }
+        catch (InvalidOperationException problem)
+        {
+            return BadRequest(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.BadRequest, problem.Message)));
+        }
+    }
+
+    /// <summary>The sample open plays standing now, so the console can say what removing them takes.</summary>
+    [HttpGet("open-plays")]
+    public async Task<IActionResult> OpenPlays(CancellationToken ct)
+    {
+        if (!Is(MayRemove))
+        {
+            return NotFound(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.NotFound, "No such endpoint.")));
+        }
+
+        var standing = await openPlays.SeededAsync(ct);
+
+        return Ok(new ApiEnvelope<IReadOnlyCollection<SeededOpenPlaySummary>>(standing));
+    }
+
+    /// <summary>
+    /// Removes every sample open play with its sessions and registrations. The
+    /// demo venues stay. Goes by the seeder's marker, so a real open play on a
+    /// demo venue is untouched.
+    /// </summary>
+    [HttpDelete("open-plays")]
+    public async Task<IActionResult> RemoveOpenPlays(CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.Unauthorized, "Sign in again to continue.")));
+        }
+
+        if (!Is(MayRemove))
+        {
+            return NotFound(new ApiErrorEnvelope(
+                new ApiError(ErrorCodes.NotFound, "No such endpoint.")));
+        }
+
+        var removed = await openPlays.RemoveSeededAsync(actor, ct);
+
+        return Ok(new ApiEnvelope<OpenPlaySeedRemovalResult>(removed));
     }
 
     /// <summary>

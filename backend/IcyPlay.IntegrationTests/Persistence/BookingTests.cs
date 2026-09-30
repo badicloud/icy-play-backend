@@ -3,15 +3,18 @@ using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
+using IcyPlay.Application.OpenPlays;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.OpenPlays;
 using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
@@ -3510,6 +3513,494 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     // ------------------------------------------------------------- the set-up
+
+    // ------------------------------------------------------------ open plays
+
+    [Fact]
+    public async Task OpenPlay_WhileADraft_ShouldNotHoldTheCourt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Draft Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+
+        // Act
+        var day = await CreateService(context).AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        // Assert: a draft is still being worked on, so the court stays on sale.
+        day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OpenPlay_WhenPublished_ShouldHoldItsPartAndTheWholeFloorButNotTheOtherParts()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Held Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        await desk.PublishAsync(actor, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        var sut = CreateService(context);
+
+        // Act
+        var sameUnit = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+        var wholeFloor = await sut.AvailabilityAsync(floor.Basketball, Tuesday, CancellationToken.None);
+        var otherUnit = await sut.AvailabilityAsync(floor.Pickleball2, Tuesday, CancellationToken.None);
+        var nextWeek = await sut.AvailabilityAsync(floor.Pickleball1, Tuesday.AddDays(7), CancellationToken.None);
+
+        // Assert: the same clash rule as a booking. Basketball needs the whole
+        // floor; the other pickleball courts run beside it.
+        using (new AssertionScope())
+        {
+            sameUnit.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+            sameUnit.Value!.Slots.Single(slot => slot.StartsAt == EightAm).IsOpen.Should().BeFalse();
+            sameUnit.Value!.Slots.Single(slot => slot.StartsAt == new TimeOnly(9, 0)).IsOpen.Should().BeTrue();
+            wholeFloor.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+            otherUnit.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+            nextWeek.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_WhenPublished_ShouldRefuseABookingOnItsHours()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Refused Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        await desk.PublishAsync(actor, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Act
+        var booked = await CreateService(context).CreateAsync(
+            Hourly(floor.Basketball, Tuesday, SevenAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Assert
+        booked.Failure.Should().Be(BookingFailure.SlotTaken);
+    }
+
+    [Fact]
+    public async Task OpenPlay_Publish_WhenABookingIsInTheWay_ShouldRefuseAndSayWhich()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Clash Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        await CreateService(context).CreateAsync(
+            Hourly(floor.Basketball, Tuesday, EightAm),
+            floor.Customer,
+            CancellationToken.None);
+
+        // Act
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var published = await desk.PublishAsync(actor, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Assert: a warning on the draft, and a refusal at publishing, both
+        // naming the hour in the way.
+        using (new AssertionScope())
+        {
+            saved.Succeeded.Should().BeTrue();
+            saved.Value!.Clashes.Should().ContainSingle(clash => clash.Date == Tuesday && clash.StartsAt == EightAm);
+            published.Failure.Should().Be(OpenPlayFailure.Clashes);
+            published.Clashes.Should().ContainSingle(clash => clash.Kind == "Booking");
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_Publish_WhenAnotherOpenPlayHasTheHours_ShouldRefuse()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Twin Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var first = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        await desk.PublishAsync(actor, first.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Act: basketball needs the whole floor the pickleball one is on.
+        var second = await desk.CreateAsync(actor, TuesdayMornings(floor.Basketball), CancellationToken.None);
+        var published = await desk.PublishAsync(actor, second.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            published.Failure.Should().Be(OpenPlayFailure.Clashes);
+            published.Clashes.Should().ContainSingle(clash => clash.Kind == "OpenPlay" && clash.Date == Tuesday);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_WhenPublished_ShouldRefuseAnEdit()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Locked Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var id = saved.Value!.OpenPlay.OpenPlayId;
+        await desk.PublishAsync(actor, id, CancellationToken.None);
+
+        // Act
+        var edited = await desk.UpdateAsync(
+            actor,
+            id,
+            TuesdayMornings(floor.Pickleball1) with { Title = "Changed" },
+            CancellationToken.None);
+
+        // Assert: players are registering for what it says.
+        edited.Failure.Should().Be(OpenPlayFailure.NotADraft);
+    }
+
+    [Fact]
+    public async Task OpenPlay_OutsideTheCourtsHours_ShouldBeRefused()
+    {
+        // Arrange: the fixture opens at six.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Early Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        // Act
+        var saved = await desk.CreateAsync(
+            actor,
+            TuesdayMornings(floor.Pickleball1) with { StartsAt = new TimeOnly(5, 0) },
+            CancellationToken.None);
+
+        // Assert
+        saved.Failure.Should().Be(OpenPlayFailure.OutsideOpeningHours);
+    }
+
+    [Fact]
+    public async Task OpenPlay_AtAVenueTheyDoNotWork_ShouldAnswerAsIfItWereNotThere()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Stranger Courts");
+        var desk = CreateOpenPlayService(context);
+        var stranger = new AuditActor(Guid.NewGuid(), UserRoleName.FacilityOwner);
+
+        // Act
+        var saved = await desk.CreateAsync(stranger, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+
+        // Assert
+        saved.Failure.Should().Be(OpenPlayFailure.NotAttended);
+    }
+
+    [Fact]
+    public async Task OpenPlay_WhenEnded_ShouldReleaseEveryLaterDate()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Ended Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var id = saved.Value!.OpenPlay.OpenPlayId;
+        await desk.PublishAsync(actor, id, CancellationToken.None);
+
+        // Act: ended on Monday, the venue's today.
+        var ended = await desk.EndAsync(actor, id, CancellationToken.None);
+        var day = await CreateService(context).AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            ended.Value!.Status.Should().Be("Ended");
+            day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_DeletingADraft_ShouldRemoveIt_ButAPublishedOneShouldStay()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Delete Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var draft = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var published = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball2), CancellationToken.None);
+        await desk.PublishAsync(actor, published.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Act
+        var deletedDraft = await desk.DeleteDraftAsync(actor, draft.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+        var deletedPublished = await desk.DeleteDraftAsync(actor, published.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            deletedDraft.Succeeded.Should().BeTrue();
+            deletedPublished.Failure.Should().Be(OpenPlayFailure.NotADraft);
+            (await context.OpenPlays.CountAsync(openPlay => openPlay.Id == draft.Value.OpenPlay.OpenPlayId))
+                .Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_WhenPublished_ShouldBeDrawnOnTheDesksDiary()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Diary Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var draft = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var published = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball2), CancellationToken.None);
+        await desk.PublishAsync(actor, published.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+
+        // Act
+        var diary = await CreateDeskService(context)
+            .ScheduleAsync(actor.UserId!.Value, floor.CourtId, Tuesday, Tuesday, CancellationToken.None);
+
+        // Assert: the published one is drawn so the desk sees why the hours
+        // are off sale; the draft holds nothing and is not.
+        var entries = diary.Value!;
+
+        using (new AssertionScope())
+        {
+            entries.Should().ContainSingle();
+            entries.Single().Status.Should().Be(ScheduleEntryKind.OpenPlay);
+            entries.Single().BookingId.Should().Be(published.Value.OpenPlay.OpenPlayId);
+            entries.Single().CustomerName.Should().Be("Tuesday Morning Open Play");
+            entries.Should().NotContain(entry => entry.BookingId == draft.Value!.OpenPlay.OpenPlayId);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_CoverPhoto_ShouldBeSettableAfterPublishing_AndShowOnTheListing()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Photo Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var id = saved.Value!.OpenPlay.OpenPlayId;
+        await desk.PublishAsync(actor, id, CancellationToken.None);
+
+        const string url = "https://res.cloudinary.com/icyplay-test/image/upload/v1/icyplay/open-plays/cover.jpg";
+
+        // Act: the photo is the one thing outside the publishing lock.
+        var set = await desk.SetCoverPhotoAsync(
+            actor,
+            id,
+            new OpenPlayPhotoInput("icyplay/open-plays/cover", url),
+            CancellationToken.None);
+        var listed = await new OpenPlayCatalog(context, new FixedTimeProvider(Now))
+            .ListAsync(null, null, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            set.Succeeded.Should().BeTrue();
+            set.Value!.CoverPhotoUrl.Should().Be(url);
+            listed.Single(entry => entry.OpenPlayId == id).CoverPhotoUrl.Should().Be(url);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_CoverPhoto_FromAnotherHostOrFolder_ShouldBeRefused()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Stranger Photo Courts");
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+        var saved = await desk.CreateAsync(actor, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var id = saved.Value!.OpenPlay.OpenPlayId;
+
+        // Act
+        var otherHost = await desk.SetCoverPhotoAsync(
+            actor,
+            id,
+            new OpenPlayPhotoInput("icyplay/open-plays/cover", "https://example.com/cover.jpg"),
+            CancellationToken.None);
+        var otherFolder = await desk.SetCoverPhotoAsync(
+            actor,
+            id,
+            new OpenPlayPhotoInput(
+                "icyplay/bookings/receipts/receipt",
+                "https://res.cloudinary.com/icyplay-test/image/upload/v1/icyplay/bookings/receipts/receipt.jpg"),
+            CancellationToken.None);
+
+        // Assert: a public page must never point at a host somebody chose, or
+        // show a customer's payment receipt as a cover.
+        using (new AssertionScope())
+        {
+            otherHost.Failure.Should().Be(OpenPlayFailure.UntrustedPhoto);
+            otherFolder.Failure.Should().Be(OpenPlayFailure.UntrustedPhoto);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_AsThePlatformAdmin_ShouldRunUnderTheSameRulesForThatOwner()
+    {
+        // Arrange: an admin works no venue, so the owner is the scope.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Admin Courts");
+        var ownerId = await OwnerIdAsync(context, floor);
+        var admin = new AuditActor(Guid.NewGuid(), UserRoleName.PlatformAdmin);
+        var sut = CreateOpenPlayService(context);
+
+        // Act
+        var saved = await sut.CreateForOwnerAsync(ownerId, admin, TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        var published = await sut.PublishForOwnerAsync(ownerId, admin, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+        var edited = await sut.UpdateForOwnerAsync(
+            ownerId,
+            admin,
+            saved.Value.OpenPlay.OpenPlayId,
+            TuesdayMornings(floor.Pickleball1) with { Title = "Changed" },
+            CancellationToken.None);
+        var day = await CreateService(context).AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
+
+        // Assert: it holds the court like one from the desk, and the
+        // publishing lock is the admin's too.
+        using (new AssertionScope())
+        {
+            published.Value!.Status.Should().Be("Published");
+            edited.Failure.Should().Be(OpenPlayFailure.NotADraft);
+            day.Value!.Slots.Single(slot => slot.StartsAt == SevenAm).IsOpen.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_AsThePlatformAdmin_ForTheWrongOwner_ShouldAnswerAsIfItWereNotThere()
+    {
+        // Arrange: two owners; the admin's address names the other one.
+        await using var context = database.CreateContext();
+        var mine = await FloorAsync(context, "Open Play Admin Mine Courts");
+        var other = await FloorAsync(context, "Open Play Admin Other Courts");
+        var otherOwnerId = await OwnerIdAsync(context, other);
+        var admin = new AuditActor(Guid.NewGuid(), UserRoleName.PlatformAdmin);
+        var sut = CreateOpenPlayService(context);
+
+        var desk = await OwnerActorAsync(context, mine);
+        var existing = await sut.CreateAsync(desk, TuesdayMornings(mine.Pickleball1), CancellationToken.None);
+
+        // Act
+        var created = await sut.CreateForOwnerAsync(otherOwnerId, admin, TuesdayMornings(mine.Pickleball1), CancellationToken.None);
+        var read = await sut.GetForOwnerAsync(otherOwnerId, existing.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+        var listed = await sut.ListForOwnerAsync(otherOwnerId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            created.Failure.Should().Be(OpenPlayFailure.NotAttended);
+            read.Failure.Should().Be(OpenPlayFailure.NotFound);
+            listed.Value.Should().NotContain(entry => entry.OpenPlayId == existing.Value.OpenPlay.OpenPlayId);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_Places_ShouldGiveTheOwnersVenuesWithTheirTodayAndCourts()
+    {
+        // Arrange: Now is 5pm on Monday 14 September in Manila.
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Places Courts");
+        var ownerId = await OwnerIdAsync(context, floor);
+
+        // Act
+        var places = await CreateOpenPlayService(context).PlacesForOwnerAsync(ownerId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            places.Venues.Should().ContainSingle().Which.Today.Should().Be(Today);
+            places.Courts.Should().ContainSingle(court => court.Id == floor.CourtId)
+                .Which.Units.Should().Contain(unit => unit.BookableCourtId == floor.Pickleball1);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlay_ChangesByTheDeskOrThePlatform_ShouldShowInTheOwnersActivity()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Open Play Activity Courts");
+        var ownerId = await OwnerIdAsync(context, floor);
+        var sut = CreateOpenPlayService(context);
+
+        var saved = await sut.CreateAsync(await OwnerActorAsync(context, floor), TuesdayMornings(floor.Pickleball1), CancellationToken.None);
+        await sut.PublishForOwnerAsync(
+            ownerId,
+            new AuditActor(Guid.NewGuid(), UserRoleName.PlatformAdmin),
+            saved.Value!.OpenPlay.OpenPlayId,
+            CancellationToken.None);
+
+        var edits = new FacilityOwnerEditService(
+            context,
+            new AuditLogger(context, new FixedTimeProvider(Now)),
+            new ActivityCatalog(
+                context,
+                new MemoryCache(new MemoryCacheOptions()),
+                new CatalogCacheSignal(),
+                new FixedTimeProvider(Now),
+                NullLogger<ActivityCatalog>.Instance),
+            Assets(),
+            new FixedTimeProvider(Now),
+            NullLogger<FacilityOwnerEditService>.Instance);
+
+        // Act
+        var activity = (await edits.ListActivityAsync(ownerId, 1, ActivityPaging.LargestPage, CancellationToken.None)).Items;
+
+        // Assert
+        using (new AssertionScope())
+        {
+            activity.Should().Contain(entry =>
+                entry.Action == AuditAction.OpenPlayCreated && entry.ActorRole == UserRoleName.FacilityOwner);
+            activity.Should().Contain(entry =>
+                entry.Action == AuditAction.OpenPlayPublished && entry.ActorRole == UserRoleName.PlatformAdmin);
+        }
+    }
+
+    private static async Task<Guid> OwnerIdAsync(AppDbContext context, Floor floor) =>
+        await context.BookableCourts
+            .Where(unit => unit.Id == floor.Pickleball1)
+            .Select(unit => unit.Court.Facility.FacilityOwnerId)
+            .SingleAsync();
+
+    /// <summary>Tuesdays, seven to nine in the morning, from this week's Tuesday on.</summary>
+    private static OpenPlayInput TuesdayMornings(Guid bookableCourtId) => new(
+        bookableCourtId,
+        "Tuesday Morning Open Play",
+        OpenPlayLevel.AllLevels,
+        12,
+        150m,
+        SevenAm,
+        new TimeOnly(9, 0),
+        [DayOfWeek.Tuesday],
+        Tuesday,
+        null,
+        60,
+        null);
+
+    private static async Task<AuditActor> OwnerActorAsync(AppDbContext context, Floor floor) =>
+        new(await OwnerUserIdAsync(context, floor), UserRoleName.FacilityOwner);
+
+    private static OpenPlayService CreateOpenPlayService(AppDbContext context) => new(
+        context,
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        Assets(),
+        new FixedTimeProvider(Now));
 
     private static CreateBookingRequest Hourly(Guid bookableCourtId, DateOnly date, TimeOnly startsAt) =>
         new(bookableCourtId, BookingKind.Hourly, [new BookingSlotInput(date, startsAt)]);

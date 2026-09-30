@@ -1,5 +1,6 @@
 using System.Globalization;
 using IcyPlay.Application.Audit;
+using IcyPlay.Application.Common;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Audit;
@@ -627,10 +628,15 @@ public sealed class FacilityOwnerEditService(
         return EditResult.Success();
     }
 
-    public async Task<IReadOnlyCollection<ActivityEntry>> ListActivityAsync(
+    public async Task<PagedResult<ActivityEntry>> ListActivityAsync(
         Guid facilityOwnerId,
+        int page,
+        int pageSize,
         CancellationToken ct)
     {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, ActivityPaging.LargestPage);
+
         // Everything about this owner, whichever record it was written against:
         // the owner itself, their facilities, and their contracts.
         var facilityIds = await db.Facilities
@@ -643,14 +649,32 @@ public sealed class FacilityOwnerEditService(
             .Select(contract => contract.Id)
             .ToArrayAsync(ct);
 
-        var entries = await db.AuditLogs
+        // Open plays too, whether the desk or the platform made the change. A
+        // deleted draft has no row left to say whose it was, so its entries are
+        // not gathered here; it never reached a customer.
+        var openPlayIds = await db.OpenPlays
+            .Where(openPlay => facilityIds.Contains(openPlay.FacilityId))
+            .Select(openPlay => openPlay.Id)
+            .ToArrayAsync(ct);
+
+        var trail = db.AuditLogs
             .AsNoTracking()
             .Where(entry =>
                 (entry.EntityType == AuditEntityType.FacilityOwner && entry.EntityId == facilityOwnerId) ||
                 (entry.EntityType == AuditEntityType.Facility && facilityIds.Contains(entry.EntityId)) ||
                 (entry.EntityType == AuditEntityType.FacilityOwnerContract &&
-                    contractIds.Contains(entry.EntityId)))
+                    contractIds.Contains(entry.EntityId)) ||
+                (entry.EntityType == AuditEntityType.OpenPlay && openPlayIds.Contains(entry.EntityId)));
+
+        var total = await trail.CountAsync(ct);
+
+        var entries = await trail
+            // The id breaks a tie between two entries written in the same
+            // instant, so a row cannot turn up on two pages or on neither.
             .OrderByDescending(entry => entry.CreatedAt)
+            .ThenByDescending(entry => entry.Id)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
             .Select(entry => new
             {
                 entry.Id,
@@ -678,21 +702,24 @@ public sealed class FacilityOwnerEditService(
             .Select(user => new { user.Id, user.FullName })
             .ToDictionaryAsync(user => user.Id, user => user.FullName, ct);
 
-        return
-        [
-            .. entries.Select(entry => new ActivityEntry(
-                entry.Id,
-                entry.Action,
-                entry.EntityType,
-                entry.EntityId,
-                entry.ActorUserId,
-                entry.ActorUserId is null ? null : actorNames.GetValueOrDefault(entry.ActorUserId.Value),
-                entry.ActorRole,
-                entry.OldValuesJson,
-                entry.NewValuesJson,
-                entry.Reason,
-                entry.CreatedAt))
-        ];
+        return new PagedResult<ActivityEntry>(
+            [
+                .. entries.Select(entry => new ActivityEntry(
+                    entry.Id,
+                    entry.Action,
+                    entry.EntityType,
+                    entry.EntityId,
+                    entry.ActorUserId,
+                    entry.ActorUserId is null ? null : actorNames.GetValueOrDefault(entry.ActorUserId.Value),
+                    entry.ActorRole,
+                    entry.OldValuesJson,
+                    entry.NewValuesJson,
+                    entry.Reason,
+                    entry.CreatedAt))
+            ],
+            page,
+            pageSize,
+            total);
     }
 
     /// <summary>

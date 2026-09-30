@@ -1,4 +1,5 @@
 using IcyPlay.Application.Audit;
+using IcyPlay.Application.Common;
 
 namespace IcyPlay.Application.Facilities;
 
@@ -103,10 +104,26 @@ public interface IFacilityOwnerEditService
         AuditActor actor,
         CancellationToken cancellationToken);
 
-    /// <summary>Everything recorded against this owner, newest first.</summary>
-    Task<IReadOnlyCollection<ActivityEntry>> ListActivityAsync(
+    /// <summary>
+    /// Everything recorded against this owner, newest first, one page at a
+    /// time. An owner's trail only grows, and reading all of it to show the
+    /// first screenful got slower with every edit.
+    /// </summary>
+    Task<PagedResult<ActivityEntry>> ListActivityAsync(
         Guid facilityOwnerId,
+        int page,
+        int pageSize,
         CancellationToken cancellationToken);
+}
+
+/// <summary>How much of an owner's trail one request reads.</summary>
+public static class ActivityPaging
+{
+    /// <summary>A screenful.</summary>
+    public const int DefaultPageSize = 20;
+
+    /// <summary>The most one request may ask for, whatever it asks.</summary>
+    public const int LargestPage = 50;
 }
 
 public sealed record ActivityEntry(

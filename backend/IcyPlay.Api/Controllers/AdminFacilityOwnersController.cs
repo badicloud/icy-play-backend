@@ -338,11 +338,23 @@ public sealed class AdminFacilityOwnersController(
         CancellationToken ct) =>
         EditAsync(request, actor => edits.CancelContractAsync(id, contractId, request, actor, ct), ct);
 
-    /// <summary>Everything recorded against this owner, newest first.</summary>
+    /// <summary>
+    /// Everything recorded against this owner, newest first, a page at a time.
+    /// The console asks for the first page and the next one on "Load more".
+    /// </summary>
     [HttpGet("{id:guid}/activity")]
-    public async Task<IActionResult> ListActivity(Guid id, CancellationToken ct) =>
-        Ok(new ApiEnvelope<IReadOnlyCollection<ActivityEntry>>(
-            await edits.ListActivityAsync(id, ct)));
+    public async Task<IActionResult> ListActivity(
+        Guid id,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = ActivityPaging.DefaultPageSize,
+        CancellationToken ct = default)
+    {
+        var paged = await edits.ListActivityAsync(id, page, pageSize, ct);
+
+        return Ok(new ApiListEnvelope<ActivityEntry>(
+            paged.Items,
+            new PaginationMeta(paged.Page, paged.PageSize, paged.TotalItems, paged.TotalPages)));
+    }
 
     private async Task<IActionResult> EditAsync<TRequest>(
         TRequest request,

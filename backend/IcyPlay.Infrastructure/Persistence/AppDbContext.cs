@@ -3,6 +3,7 @@ using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.OpenPlays;
 using Microsoft.EntityFrameworkCore;
 
 namespace IcyPlay.Infrastructure.Persistence;
@@ -48,6 +49,9 @@ public sealed class AppDbContext : DbContext
     public DbSet<MaintenancePeriod> MaintenancePeriods => Set<MaintenancePeriod>();
     public DbSet<Photo> Photos => Set<Photo>();
     public DbSet<Holiday> Holidays => Set<Holiday>();
+    public DbSet<OpenPlay> OpenPlays => Set<OpenPlay>();
+    public DbSet<OpenPlaySession> OpenPlaySessions => Set<OpenPlaySession>();
+    public DbSet<OpenPlayRegistration> OpenPlayRegistrations => Set<OpenPlayRegistration>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -935,6 +939,86 @@ public sealed class AppDbContext : DbContext
                 // The facility cascade already reaches these rows; a second
                 // cascade path is one more than SQL Server allows.
                 .OnDelete(DeleteBehavior.NoAction);
+        });
+
+        modelBuilder.Entity<OpenPlay>(entity =>
+        {
+            entity.ToTable("OpenPlays");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Title).HasMaxLength(OpenPlayLimits.TitleLimit).IsRequired();
+            entity.Property(x => x.Level).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.RegistrationFee).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.CoverPhotoPublicId).HasMaxLength(300);
+            entity.Property(x => x.CoverPhotoUrl).HasMaxLength(1000);
+            // Stored as its names ("Monday, Saturday") so a row read straight
+            // out of the database says which days it runs.
+            entity.Property(x => x.Days)
+                .HasMaxLength(100)
+                .HasConversion<string>()
+                .IsRequired();
+            entity.Ignore(x => x.DurationMinutes);
+            entity.Ignore(x => x.IsSeeded);
+            entity.Ignore(x => x.IsPublished);
+            entity.Ignore(x => x.HasEnded);
+            entity.Ignore(x => x.Status);
+            entity.OwnsOne(x => x.EarlyBird, earlyBird =>
+            {
+                earlyBird.Property(x => x.DiscountKind)
+                    .HasColumnName("EarlyBirdDiscountKind")
+                    .HasMaxLength(20)
+                    .IsRequired();
+                earlyBird.Property(x => x.DiscountValue)
+                    .HasColumnName("EarlyBirdDiscountValue")
+                    .HasColumnType("decimal(10,2)");
+                earlyBird.Property(x => x.LeadMinutes).HasColumnName("EarlyBirdLeadMinutes");
+            });
+            // The question availability asks of this table: what open plays
+            // run on this floor.
+            entity.HasIndex(x => new { x.CourtId, x.StartDate, x.EndDate });
+            entity.HasIndex(x => x.FacilityId);
+            entity.HasOne(x => x.Facility)
+                .WithMany()
+                .HasForeignKey(x => x.FacilityId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.BookableCourt)
+                .WithMany()
+                .HasForeignKey(x => x.BookableCourtId)
+                // Retired, never removed, the same as for bookings.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OpenPlaySession>(entity =>
+        {
+            entity.ToTable("OpenPlaySessions");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.CancellationReason).HasMaxLength(500);
+            entity.Ignore(x => x.IsCancelled);
+            // One row per date. Two players registering for the first time at
+            // once must end up on the same session.
+            entity.HasIndex(x => new { x.OpenPlayId, x.Date }).IsUnique();
+            entity.HasOne(x => x.OpenPlay)
+                .WithMany(x => x.Sessions)
+                .HasForeignKey(x => x.OpenPlayId)
+                // A session with money against it is cancelled, never deleted.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OpenPlayRegistration>(entity =>
+        {
+            entity.ToTable("OpenPlayRegistrations");
+            entity.HasKey(x => x.Id);
+            entity.HasIndex(x => x.CustomerUserId);
+            entity.HasIndex(x => new { x.SessionId, x.Status });
+            entity.Property(x => x.RegistrationFee).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.Discount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
+            entity.Property(x => x.CancellationReason).HasMaxLength(500);
+            entity.Ignore(x => x.Total);
+            entity.HasOne(x => x.Session)
+                .WithMany(x => x.Registrations)
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<AuditLog>(entity =>
