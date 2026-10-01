@@ -3972,6 +3972,284 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         }
     }
 
+    // ------------------------------------------------ open play registrations
+
+    private const string OpenPlayReceipt =
+        "https://res.cloudinary.com/icyplay-test/image/upload/v1/open-play-receipt.jpg";
+
+    [Fact]
+    public async Task OpenPlayRegistration_ShouldHoldASpotAtTheFeeWithThePlatformTopUp()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Hold Courts");
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+
+        // Assert: held, not registered; the price the venue's fee plus the
+        // contract's top-up.
+        using (new AssertionScope())
+        {
+            registered.Succeeded.Should().BeTrue();
+            registered.Value!.Status.Should().Be("PendingPayment");
+            registered.Value.Total.Should().Be(150m + 15m);
+            registered.Value.HoldsUntil.Should().BeAfter(Now);
+            registered.Value.GcashNumber.Should().NotBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_WithoutAgreeingToThePolicy_ShouldBeRefused()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Policy Courts");
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, false), CancellationToken.None);
+
+        // Assert
+        registered.Failure.Should().Be(OpenPlayRegistrationFailure.PolicyNotAgreed);
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_WhenEverySpotIsHeld_ShouldRefuseTheNextPlayer()
+    {
+        // Arrange: two spots.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Full Courts", maxPlayers: 2);
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+        var request = new RegisterForOpenPlayRequest(Tuesday, true);
+
+        await sut.RegisterAsync(Guid.NewGuid(), openPlayId, request, CancellationToken.None);
+        await sut.RegisterAsync(Guid.NewGuid(), openPlayId, request, CancellationToken.None);
+
+        // Act
+        var third = await sut.RegisterAsync(Guid.NewGuid(), openPlayId, request, CancellationToken.None);
+
+        // Assert: a hold reserves the spot, so it is not sold twice while
+        // somebody pays for it.
+        third.Failure.Should().Be(OpenPlayRegistrationFailure.Full);
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_PressedTwice_ShouldAnswerWithTheSameRegistration()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Twice Courts");
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+        var request = new RegisterForOpenPlayRequest(Tuesday, true);
+        var first = await sut.RegisterAsync(floor.Customer, openPlayId, request, CancellationToken.None);
+
+        // Act
+        var second = await sut.RegisterAsync(floor.Customer, openPlayId, request, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            second.Value!.RegistrationId.Should().Be(first.Value!.RegistrationId);
+            (await context.OpenPlayRegistrations.CountAsync(registration => registration.CustomerUserId == floor.Customer))
+                .Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_AfterTheCutOff_ShouldBeRefused()
+    {
+        // Arrange: tonight at six, closing an hour before; Now is five at the venue.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(
+            context,
+            "Registration Cutoff Courts",
+            input: floor => TuesdayMornings(floor.Pickleball1) with
+            {
+                Days = [DayOfWeek.Monday],
+                StartDate = Today,
+                StartsAt = new TimeOnly(18, 0),
+                EndsAt = new TimeOnly(20, 0)
+            });
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Today, true), CancellationToken.None);
+
+        // Assert: on the venue's clock, from the server.
+        registered.Failure.Should().Be(OpenPlayRegistrationFailure.RegistrationClosed);
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_AtAVenueThatCannotBePaid_ShouldBeRefused()
+    {
+        // Arrange: no GCash number, no QR.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Unpaid Courts", payable: false);
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+
+        // Assert
+        registered.Failure.Should().Be(OpenPlayRegistrationFailure.VenueCannotBePaid);
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_ReceiptThenConfirm_ShouldRegisterThePlayerAndWriteToEverybody()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Confirm Courts");
+        var player = await PlayerAsync(context);
+        var mail = new CapturingEmailSender();
+        var sut = CreateRegistrationService(context, mail);
+        var desk = await OwnerActorAsync(context, floor);
+
+        var registered = await sut.RegisterAsync(
+            player.Id, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+        var id = registered.Value!.RegistrationId;
+
+        // Act
+        var sent = await sut.SendReceiptAsync(player.Id, id, new OpenPlayReceiptRequest(OpenPlayReceipt), CancellationToken.None);
+        var waiting = await sut.ListAsync(desk.UserId!.Value, OpenPlayRequestTab.Waiting, null, 1, 10, CancellationToken.None);
+        var confirmed = await sut.ConfirmAsync(desk, id, CancellationToken.None);
+        var listed = await CreateOpenPlayService(context).GetAsync(desk.UserId.Value, openPlayId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            sent.Value!.Status.Should().Be("PendingVerification");
+            waiting.Value!.Items.Should().ContainSingle(request => request.RegistrationId == id);
+            confirmed.Value!.Status.Should().Be("Confirmed");
+            listed.Value!.Registrations.Should().Be(1);
+            listed.Value.Waiting.Should().Be(0);
+
+            mail.Sent.Should().Contain(message =>
+                message.TemplateKey == EmailTemplateKey.OpenPlayPaymentReceived && message.RecipientEmail == player.Email);
+            mail.Sent.Should().Contain(message => message.TemplateKey == EmailTemplateKey.OpenPlayPaymentSubmitted);
+            mail.Sent.Should().Contain(message =>
+                message.TemplateKey == EmailTemplateKey.OpenPlayConfirmed && message.RecipientEmail == player.Email);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_Rejected_ShouldReleaseTheSpotAndTellThePlayerWhy()
+    {
+        // Arrange: one spot.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Reject Courts", maxPlayers: 2);
+        var player = await PlayerAsync(context);
+        var mail = new CapturingEmailSender();
+        var sut = CreateRegistrationService(context, mail);
+        var desk = await OwnerActorAsync(context, floor);
+        var request = new RegisterForOpenPlayRequest(Tuesday, true);
+
+        var registered = await sut.RegisterAsync(player.Id, openPlayId, request, CancellationToken.None);
+        await sut.RegisterAsync(Guid.NewGuid(), openPlayId, request, CancellationToken.None);
+        await sut.SendReceiptAsync(player.Id, registered.Value!.RegistrationId, new OpenPlayReceiptRequest(OpenPlayReceipt), CancellationToken.None);
+
+        // Act
+        var rejected = await sut.RejectAsync(
+            desk,
+            registered.Value.RegistrationId,
+            new RejectOpenPlayRequest(RejectReason.WrongAmount, "Sent 100"),
+            CancellationToken.None);
+        var another = await sut.RegisterAsync(Guid.NewGuid(), openPlayId, request, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            rejected.Value!.Status.Should().Be("Rejected");
+            another.Succeeded.Should().BeTrue();
+            mail.Sent.Should().Contain(message =>
+                message.TemplateKey == EmailTemplateKey.OpenPlayDeclined
+                && message.RecipientEmail == player.Email
+                && (string)message.Variables["decline_reason"] == "Wrong amount — Sent 100");
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_AtAnotherVenuesDesk_ShouldAnswerAsIfItWereNotThere()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Registration Mine Courts");
+        var other = await FloorAsync(context, "Registration Other Courts");
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+        await sut.SendReceiptAsync(
+            floor.Customer, registered.Value!.RegistrationId, new OpenPlayReceiptRequest(OpenPlayReceipt), CancellationToken.None);
+
+        // Act
+        var confirmed = await sut.ConfirmAsync(
+            await OwnerActorAsync(context, other), registered.Value.RegistrationId, CancellationToken.None);
+
+        // Assert
+        confirmed.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
+    }
+
+    /// <summary>A floor with a published Tuesday-morning open play on its first pickleball court.</summary>
+    private static async Task<(Floor Floor, Guid OpenPlayId)> PublishedOpenPlayAsync(
+        AppDbContext context,
+        string facilityName,
+        int maxPlayers = 12,
+        bool payable = true,
+        Func<Floor, OpenPlayInput>? input = null)
+    {
+        var floor = await FloorAsync(context, facilityName);
+
+        if (payable)
+        {
+            await PayableAsync(context, floor);
+        }
+
+        var desk = CreateOpenPlayService(context);
+        var actor = await OwnerActorAsync(context, floor);
+        var wanted = (input ?? (unit => TuesdayMornings(unit.Pickleball1)))(floor) with { MaxPlayers = maxPlayers };
+        var saved = await desk.CreateAsync(actor, wanted, CancellationToken.None);
+        await desk.PublishAsync(actor, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
+        context.ChangeTracker.Clear();
+
+        return (floor, saved.Value.OpenPlay.OpenPlayId);
+    }
+
+    private static async Task<User> PlayerAsync(AppDbContext context)
+    {
+        var player = new User($"player-{Guid.NewGuid():N}@example.com", "Open Player", null);
+        player.SetPasswordHash("hash");
+        context.Users.Add(player);
+        await context.SaveChangesAsync();
+
+        return player;
+    }
+
+    private static OpenPlayRegistrationService CreateRegistrationService(
+        AppDbContext context,
+        CapturingEmailSender mail) => new(
+        context,
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        Assets(),
+        new OpenPlayNotifier(
+            context,
+            mail,
+            Options.Create(new BookingNotificationOptions
+            {
+                OpenPlayRegistrationUrl = "https://icyplay.test/open-play/registrations",
+                OpenPlayRequestsUrl = "https://icyplay.test/desk/open-play-requests",
+                SupportEmail = "help@icyplay.test"
+            }),
+            new FixedTimeProvider(Now),
+            NullLogger<OpenPlayNotifier>.Instance),
+        new FixedTimeProvider(Now));
+
     private static async Task<Guid> OwnerIdAsync(AppDbContext context, Floor floor) =>
         await context.BookableCourts
             .Where(unit => unit.Id == floor.Pickleball1)

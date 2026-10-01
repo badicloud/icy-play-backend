@@ -348,6 +348,53 @@ public sealed class AppDbContext : DbContext
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 28, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
+                },
+                // The four an open play registration sends.
+                new
+                {
+                    Id = Guid.Parse("3c8e1f52-7a94-4d06-b1e3-5f20c9a8d471"),
+                    Key = EmailTemplateKey.OpenPlayPaymentReceived,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8392327L,
+                    Subject = "We have your payment — {{var:facility_name}} is checking it",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("a5d27c09-3e61-4b8f-92a4-e07b16f3c582"),
+                    Key = EmailTemplateKey.OpenPlayPaymentSubmitted,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8392333L,
+                    Subject = "{{var:player_name}} has paid to join {{var:open_play_title}} — please confirm",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("f19b6e4a-08d3-4c72-a5e1-7b3d92c0f846"),
+                    Key = EmailTemplateKey.OpenPlayConfirmed,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8392336L,
+                    Subject = "You're registered for {{var:open_play_title}} on {{var:session_date}}",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("6b40d8e3-91f7-4a25-bc68-2e5a7f14d903"),
+                    Key = EmailTemplateKey.OpenPlayDeclined,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8392337L,
+                    // Not accepted, in the subject: somebody who reads nothing
+                    // else must not turn up to play.
+                    Subject = "Your registration for {{var:open_play_title}} was not accepted",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
                 });
         });
         modelBuilder.Entity<EmailVerificationToken>(entity =>
@@ -1007,14 +1054,19 @@ public sealed class AppDbContext : DbContext
         {
             entity.ToTable("OpenPlayRegistrations");
             entity.HasKey(x => x.Id);
-            entity.HasIndex(x => x.CustomerUserId);
             entity.HasIndex(x => new { x.SessionId, x.Status });
             entity.Property(x => x.RegistrationFee).HasColumnType("decimal(10,2)");
             entity.Property(x => x.Discount).HasColumnType("decimal(10,2)");
             entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
             entity.Property(x => x.CancellationReason).HasMaxLength(500);
+            entity.Property(x => x.RejectionReason).HasMaxLength(30);
+            entity.Property(x => x.RejectionNote).HasMaxLength(RejectReason.NoteLimit);
             entity.Ignore(x => x.Total);
+            entity.Ignore(x => x.IsRegistered);
+            // A player's own list, and the check that they are not already on
+            // a session before a second registration is taken.
+            entity.HasIndex(x => new { x.CustomerUserId, x.SessionId });
             entity.HasOne(x => x.Session)
                 .WithMany(x => x.Registrations)
                 .HasForeignKey(x => x.SessionId)

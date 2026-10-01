@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930060931_AddOpenPlayRegistrationReview")]
+    partial class AddOpenPlayRegistrationReview
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -613,46 +616,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                             Key = "booking-move-declined",
                             Provider = "Mailjet",
                             Subject = "Your booking has not moved — you're still on {{var:court_name}}"
-                        },
-                        new
-                        {
-                            Id = new Guid("3c8e1f52-7a94-4d06-b1e3-5f20c9a8d471"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8392327L,
-                            IsActive = true,
-                            Key = "open-play-payment-received",
-                            Provider = "Mailjet",
-                            Subject = "We have your payment — {{var:facility_name}} is checking it"
-                        },
-                        new
-                        {
-                            Id = new Guid("a5d27c09-3e61-4b8f-92a4-e07b16f3c582"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8392333L,
-                            IsActive = true,
-                            Key = "open-play-payment-submitted",
-                            Provider = "Mailjet",
-                            Subject = "{{var:player_name}} has paid to join {{var:open_play_title}} — please confirm"
-                        },
-                        new
-                        {
-                            Id = new Guid("f19b6e4a-08d3-4c72-a5e1-7b3d92c0f846"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8392336L,
-                            IsActive = true,
-                            Key = "open-play-confirmed",
-                            Provider = "Mailjet",
-                            Subject = "You're registered for {{var:open_play_title}} on {{var:session_date}}"
-                        },
-                        new
-                        {
-                            Id = new Guid("6b40d8e3-91f7-4a25-bc68-2e5a7f14d903"),
-                            CreatedAt = new DateTimeOffset(new DateTime(2026, 9, 30, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
-                            ExternalTemplateId = 8392337L,
-                            IsActive = true,
-                            Key = "open-play-declined",
-                            Provider = "Mailjet",
-                            Subject = "Your registration for {{var:open_play_title}} was not accepted"
                         });
                 });
 

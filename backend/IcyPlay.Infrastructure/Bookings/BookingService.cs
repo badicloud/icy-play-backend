@@ -1783,18 +1783,7 @@ public sealed class BookingService(
         return owner?.CanTakePayment ?? false;
     }
 
-    private static bool IsImage(string url)
-    {
-        if (!url.Contains("/image/upload/", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var path = url.Split('?')[0];
-        var extension = Path.GetExtension(path);
-
-        return extension.ToLowerInvariant() is ".jpg" or ".jpeg" or ".png" or ".webp" or ".heic";
-    }
+    private static bool IsImage(string url) => ReceiptLinks.IsImage(url);
 
     // ---------------------------------------------------------------- loading
 

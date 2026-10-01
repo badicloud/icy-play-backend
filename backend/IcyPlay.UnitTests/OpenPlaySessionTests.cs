@@ -7,6 +7,8 @@ namespace IcyPlay.UnitTests;
 
 public sealed class OpenPlaySessionTests
 {
+    private const string Receipt = "https://res.cloudinary.com/icyplay-test/image/upload/v1/receipt.jpg";
+
     private static readonly OpenPlayPrice Price = new(150m, 0m, 15m);
 
     [Fact]
@@ -43,7 +45,7 @@ public sealed class OpenPlaySessionTests
         // Arrange
         var session = NewSession();
         var registration = Register(1);
-        registration.AttachReceipt("https://example.test/receipt.jpg", TestTimes.UtcNow.AddMinutes(5));
+        registration.SendReceipt(Receipt, TestTimes.UtcNow.AddMinutes(5));
         session.Registrations.Add(registration);
 
         // Act
@@ -59,7 +61,8 @@ public sealed class OpenPlaySessionTests
         // Arrange
         var session = NewSession();
         var confirmed = Register(1);
-        confirmed.Confirm(TestTimes.UtcNow);
+        confirmed.SendReceipt(Receipt, TestTimes.UtcNow);
+        confirmed.Confirm(TestIds.FacilityOwnerUserId, TestTimes.UtcNow);
         session.Registrations.Add(confirmed);
         session.Registrations.Add(Register(2));
 
@@ -96,7 +99,7 @@ public sealed class OpenPlaySessionTests
 
         // Act
         var registration = new OpenPlayRegistration(
-            TestIds.For("session"), TestIds.CustomerUserId, price, 30, TestTimes.UtcNow);
+            TestIds.For("session"), TestIds.CustomerUserId, price, 30, TestTimes.UtcNow, TestTimes.UtcNow);
 
         // Assert
         using (new AssertionScope())
@@ -104,6 +107,7 @@ public sealed class OpenPlaySessionTests
             registration.Discount.Should().Be(50m);
             registration.PlatformFee.Should().Be(15m);
             registration.Total.Should().Be(115m);
+            registration.AgreedToPolicyAt.Should().Be(TestTimes.UtcNow);
         }
     }
 
@@ -111,5 +115,5 @@ public sealed class OpenPlaySessionTests
         new(TestIds.For("open-play"), OpenPlayBuilder.FirstSaturday, TestTimes.UtcNow);
 
     private static OpenPlayRegistration Register(int player) =>
-        new(TestIds.For("session"), TestIds.For("player", player), Price, 30, TestTimes.UtcNow);
+        new(TestIds.For("session"), TestIds.For("player", player), Price, 30, TestTimes.UtcNow, TestTimes.UtcNow);
 }

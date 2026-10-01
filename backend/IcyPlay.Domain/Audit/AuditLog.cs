@@ -114,6 +114,9 @@ public static class AuditAction
     public const string OpenPlayEnded = "OpenPlayEnded";
     public const string OpenPlayDraftDeleted = "OpenPlayDraftDeleted";
     public const string OpenPlayPhotoChanged = "OpenPlayPhotoChanged";
+    public const string OpenPlayPaymentSubmitted = "OpenPlayPaymentSubmitted";
+    public const string OpenPlayRegistrationConfirmed = "OpenPlayRegistrationConfirmed";
+    public const string OpenPlayRegistrationRejected = "OpenPlayRegistrationRejected";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
     public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
@@ -194,4 +197,5 @@ public static class AuditEntityType
     public const string Holiday = "Holiday";
     public const string Booking = "Booking";
     public const string OpenPlay = "OpenPlay";
+    public const string OpenPlayRegistration = "OpenPlayRegistration";
 }

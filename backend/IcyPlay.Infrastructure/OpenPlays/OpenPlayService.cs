@@ -908,14 +908,23 @@ public sealed class OpenPlayService(
         return DateOnly.FromDateTime(VenueClock.LocalNowIn(timeZone, now).DateTime);
     }
 
+    /// <summary>
+    /// Registrations still holding a spot: confirmed, with the desk, or inside
+    /// their payment hold. A hold that ran out with no receipt holds nothing,
+    /// the same rule as <see cref="OpenPlayRegistration.HasLapsedAt"/>, asked in SQL.
+    /// </summary>
     private Task<int> LiveRegistrationsAsync(Guid openPlayId, DateOnly? after, CancellationToken ct)
     {
         var live = BookingStatuses.Live;
+        var now = timeProvider.GetUtcNow();
 
         return db.OpenPlayRegistrations.CountAsync(
             registration => registration.Session.OpenPlayId == openPlayId
                 && (after == null || registration.Session.Date > after)
-                && live.Contains(registration.Status),
+                && live.Contains(registration.Status)
+                && (registration.Status != BookingStatus.PendingPayment
+                    || registration.ReceiptUrl != null
+                    || now < registration.HoldsUntil),
             ct);
     }
 
@@ -945,8 +954,14 @@ public sealed class OpenPlayService(
                 SportName = openPlay.BookableCourt.CourtSport.Sport.Name,
                 openPlay.BookableCourt.DivisionNumber,
                 openPlay.BookableCourt.CourtSport.Divisions,
+                // Registered players are the confirmed ones only. A receipt the
+                // desk has not looked at yet is waiting, not registered.
                 Registrations = db.OpenPlayRegistrations.Count(registration =>
-                    registration.Session.OpenPlayId == openPlay.Id && live.Contains(registration.Status))
+                    registration.Session.OpenPlayId == openPlay.Id
+                    && registration.Status == BookingStatus.Confirmed),
+                Waiting = db.OpenPlayRegistrations.Count(registration =>
+                    registration.Session.OpenPlayId == openPlay.Id
+                    && registration.Status == BookingStatus.PendingVerification)
             })
             .ToListAsync(ct);
 
@@ -1011,7 +1026,8 @@ public sealed class OpenPlayService(
                         openPlay.PublishedAt,
                         openPlay.EndedAt,
                         row.Registrations,
-                        openPlay.CoverPhotoUrl);
+                        openPlay.CoverPhotoUrl,
+                        row.Waiting);
                 })
         ];
     }

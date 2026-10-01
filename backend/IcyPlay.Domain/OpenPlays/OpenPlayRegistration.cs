@@ -10,6 +10,11 @@ namespace IcyPlay.Domain.OpenPlays;
 /// the desk confirms it. That is why it reuses <see cref="BookingStatus"/>.
 /// The price is a snapshot, like a booking's, so editing the open play or the
 /// owner's contract later cannot change what this player agreed to pay.
+///
+/// Only a confirmed registration is a registered player. A hold, and a receipt
+/// waiting on the desk, reserve the spot so it is not sold twice while the
+/// player pays, but nobody is "in" until a person at the venue has looked at
+/// the money.
 /// </summary>
 public sealed class OpenPlayRegistration : Entity
 {
@@ -19,11 +24,17 @@ public sealed class OpenPlayRegistration : Entity
     {
     }
 
+    /// <param name="agreedToPolicyAt">
+    /// When the player ticked the open play policy: no refund through IcyPlay,
+    /// because the money goes straight to the venue. Kept, because it is what
+    /// the player agreed to and a dispute will ask.
+    /// </param>
     public OpenPlayRegistration(
         Guid sessionId,
         Guid customerUserId,
         OpenPlayPrice price,
         int holdMinutes,
+        DateTimeOffset agreedToPolicyAt,
         DateTimeOffset createdAt)
     {
         SessionId = sessionId;
@@ -32,6 +43,7 @@ public sealed class OpenPlayRegistration : Entity
         Discount = price.Discount;
         PlatformFee = price.PlatformFee;
         HoldsUntil = createdAt.AddMinutes(PaymentHold.Clamp(holdMinutes));
+        AgreedToPolicyAt = agreedToPolicyAt;
         Status = BookingStatus.PendingPayment;
         CreatedAt = createdAt;
     }
@@ -74,6 +86,11 @@ public sealed class OpenPlayRegistration : Entity
         get; private set;
     }
 
+    public DateTimeOffset AgreedToPolicyAt
+    {
+        get; private set;
+    }
+
     public string? ReceiptUrl
     {
         get; private set;
@@ -94,15 +111,44 @@ public sealed class OpenPlayRegistration : Entity
         get; private set;
     }
 
+    /// <summary>Who at the venue, or on the platform, looked at the payment and said yes.</summary>
+    public Guid? ConfirmedByUserId
+    {
+        get; private set;
+    }
+
     public DateTimeOffset? CancelledAt
     {
         get; private set;
     }
 
+    /// <summary>
+    /// The sentence the player reads on a refusal or a cancel: on a refusal,
+    /// the reason the desk picked and its note, as <see cref="RejectReason.Sentence"/>.
+    /// </summary>
     public string? CancellationReason
     {
         get; private set;
     }
+
+    /// <summary>On a refusal, the <see cref="RejectReason"/> the desk picked.</summary>
+    public string? RejectionReason
+    {
+        get; private set;
+    }
+
+    public string? RejectionNote
+    {
+        get; private set;
+    }
+
+    public Guid? RejectedByUserId
+    {
+        get; private set;
+    }
+
+    /// <summary>A registered player: the venue has confirmed the payment.</summary>
+    public bool IsRegistered => Status == BookingStatus.Confirmed;
 
     /// <summary>
     /// Whether this registration counts against the session's spots. Works the
@@ -114,33 +160,83 @@ public sealed class OpenPlayRegistration : Entity
     public bool HasLapsedAt(DateTimeOffset moment) =>
         Status == BookingStatus.PendingPayment && ReceiptUrl is null && moment >= HoldsUntil;
 
-    public void AttachReceipt(string receiptUrl, DateTimeOffset now)
+    /// <summary>
+    /// Records the receipt, and sending it IS the submission, as with a
+    /// booking: attaching stops the hold's clock, so it has to put the
+    /// registration in the desk's queue at the same moment or it would be
+    /// held with nobody looking at it. A second receipt while the desk is
+    /// still looking replaces the picture and changes nothing else.
+    /// </summary>
+    /// <returns>True when this was the first receipt, and the desk has just been handed it.</returns>
+    public bool SendReceipt(string receiptUrl, DateTimeOffset now)
     {
-        ReceiptUrl = receiptUrl;
+        if (string.IsNullOrWhiteSpace(receiptUrl))
+        {
+            throw new ArgumentException("A receipt needs its link.", nameof(receiptUrl));
+        }
+
+        if (Status is not (BookingStatus.PendingPayment or BookingStatus.PendingVerification))
+        {
+            throw new InvalidOperationException("Only a registration waiting to be paid or checked takes a receipt.");
+        }
+
+        if (HasLapsedAt(now))
+        {
+            throw new InvalidOperationException("The hold on this spot has run out.");
+        }
+
+        var first = Status == BookingStatus.PendingPayment;
+
+        ReceiptUrl = receiptUrl.Trim();
         ReceiptUploadedAt = now;
         UpdatedAt = now;
+
+        if (first)
+        {
+            Status = BookingStatus.PendingVerification;
+            SubmittedForVerificationAt = now;
+        }
+
+        return first;
     }
 
-    public void SubmitForVerification(DateTimeOffset now)
+    /// <summary>The desk looked at the payment and it is good: the player is registered.</summary>
+    public void Confirm(Guid confirmedByUserId, DateTimeOffset now)
     {
-        Status = BookingStatus.PendingVerification;
-        SubmittedForVerificationAt = now;
-        UpdatedAt = now;
-    }
+        if (Status != BookingStatus.PendingVerification)
+        {
+            throw new InvalidOperationException("Only a registration waiting on the venue can be confirmed.");
+        }
 
-    public void Confirm(DateTimeOffset now)
-    {
         Status = BookingStatus.Confirmed;
         ConfirmedAt = now;
+        ConfirmedByUserId = confirmedByUserId;
         UpdatedAt = now;
     }
 
-    /// <summary>The desk looked at the receipt and the money is not there.</summary>
-    public void Reject(string reason, DateTimeOffset now)
+    /// <summary>
+    /// The desk looked at the payment and it is not good. The spot is released.
+    /// Its own state rather than a cancellation, as with a booking: a player
+    /// whose receipt did not add up and one who walked away are different.
+    /// </summary>
+    public void Reject(string reason, string? note, Guid rejectedByUserId, DateTimeOffset now)
     {
+        if (Status != BookingStatus.PendingVerification)
+        {
+            throw new InvalidOperationException("Only a registration waiting on the venue can be turned down.");
+        }
+
+        if (!RejectReason.IsSupported(reason))
+        {
+            throw new ArgumentException($"'{reason}' is not a reason the desk can give.", nameof(reason));
+        }
+
         Status = BookingStatus.Rejected;
         CancelledAt = now;
-        CancellationReason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim();
+        RejectionReason = reason;
+        RejectionNote = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        RejectedByUserId = rejectedByUserId;
+        CancellationReason = RejectReason.Sentence(reason, RejectionNote);
         UpdatedAt = now;
     }
 

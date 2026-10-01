@@ -38,5 +38,11 @@ public sealed class BookingNotificationOptions
     /// </summary>
     public string ConfirmationsUrl { get; init; } = string.Empty;
 
+    /// <summary>A player's open play registration page, without an id. One is appended.</summary>
+    public string OpenPlayRegistrationUrl { get; init; } = string.Empty;
+
+    /// <summary>The desk's queue of open play payments waiting to be checked.</summary>
+    public string OpenPlayRequestsUrl { get; init; } = string.Empty;
+
     public string SupportEmail { get; init; } = string.Empty;
 }

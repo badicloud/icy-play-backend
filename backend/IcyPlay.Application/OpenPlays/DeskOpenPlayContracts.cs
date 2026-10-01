@@ -51,10 +51,13 @@ public sealed record DeskOpenPlay(
     DateTimeOffset CreatedAt,
     DateTimeOffset? PublishedAt,
     DateTimeOffset? EndedAt,
+    // Registered players: the ones the venue has confirmed.
     int Registrations,
     // The open play's own cover photo. Null when it has none; the public
     // listing then falls back to the court's or the venue's.
-    string? CoverPhotoUrl);
+    string? CoverPhotoUrl,
+    // Receipts sent and waiting on the desk: not registered yet.
+    int Waiting);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

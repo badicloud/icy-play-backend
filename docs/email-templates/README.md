@@ -64,6 +64,17 @@ go. So a missing template is quiet: check the logs, not the screen.
 | `booking-move-requested.html` | `booking-move-requested` | The facility administrator | A customer asks for a free move (same price or cheaper) |
 | `booking-move-approved.html` | `booking-move-approved` | The customer | The desk approves a free move |
 | `booking-move-declined.html` | `booking-move-declined` | The customer | The desk declines a move, free or an upgrade |
+| `open-play-payment-received.html` | `open-play-payment-received` | The player | They send a GCash receipt for an open play: spot kept, NOT registered yet |
+| `open-play-payment-submitted.html` | `open-play-payment-submitted` | Everybody on the venue's desk | The same moment: a payment to check in the open play queue |
+| `open-play-confirmed.html` | `open-play-confirmed` | The player | The desk confirms the payment: they are registered |
+| `open-play-declined.html` | `open-play-declined` | The player | The desk turns the payment down, with the reason; the spot is released |
+
+Open play letters read `open_play_title`, `facility_name`, `court_name`,
+`sport_name`, `session_date`, `session_hours`, `registration_fee`, `discount`,
+`platform_fee`, `total_amount`, `venue_contact`, `registration_url`,
+`support_email` and `current_year`; the desk's adds `business_name`,
+`player_name`, `player_email`, `receipt_url` and `requests_url`, and the
+declined letter adds `decline_reason`.
 
 ### The three a booking sends
 

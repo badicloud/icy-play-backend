@@ -102,4 +102,23 @@ public static class EmailTemplateKey
     /// turns up on a declined booking finds the court sold to someone else.
     /// </summary>
     public const string BookingDeclined = "booking-declined";
+
+    /// <summary>
+    /// Tells the player their receipt for an open play is in and the venue is
+    /// checking it. Says plainly that they are NOT registered yet: only the
+    /// venue's confirmation makes them a registered player.
+    /// </summary>
+    public const string OpenPlayPaymentReceived = "open-play-payment-received";
+
+    /// <summary>Tells everybody on the venue's desk that an open play payment is waiting to be checked.</summary>
+    public const string OpenPlayPaymentSubmitted = "open-play-payment-submitted";
+
+    /// <summary>Tells the player the venue confirmed the payment: they are registered for the session.</summary>
+    public const string OpenPlayConfirmed = "open-play-confirmed";
+
+    /// <summary>
+    /// Tells the player the venue turned the payment down, why, and how to reach
+    /// the venue. Says first that they are NOT registered and the spot is released.
+    /// </summary>
+    public const string OpenPlayDeclined = "open-play-declined";
 }
