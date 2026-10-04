@@ -59,6 +59,13 @@ public interface IDeskOpenPlayService
         Guid openPlayId,
         CancellationToken cancellationToken);
 
+    /// <summary>Moves when check-in opens. Allowed after publishing, like the photo.</summary>
+    Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayCheckInWindowInput input,
+        CancellationToken cancellationToken);
+
     /// <summary>Deletes a draft. Only a draft: nobody can have registered for it.</summary>
     Task<OpenPlayResult<bool>> DeleteDraftAsync(AuditActor actor, Guid openPlayId, CancellationToken cancellationToken);
 }

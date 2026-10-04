@@ -68,6 +68,13 @@ public interface IAdminOpenPlayService
         Guid openPlayId,
         CancellationToken cancellationToken);
 
+    Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowForOwnerAsync(
+        Guid facilityOwnerId,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayCheckInWindowInput input,
+        CancellationToken cancellationToken);
+
     Task<OpenPlayResult<bool>> DeleteDraftForOwnerAsync(
         Guid facilityOwnerId,
         AuditActor actor,

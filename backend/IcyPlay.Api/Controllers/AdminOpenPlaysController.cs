@@ -113,6 +113,24 @@ public sealed class AdminOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
     }
 
+    /// <summary>Moves when check-in opens. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/check-in-window")]
+    public async Task<IActionResult> CheckInWindow(
+        Guid facilityOwnerId,
+        Guid openPlayId,
+        OpenPlayCheckInWindowInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetCheckInWindowForOwnerAsync(facilityOwnerId, actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
     [HttpDelete("{openPlayId:guid}")]
     public async Task<IActionResult> Delete(Guid facilityOwnerId, Guid openPlayId, CancellationToken ct)
     {

@@ -346,6 +346,7 @@ public sealed class OpenPlayRegistrationService(
             "Payment checked: the player is registered.");
 
         await db.SaveChangesAsync(ct);
+
         await notifier.ConfirmedAsync(registration.Id, ct);
 
         return OpenPlayRegistrationResult<DeskOpenPlayRequest>.Success(
@@ -508,6 +509,9 @@ public sealed class OpenPlayRegistrationService(
                 var contact = new[] { row.ContactPhone, row.ContactEmail }
                     .Where(part => !string.IsNullOrWhiteSpace(part))
                     .ToArray();
+                var sessionHasEnded = VenueClock.LocalNowIn(row.TimeZone, now).DateTime
+                    >= row.Date.ToDateTime(openPlay.EndsAt);
+                var passState = registration.PassState(sessionHasEnded);
 
                 return new OpenPlayRegistrationDetail(
                     registration.Id,
@@ -543,8 +547,15 @@ public sealed class OpenPlayRegistrationService(
                     row.Owner.GcashAccountName,
                     row.Owner.GcashQrCodeUrl,
                     contact.Length > 0 ? string.Join(" · ", contact) : row.OwnerEmail,
+                    row.ContactPhone,
+                    contact.Length > 0 ? row.ContactEmail : row.OwnerEmail,
                     openPlay.CoverPhotoUrl,
-                    VenueClock.LocalNowIn(row.TimeZone, now).DateTime >= row.Date.ToDateTime(openPlay.EndsAt));
+                    sessionHasEnded,
+                    passState,
+                    // The QR itself only while it can still get them in: a
+                    // spent or expired one is not handed out to be saved or shared.
+                    passState == CheckInPassState.Active ? CheckInPass.QrContent(registration.CheckInToken!) : null,
+                    registration.CheckedInAt);
             })
         ];
     }

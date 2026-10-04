@@ -53,10 +53,20 @@ public sealed record OpenPlayRegistrationDetail(
     string? GcashQrCodeUrl,
     // How to reach the venue: its published phone and email, or the owner's.
     string VenueContact,
+    // The same, apart, for a card that rings the number and mails the address.
+    // The email falls back to the owner's when the venue has published neither.
+    string? ContactPhone,
+    string? ContactEmail,
     string? CoverPhotoUrl,
     // The session is over on the venue's clock: what "past" means on the
     // player's list. Decided here, never by the browser's clock.
-    bool SessionHasEnded);
+    bool SessionHasEnded,
+    // The check-in QR: "Active", "Used" or "Expired", or null before the
+    // payment is confirmed.
+    string? CheckInPassState,
+    // What the QR holds, only while it is Active.
+    string? CheckInQr,
+    DateTimeOffset? CheckedInAt);
 
 public enum OpenPlayRegistrationFailure
 {
@@ -77,7 +87,15 @@ public enum OpenPlayRegistrationFailure
     ReceiptNotAnImage,
     NotWaiting,
     UnknownReason,
-    UnknownTab
+    UnknownTab,
+    // The session's check-in window is not open on the venue's clock.
+    CheckInClosed,
+    NotRegistered,
+    // Checking in by hand needs the venue's code, and the owner has not set one.
+    CheckInCodeNotSet,
+    WrongCheckInCode,
+    // Too many wrong codes: shut for a few minutes.
+    CheckInCodeLocked
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

@@ -8,6 +8,7 @@ using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.OpenPlays;
 using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
@@ -808,6 +809,41 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             settings.Value.MoveLimit.Should().Be(BookingMove.DefaultLimit);
             settings.Value.SmallestExpiry.Should().Be(PaymentHold.MinimumMinutes);
             settings.Value.LargestMoveLimit.Should().Be(BookingMove.LargestLimit);
+        }
+    }
+
+    [Fact]
+    public async Task GenerateOpenPlayCheckInCodeAsync_ShouldLetOnlyTheOwnerMakeOne_AndKeepOnlyItsHash()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Code Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var sut = CreateService(context);
+
+        // Act
+        var byAttendant = await sut.GenerateOpenPlayCheckInCodeAsync(attendant, Desk(attendant), CancellationToken.None);
+        var first = await sut.GenerateOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
+        var byOwner = await sut.GenerateOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
+        var seenByAttendant = await sut.SettingsAsync(attendant, CancellationToken.None);
+
+        // Assert: stored only as a hash, the newest replacing the first, and
+        // the attendant sees that there is one.
+        var stored = await context.FacilityOwners
+            .AsNoTracking()
+            .SingleAsync(owner => owner.UserId == venue.OwnerUserId);
+
+        using (new AssertionScope())
+        {
+            byAttendant.Failure.Should().Be(DeskFailure.NotOwner);
+            byOwner.Value!.Code.Should().MatchRegex("^[0-9]{6}$");
+            byOwner.Value.Settings.HasOpenPlayCheckInCode.Should().BeTrue();
+            byOwner.Value.Settings.CanSetOpenPlayCheckInCode.Should().BeTrue();
+            seenByAttendant.Value!.HasOpenPlayCheckInCode.Should().BeTrue();
+            seenByAttendant.Value.CanSetOpenPlayCheckInCode.Should().BeFalse();
+            stored.OpenPlayCheckInCodeHash.Should().NotContain(byOwner.Value.Code);
+            CheckInCode.Matches(byOwner.Value.Code, stored.OpenPlayCheckInCodeHash!).Should().BeTrue();
+            CheckInCode.Matches(first.Value!.Code, stored.OpenPlayCheckInCodeHash!).Should().Be(first.Value.Code == byOwner.Value.Code);
         }
     }
 

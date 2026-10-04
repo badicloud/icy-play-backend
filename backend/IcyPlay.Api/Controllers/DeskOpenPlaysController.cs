@@ -156,6 +156,23 @@ public sealed class DeskOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
     }
 
+    /// <summary>Moves when check-in opens. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/check-in-window")]
+    public async Task<IActionResult> CheckInWindow(
+        Guid openPlayId,
+        OpenPlayCheckInWindowInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetCheckInWindowAsync(actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
     /// <summary>Deletes a draft that was never published.</summary>
     [HttpDelete("{openPlayId:guid}")]
     public async Task<IActionResult> Delete(Guid openPlayId, CancellationToken ct)

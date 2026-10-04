@@ -94,6 +94,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.GcashNumber).HasMaxLength(30);
             entity.Property(x => x.GcashAccountName).HasMaxLength(150);
             entity.Property(x => x.GcashQrCodeUrl).HasMaxLength(1000);
+            entity.Property(x => x.OpenPlayCheckInCodeHash).HasMaxLength(200);
+            entity.Ignore(x => x.HasOpenPlayCheckInCode);
             entity.Property(x => x.PartialBookingExpiryMinutes)
                 .HasDefaultValue(PaymentHold.DefaultMinutes);
             entity.Property(x => x.MoveNoticeDays)
@@ -1064,6 +1066,12 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.RejectionNote).HasMaxLength(RejectReason.NoteLimit);
             entity.Ignore(x => x.Total);
             entity.Ignore(x => x.IsRegistered);
+            entity.Ignore(x => x.IsCheckedIn);
+            entity.Property(x => x.CheckInToken).HasMaxLength(CheckInPass.TokenLimit);
+            // A scan finds the registration by its QR's token alone.
+            entity.HasIndex(x => x.CheckInToken)
+                .IsUnique()
+                .HasFilter("[CheckInToken] IS NOT NULL");
             // A player's own list, and the check that they are not already on
             // a session before a second registration is taken.
             entity.HasIndex(x => new { x.CustomerUserId, x.SessionId });

@@ -127,6 +127,12 @@ public sealed class OpenPlay : Entity
     /// How long before a session starts registration closes. Relative, so one
     /// number works for every date of the series.
     /// </summary>
+    /// <summary>
+    /// How long before each session the desk can start checking players in.
+    /// The window then runs until the session ends.
+    /// </summary>
+    public int CheckInOpensMinutes { get; private set; } = OpenPlayLimits.DefaultCheckInLeadMinutes;
+
     public int RegistrationCutoffMinutes
     {
         get; private set;
@@ -276,6 +282,43 @@ public sealed class OpenPlay : Entity
     }
 
     /// <summary>When registration for the session on this date closes, on the venue's clock.</summary>
+    /// <summary>When the desk can start checking players in for the session on this date, on the venue's clock.</summary>
+    public DateTime CheckInOpensAt(DateOnly date) =>
+        date.ToDateTime(StartsAt).AddMinutes(-CheckInOpensMinutes);
+
+    /// <summary>
+    /// Whether players can be checked in for this date right now: from
+    /// <see cref="CheckInOpensMinutes"/> before the start until the session ends.
+    /// <paramref name="venueNow"/> is the venue's wall clock, from the server.
+    /// </summary>
+    public bool IsCheckInOpen(DateOnly date, DateTime venueNow) =>
+        RunsOn(date)
+        && venueNow >= CheckInOpensAt(date)
+        && venueNow < date.ToDateTime(EndsAt);
+
+    /// <summary>
+    /// Sets how long before each session check-in opens. Allowed after
+    /// publishing, like the photo: it is how the venue runs its door, not part
+    /// of what a player signed up for.
+    /// </summary>
+    public void SetCheckInWindow(int minutesBeforeStart, DateTimeOffset now)
+    {
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        if (minutesBeforeStart < 0 || minutesBeforeStart > OpenPlayLimits.LongestCheckInLeadMinutes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(minutesBeforeStart),
+                $"Check-in can open from 0 to {OpenPlayLimits.LongestCheckInLeadMinutes / 60} hours before the start.");
+        }
+
+        CheckInOpensMinutes = minutesBeforeStart;
+        UpdatedAt = now;
+    }
+
     public DateTime RegistrationClosesAt(DateOnly date) =>
         date.ToDateTime(StartsAt).AddMinutes(-RegistrationCutoffMinutes);
 
@@ -518,6 +561,11 @@ public static class OpenPlayLimits
     public const int MinPlayers = 2;
     public const int MaxPlayers = 200;
     public const int TitleLimit = 150;
+
+    /// <summary>An hour before the start, until a venue says otherwise.</summary>
+    public const int DefaultCheckInLeadMinutes = 60;
+
+    public const int LongestCheckInLeadMinutes = 24 * 60;
 }
 
 /// <summary>

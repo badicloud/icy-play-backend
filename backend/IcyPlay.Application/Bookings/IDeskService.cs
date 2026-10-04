@@ -248,6 +248,16 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// Generates a new six-digit code for checking open play players in by
+    /// hand, replacing any old one. The owner only: the attendants are the
+    /// ones it is asked of, and are told it.
+    /// </summary>
+    Task<DeskResult<GeneratedCheckInCode>> GenerateOpenPlayCheckInCodeAsync(
+        Guid userId,
+        AuditActor actor,
+        CancellationToken ct);
+
+    /// <summary>
     /// Turns a payment down, with a reason from the list. The hours go back on
     /// sale, and the reason is what the customer reads on their booking.
     /// </summary>

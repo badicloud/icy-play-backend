@@ -147,8 +147,86 @@ public sealed class OpenPlayRegistration : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// The token in this registration's check-in QR, as <see cref="CheckInPass"/>.
+    /// Made when the payment is confirmed: nobody gets a QR for a spot that is
+    /// not paid for. Null before that.
+    /// </summary>
+    public string? CheckInToken
+    {
+        get; private set;
+    }
+
+    /// <summary>When the desk checked the player in at the session. Null until they arrive.</summary>
+    public DateTimeOffset? CheckedInAt
+    {
+        get; private set;
+    }
+
+    public Guid? CheckedInByUserId
+    {
+        get; private set;
+    }
+
     /// <summary>A registered player: the venue has confirmed the payment.</summary>
     public bool IsRegistered => Status == BookingStatus.Confirmed;
+
+    public bool IsCheckedIn => CheckedInAt is not null;
+
+    /// <summary>
+    /// Where the check-in QR stands, or null when there is none to show: not
+    /// confirmed, or confirmed and then cancelled with the session.
+    /// </summary>
+    /// <param name="sessionHasEnded">On the venue's clock; the caller's to work out.</param>
+    public string? PassState(bool sessionHasEnded)
+    {
+        if (!IsRegistered || CheckInToken is null)
+        {
+            return null;
+        }
+
+        if (IsCheckedIn)
+        {
+            return CheckInPassState.Used;
+        }
+
+        return sessionHasEnded ? CheckInPassState.Expired : CheckInPassState.Active;
+    }
+
+    /// <summary>
+    /// The player has arrived. Only a registered player can be: a receipt the
+    /// desk has not looked at is not a paid spot yet. Whether the session's
+    /// check-in window is open is the service's to ask, on the venue's clock.
+    /// </summary>
+    public void CheckIn(Guid checkedInByUserId, DateTimeOffset now)
+    {
+        if (!IsRegistered)
+        {
+            throw new InvalidOperationException("Only a registered player can be checked in.");
+        }
+
+        if (IsCheckedIn)
+        {
+            throw new InvalidOperationException("This player is already checked in.");
+        }
+
+        CheckedInAt = now;
+        CheckedInByUserId = checkedInByUserId;
+        UpdatedAt = now;
+    }
+
+    /// <summary>Takes back a check-in made by mistake: the wrong name tapped, the wrong pass scanned.</summary>
+    public void UndoCheckIn(DateTimeOffset now)
+    {
+        if (!IsCheckedIn)
+        {
+            return;
+        }
+
+        CheckedInAt = null;
+        CheckedInByUserId = null;
+        UpdatedAt = now;
+    }
 
     /// <summary>
     /// Whether this registration counts against the session's spots. Works the
@@ -200,7 +278,10 @@ public sealed class OpenPlayRegistration : Entity
         return first;
     }
 
-    /// <summary>The desk looked at the payment and it is good: the player is registered.</summary>
+    /// <summary>
+    /// The desk looked at the payment and it is good: the player is registered,
+    /// and gets the QR that checks them in at this session.
+    /// </summary>
     public void Confirm(Guid confirmedByUserId, DateTimeOffset now)
     {
         if (Status != BookingStatus.PendingVerification)
@@ -211,6 +292,7 @@ public sealed class OpenPlayRegistration : Entity
         Status = BookingStatus.Confirmed;
         ConfirmedAt = now;
         ConfirmedByUserId = confirmedByUserId;
+        CheckInToken ??= CheckInPass.NewToken();
         UpdatedAt = now;
     }
 

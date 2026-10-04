@@ -75,6 +75,10 @@ public sealed class OpenPlayService(
     public Task<OpenPlayResult<bool>> DeleteDraftAsync(AuditActor actor, Guid openPlayId, CancellationToken ct) =>
         DeleteDraftCore(DeskVenuesOf(actor), actor, openPlayId, ct);
 
+    public Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowAsync(
+        AuditActor actor, Guid openPlayId, OpenPlayCheckInWindowInput input, CancellationToken ct) =>
+        SetCheckInWindowCore(DeskVenuesOf(actor), actor, openPlayId, input, ct);
+
     // ------------------------------------------------------------ the admin
     //
     // One facility owner's venues, whoever the admin is. The same cores and so
@@ -189,6 +193,63 @@ public sealed class OpenPlayService(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
         DeleteDraftCore(OwnerVenues(facilityOwnerId), actor, openPlayId, ct);
 
+    public Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayCheckInWindowInput input, CancellationToken ct) =>
+        SetCheckInWindowCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
+
+    /// <summary>
+    /// Moves when check-in opens. Allowed on a published open play, like the
+    /// photo: it is how the venue runs its door, not what a player paid for.
+    /// </summary>
+    private async Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowCore(
+        IQueryable<Guid> venues,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayCheckInWindowInput input,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var openPlay = await ForScopeAsync(venues, openPlayId, ct);
+
+        if (openPlay is null)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.NotFound);
+        }
+
+        if (openPlay.HasEnded)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Ended);
+        }
+
+        var before = openPlay.CheckInOpensMinutes;
+
+        try
+        {
+            openPlay.SetCheckInWindow(input.MinutesBeforeStart, timeProvider.GetUtcNow());
+        }
+        catch (ArgumentException problem)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Invalid, Plain(problem));
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.OpenPlayCheckInWindowChanged,
+            AuditEntityType.OpenPlay,
+            openPlay.Id,
+            new Dictionary<string, string?> { ["checkInOpensMinutes"] = before.ToString(CultureInfo.InvariantCulture) },
+            new Dictionary<string, string?>
+            {
+                ["checkInOpensMinutes"] = openPlay.CheckInOpensMinutes.ToString(CultureInfo.InvariantCulture)
+            });
+
+        await db.SaveChangesAsync(ct);
+
+        return OpenPlayResult<DeskOpenPlay>.Success(await ProjectOneAsync(openPlay.Id, ct));
+    }
+
     /// <summary>
     /// The desk's scope for this actor. An actor with no user id works no venue,
     /// so the scope is empty and everything answers as not found.
@@ -280,6 +341,11 @@ public sealed class OpenPlayService(
                 EarlyBird(input.EarlyBird),
                 userId,
                 now);
+
+            if (input.CheckInOpensMinutes is int checkInLead)
+            {
+                openPlay.SetCheckInWindow(checkInLead, now);
+            }
         }
         catch (ArgumentException problem)
         {
@@ -370,6 +436,11 @@ public sealed class OpenPlayService(
                 input.RegistrationCutoffMinutes,
                 EarlyBird(input.EarlyBird),
                 now);
+
+            if (input.CheckInOpensMinutes is int checkInLead)
+            {
+                openPlay.SetCheckInWindow(checkInLead, now);
+            }
         }
         catch (ArgumentException problem)
         {
@@ -974,6 +1045,21 @@ public sealed class OpenPlayService(
             .Where(contract => ownerIds.Contains(contract.FacilityOwnerId) && contract.CancelledAt == null)
             .ToListAsync(ct);
 
+        // Which of these the desk has cancelled today, read once for all of
+        // them. A day either side of UTC covers every venue's own today.
+        var cancelledToday = (await db.OpenPlaySessions
+                .AsNoTracking()
+                .Where(session => ids.Contains(session.OpenPlayId)
+                    && session.CancelledAt != null
+                    && session.Date >= roughToday.AddDays(-1)
+                    && session.Date <= roughToday.AddDays(1))
+                .Select(session => new { session.OpenPlayId, session.Date })
+                .ToListAsync(ct))
+            .Where(session => rows.Any(row => row.OpenPlay.Id == session.OpenPlayId
+                && DateOnly.FromDateTime(VenueClock.LocalNowIn(row.TimeZone, now).DateTime) == session.Date))
+            .Select(session => session.OpenPlayId)
+            .ToHashSet();
+
         return
         [
             .. rows
@@ -983,7 +1069,16 @@ public sealed class OpenPlayService(
                 .Select(row =>
                 {
                     var openPlay = row.OpenPlay;
-                    var today = DateOnly.FromDateTime(VenueClock.LocalNowIn(row.TimeZone, now).DateTime);
+                    var venueNow = VenueClock.LocalNowIn(row.TimeZone, now).DateTime;
+                    var today = DateOnly.FromDateTime(venueNow);
+
+                    // Today's session, when the published series runs today
+                    // and the desk has not cancelled it: what Check in opens.
+                    DateOnly? sessionToday = openPlay.IsPublished
+                        && openPlay.RunsOn(today)
+                        && !cancelledToday.Contains(openPlay.Id)
+                            ? today
+                            : null;
 
                     // The live term's rate, or the most recent one's when the
                     // venue is between terms. What a player would be charged
@@ -1027,7 +1122,11 @@ public sealed class OpenPlayService(
                         openPlay.EndedAt,
                         row.Registrations,
                         openPlay.CoverPhotoUrl,
-                        row.Waiting);
+                        row.Waiting,
+                        openPlay.CheckInOpensMinutes,
+                        sessionToday,
+                        sessionToday is DateOnly day ? openPlay.CheckInOpensAt(day) : null,
+                        sessionToday is DateOnly open && openPlay.IsCheckInOpen(open, venueNow));
                 })
         ];
     }

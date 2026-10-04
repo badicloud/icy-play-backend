@@ -13,7 +13,12 @@ public sealed record OpenPlayInput(
     DateOnly StartDate,
     DateOnly? EndDate,
     int RegistrationCutoffMinutes,
-    OpenPlayEarlyBirdInput? EarlyBird);
+    OpenPlayEarlyBirdInput? EarlyBird,
+    // How long before each session check-in opens. Left out, an hour.
+    int? CheckInOpensMinutes = null);
+
+/// <summary>Moves when check-in opens. Allowed after publishing: it is how the venue runs its door.</summary>
+public sealed record OpenPlayCheckInWindowInput(int MinutesBeforeStart);
 
 /// <param name="DiscountKind">"Fixed" or "Percentage".</param>
 /// <param name="LeadMinutes">How long before the start a player must register to get it.</param>
@@ -57,7 +62,15 @@ public sealed record DeskOpenPlay(
     // listing then falls back to the court's or the venue's.
     string? CoverPhotoUrl,
     // Receipts sent and waiting on the desk: not registered yet.
-    int Waiting);
+    int Waiting,
+    int CheckInOpensMinutes,
+    // The venue's today, when there is a session today; else null. What the
+    // Check in button opens.
+    DateOnly? SessionToday,
+    // When check-in for today's session opens, on the venue's clock.
+    DateTime? CheckInOpensAt,
+    // Whether check-in for today's session is open right now.
+    bool CheckInOpen);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

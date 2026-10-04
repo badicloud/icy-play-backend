@@ -1531,7 +1531,42 @@ public sealed class DeskService(
 
         return owner is null
             ? DeskResult<DeskSettings>.Fail(DeskFailure.NotAttended)
-            : DeskResult<DeskSettings>.Success(Settings(owner));
+            : DeskResult<DeskSettings>.Success(Settings(owner, userId));
+    }
+
+    public async Task<DeskResult<GeneratedCheckInCode>> GenerateOpenPlayCheckInCodeAsync(
+        Guid userId,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var owner = await OwnerForAsync(userId, ct);
+
+        if (owner is null)
+        {
+            return DeskResult<GeneratedCheckInCode>.Fail(DeskFailure.NotAttended);
+        }
+
+        if (owner.UserId != userId)
+        {
+            return DeskResult<GeneratedCheckInCode>.Fail(DeskFailure.NotOwner);
+        }
+
+        var code = Domain.OpenPlays.CheckInCode.Generate();
+        var hadOne = owner.HasOpenPlayCheckInCode;
+        owner.SetOpenPlayCheckInCode(code, timeProvider.GetUtcNow());
+
+        // That it changed, never what it is.
+        audit.RecordEvent(
+            actor,
+            AuditAction.OpenPlayCheckInCodeChanged,
+            AuditEntityType.FacilityOwner,
+            owner.Id,
+            new Dictionary<string, string?> { ["replaced"] = hadOne ? "true" : "false" },
+            hadOne ? "Open play check-in code replaced." : "Open play check-in code generated.");
+
+        await db.SaveChangesAsync(ct);
+
+        return DeskResult<GeneratedCheckInCode>.Success(new GeneratedCheckInCode(code, Settings(owner, userId)));
     }
 
     public async Task<DeskResult<IReadOnlyCollection<DeskSettingsChange>>> SettingsHistoryAsync(
@@ -1691,10 +1726,10 @@ public sealed class DeskService(
 
         await db.SaveChangesAsync(ct);
 
-        return DeskResult<DeskSettings>.Success(Settings(owner));
+        return DeskResult<DeskSettings>.Success(Settings(owner, userId));
     }
 
-    private static DeskSettings Settings(Domain.Identity.FacilityOwner owner) => new(
+    private static DeskSettings Settings(Domain.Identity.FacilityOwner owner, Guid userId) => new(
         owner.PartialBookingExpiryMinutes,
         owner.MoveLimit,
         PaymentHold.MinimumMinutes,
@@ -1706,7 +1741,9 @@ public sealed class DeskService(
         BookingMove.LargestNoticeDays,
         owner.BookingWindowDays,
         BookingWindow.SmallestDays,
-        BookingWindow.LargestDays);
+        BookingWindow.LargestDays,
+        owner.HasOpenPlayCheckInCode,
+        owner.UserId == userId);
 
     private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
         new()

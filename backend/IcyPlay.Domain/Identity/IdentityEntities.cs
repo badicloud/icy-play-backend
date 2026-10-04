@@ -171,6 +171,76 @@ public sealed class FacilityOwner : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// The hash of the venue's six-digit code for checking open play players
+    /// in by hand, as <see cref="OpenPlays.CheckInCode"/>. Null until the owner
+    /// sets one, and until then nobody can.
+    /// </summary>
+    public string? OpenPlayCheckInCodeHash
+    {
+        get; private set;
+    }
+
+    /// <summary>Wrong tries in a row since the last right one.</summary>
+    public int CheckInCodeFailures
+    {
+        get; private set;
+    }
+
+    /// <summary>Set once the wrong tries reach the limit; the code is shut until then.</summary>
+    public DateTimeOffset? CheckInCodeLockedUntil
+    {
+        get; private set;
+    }
+
+    public bool HasOpenPlayCheckInCode => OpenPlayCheckInCodeHash is not null;
+
+    /// <summary>Sets a new code. The old one stops working, and any lock is lifted.</summary>
+    public void SetOpenPlayCheckInCode(string code, DateTimeOffset now)
+    {
+        OpenPlayCheckInCodeHash = OpenPlays.CheckInCode.Hash(code);
+        CheckInCodeFailures = 0;
+        CheckInCodeLockedUntil = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Checks a typed code, counting the wrong ones: the limit shuts it for a
+    /// few minutes, and a right one starts the count again.
+    /// </summary>
+    public OpenPlays.CheckInCodeVerdict TryOpenPlayCheckInCode(string? code, DateTimeOffset now)
+    {
+        if (OpenPlayCheckInCodeHash is null)
+        {
+            return OpenPlays.CheckInCodeVerdict.NotSet;
+        }
+
+        if (CheckInCodeLockedUntil is DateTimeOffset until && now < until)
+        {
+            return OpenPlays.CheckInCodeVerdict.Locked;
+        }
+
+        if (OpenPlays.CheckInCode.Matches(code, OpenPlayCheckInCodeHash))
+        {
+            CheckInCodeFailures = 0;
+            CheckInCodeLockedUntil = null;
+
+            return OpenPlays.CheckInCodeVerdict.Accepted;
+        }
+
+        CheckInCodeFailures++;
+
+        if (CheckInCodeFailures >= OpenPlays.CheckInCode.MaxFailures)
+        {
+            CheckInCodeFailures = 0;
+            CheckInCodeLockedUntil = now.AddMinutes(OpenPlays.CheckInCode.LockMinutes);
+
+            return OpenPlays.CheckInCodeVerdict.Locked;
+        }
+
+        return OpenPlays.CheckInCodeVerdict.Wrong;
+    }
+
     /// <summary>Whether this venue can be paid at all yet.</summary>
     public bool CanTakePayment =>
         !string.IsNullOrWhiteSpace(GcashNumber) || !string.IsNullOrWhiteSpace(GcashQrCodeUrl);

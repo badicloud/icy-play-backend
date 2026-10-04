@@ -191,7 +191,18 @@ public sealed record DeskSettings(
     /// <summary>How many days ahead customers can book, today included.</summary>
     int BookingWindowDays,
     int SmallestBookingWindowDays,
-    int LargestBookingWindowDays);
+    int LargestBookingWindowDays,
+    /// <summary>Whether the venue has a code for checking open play players in by hand.</summary>
+    bool HasOpenPlayCheckInCode = false,
+    /// <summary>Only the owner generates the code; an attendant is told it.</summary>
+    bool CanSetOpenPlayCheckInCode = false);
+
+/// <summary>
+/// A freshly generated check-in code, with the settings as they now stand.
+/// The only time the code is ever sent: only its hash is kept, so the owner
+/// writes it down now or generates another later.
+/// </summary>
+public sealed record GeneratedCheckInCode(string Code, DeskSettings Settings);
 
 /// <summary>
 /// One time the venue's dials were changed: who did it, when, and what each

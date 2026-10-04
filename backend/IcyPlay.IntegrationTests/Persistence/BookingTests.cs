@@ -1140,7 +1140,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var customer = new User($"mover-{Guid.NewGuid():N}@example.com", "Maria Santos", null);
         context.Users.Add(customer);
         await context.SaveChangesAsync();
-        floor = floor with { Customer = customer.Id };
+        floor = floor with
+        {
+            Customer = customer.Id
+        };
         var mail = new CapturingEmailSender();
         var notifier = new BookingNotifier(
             context,
@@ -1263,7 +1266,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         retired.Retire(Now);
         context.FacilityAttendants.Add(retired);
         await context.SaveChangesAsync();
-        floor = floor with { Customer = customer.Id };
+        floor = floor with
+        {
+            Customer = customer.Id
+        };
 
         var ownerEmail = await context.BookableCourts
             .Where(unit => unit.Id == floor.Pickleball1)
@@ -3659,7 +3665,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var edited = await desk.UpdateAsync(
             actor,
             id,
-            TuesdayMornings(floor.Pickleball1) with { Title = "Changed" },
+            TuesdayMornings(floor.Pickleball1) with
+            {
+                Title = "Changed"
+            },
             CancellationToken.None);
 
         // Assert: players are registering for what it says.
@@ -3678,7 +3687,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         // Act
         var saved = await desk.CreateAsync(
             actor,
-            TuesdayMornings(floor.Pickleball1) with { StartsAt = new TimeOnly(5, 0) },
+            TuesdayMornings(floor.Pickleball1) with
+            {
+                StartsAt = new TimeOnly(5, 0)
+            },
             CancellationToken.None);
 
         // Assert
@@ -3868,7 +3880,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             ownerId,
             admin,
             saved.Value.OpenPlay.OpenPlayId,
-            TuesdayMornings(floor.Pickleball1) with { Title = "Changed" },
+            TuesdayMornings(floor.Pickleball1) with
+            {
+                Title = "Changed"
+            },
             CancellationToken.None);
         var day = await CreateService(context).AvailabilityAsync(floor.Pickleball1, Tuesday, CancellationToken.None);
 
@@ -4196,6 +4211,307 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         confirmed.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
     }
 
+    // ------------------------------------------------------------ check-in
+
+    [Fact]
+    public async Task CheckIn_ConfirmingAPlayer_ShouldGiveThatRegistrationItsOwnQr()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Pass Courts");
+        var registrations = CreateRegistrationService(context, new CapturingEmailSender());
+        var waiting = await PlayerAsync(context);
+        var registered = await registrations.RegisterAsync(
+            waiting.Id, openPlayId, new RegisterForOpenPlayRequest(Today, true), CancellationToken.None);
+        await registrations.SendReceiptAsync(
+            waiting.Id, registered.Value!.RegistrationId, new OpenPlayReceiptRequest(OpenPlayReceipt), CancellationToken.None);
+
+        // Act
+        var player = await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        var theirs = (await registrations.ListMineAsync(player.Id, CancellationToken.None)).Single();
+        var notYet = (await registrations.ListMineAsync(waiting.Id, CancellationToken.None)).Single();
+
+        // Assert: nothing about the player in it, and no QR for a payment the
+        // desk has not looked at.
+        using (new AssertionScope())
+        {
+            theirs.CheckInPassState.Should().Be(CheckInPassState.Active);
+            theirs.CheckInQr.Should().StartWith(CheckInPass.QrPrefix);
+            theirs.CheckInQr.Should().NotContain(player.Id.ToString());
+            theirs.CheckInQr.Should().NotContain(player.Email);
+            notYet.CheckInPassState.Should().BeNull();
+            notYet.CheckInQr.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_ScanningTheirQr_ShouldCheckThemIn_AndSpendTheQr()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Scan Courts");
+        var player = await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        var qr = await QrOfAsync(context, player);
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateCheckInService(context);
+
+        // Act
+        var scanned = await sut.ScanAsync(desk, openPlayId, Today, new CheckInScanRequest(qr), CancellationToken.None);
+        var again = await sut.ScanAsync(desk, openPlayId, Today, new CheckInScanRequest(qr), CancellationToken.None);
+        var afterwards = (await CreateRegistrationService(context, new CapturingEmailSender())
+            .ListMineAsync(player.Id, CancellationToken.None)).Single();
+
+        // Assert: once used, the QR only says so, and is no longer handed out.
+        using (new AssertionScope())
+        {
+            scanned.Value!.Outcome.Should().Be(CheckInOutcome.CheckedIn);
+            scanned.Value.Roster.CheckedIn.Should().Be(1);
+            scanned.Value.Roster.Players.Single().DisplayName.Should().Be("Open P.");
+            again.Value!.Outcome.Should().Be(CheckInOutcome.AlreadyCheckedIn);
+            again.Value.Roster.CheckedIn.Should().Be(1);
+            afterwards.CheckInPassState.Should().Be(CheckInPassState.Used);
+            afterwards.CheckInQr.Should().BeNull();
+            afterwards.CheckedInAt.Should().Be(Now);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_ScanningAnythingElse_ShouldSayWhatIsWrongAndCheckNobodyIn()
+    {
+        // Arrange: a player confirmed for an open play at another venue.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Wrong Courts");
+        var (otherFloor, otherOpenPlayId) = await TonightsOpenPlayAsync(context, "Check-in Elsewhere Courts");
+        var elsewhere = await ConfirmedPlayerAsync(context, otherFloor, otherOpenPlayId, Today);
+        var theirQr = await QrOfAsync(context, elsewhere);
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateCheckInService(context);
+
+        // Act
+        var wrongSession = await sut.ScanAsync(desk, openPlayId, Today, new CheckInScanRequest(theirQr), CancellationToken.None);
+        var notOurs = await sut.ScanAsync(desk, openPlayId, Today, new CheckInScanRequest("https://example.com/menu"), CancellationToken.None);
+        var madeUp = await sut.ScanAsync(
+            desk, openPlayId, Today, new CheckInScanRequest(CheckInPass.QrPrefix + new string('x', 43)), CancellationToken.None);
+
+        // Assert: a QR is for its own session and no other.
+        using (new AssertionScope())
+        {
+            wrongSession.Value!.Outcome.Should().Be(CheckInOutcome.WrongSession);
+            wrongSession.Value.Message.Should().Contain("another venue");
+            wrongSession.Value.Player.Should().BeNull();
+            notOurs.Value!.Outcome.Should().Be(CheckInOutcome.NotAPass);
+            madeUp.Value!.Outcome.Should().Be(CheckInOutcome.UnknownPass);
+            madeUp.Value.Roster.CheckedIn.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_BeforeTheWindowOpens_ShouldSaySoAndCheckNobodyIn()
+    {
+        // Arrange: tomorrow's session; the window opens an hour before it.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Check-in Early Courts");
+        var player = await ConfirmedPlayerAsync(context, floor, openPlayId, Tuesday);
+        var qr = await QrOfAsync(context, player);
+        var desk = await OwnerActorAsync(context, floor);
+
+        // Act
+        var scanned = await CreateCheckInService(context)
+            .ScanAsync(desk, openPlayId, Tuesday, new CheckInScanRequest(qr), CancellationToken.None);
+
+        // Assert: on the venue's clock, from the server.
+        using (new AssertionScope())
+        {
+            scanned.Value!.Outcome.Should().Be(CheckInOutcome.WindowClosed);
+            scanned.Value.Roster.IsOpen.Should().BeFalse();
+            scanned.Value.Roster.CheckedIn.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_ByHand_ShouldCheckThePlayerIn_AndUndoShouldTakeItBack()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Hand Courts");
+        await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        await CheckInCodeAsync(context, floor, VenueCode);
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateCheckInService(context);
+        var roster = await sut.RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+        var registrationId = roster.Value!.Players.Single().RegistrationId;
+
+        // Act
+        var checkedIn = await sut.CheckInAsync(desk, registrationId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+        var undone = await sut.UndoAsync(desk, registrationId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            checkedIn.Value!.CheckedIn.Should().Be(1);
+            undone.Value!.CheckedIn.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_ByHand_WithoutTheVenuesCode_ShouldBeRefused()
+    {
+        // Arrange: one venue with no code yet, one with a code.
+        await using var context = database.CreateContext();
+        var (bare, bareOpenPlayId) = await TonightsOpenPlayAsync(context, "Check-in No Code Courts");
+        await ConfirmedPlayerAsync(context, bare, bareOpenPlayId, Today);
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Code Courts");
+        await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        await CheckInCodeAsync(context, floor, VenueCode);
+        var sut = CreateCheckInService(context);
+        var bareDesk = await OwnerActorAsync(context, bare);
+        var desk = await OwnerActorAsync(context, floor);
+        var bareId = (await sut.RosterAsync(bareDesk.UserId!.Value, bareOpenPlayId, Today, CancellationToken.None))
+            .Value!.Players.Single().RegistrationId;
+        var registrationId = (await sut.RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None))
+            .Value!.Players.Single().RegistrationId;
+
+        // Act
+        var notSet = await sut.CheckInAsync(bareDesk, bareId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+        var wrong = await sut.CheckInAsync(desk, registrationId, new CheckInCodeRequest("000000"), CancellationToken.None);
+        var roster = await sut.RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            notSet.Failure.Should().Be(OpenPlayRegistrationFailure.CheckInCodeNotSet);
+            wrong.Failure.Should().Be(OpenPlayRegistrationFailure.WrongCheckInCode);
+            roster.Value!.CheckedIn.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_ByHand_AfterFiveWrongCodes_ShouldLockEvenTheRightOne()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Lock Courts");
+        await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        await CheckInCodeAsync(context, floor, VenueCode);
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateCheckInService(context);
+        var registrationId = (await sut.RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None))
+            .Value!.Players.Single().RegistrationId;
+        var tries = new List<OpenPlayRegistrationFailure>();
+
+        // Act
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            tries.Add((await sut.CheckInAsync(desk, registrationId, new CheckInCodeRequest("111111"), CancellationToken.None)).Failure);
+        }
+
+        var right = await sut.CheckInAsync(desk, registrationId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+
+        // Assert: four wrong, the fifth locks, and the right one waits it out.
+        using (new AssertionScope())
+        {
+            tries.Take(4).Should().AllBeEquivalentTo(OpenPlayRegistrationFailure.WrongCheckInCode);
+            tries[4].Should().Be(OpenPlayRegistrationFailure.CheckInCodeLocked);
+            right.Failure.Should().Be(OpenPlayRegistrationFailure.CheckInCodeLocked);
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_TheWindow_ShouldBeMovableAfterPublishing_AndTheListShouldSayWhenItOpens()
+    {
+        // Arrange: tonight at six; Now is five at the venue.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Window Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateOpenPlayService(context);
+        var before = await sut.GetAsync(desk.UserId!.Value, openPlayId, CancellationToken.None);
+
+        // Act: half an hour before instead of an hour, on a published one.
+        var moved = await sut.SetCheckInWindowAsync(desk, openPlayId, new OpenPlayCheckInWindowInput(30), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            before.Value!.SessionToday.Should().Be(Today);
+            before.Value.CheckInOpen.Should().BeTrue();
+            moved.Value!.CheckInOpensMinutes.Should().Be(30);
+            moved.Value.CheckInOpensAt.Should().Be(Today.ToDateTime(new TimeOnly(17, 30)));
+            moved.Value.CheckInOpen.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task CheckIn_AtAnotherVenuesDesk_ShouldAnswerAsIfItWereNotThere()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Check-in Mine Courts");
+        var other = await FloorAsync(context, "Check-in Other Courts");
+
+        // Act
+        var roster = await CreateCheckInService(context)
+            .RosterAsync((await OwnerActorAsync(context, other)).UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        roster.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
+    }
+
+    /// <summary>
+    /// Tonight, six to eight at the venue. Now is five there, so check-in, an
+    /// hour before by default, has just opened, and registration, closing half
+    /// an hour before, is still open.
+    /// </summary>
+    private static Task<(Floor Floor, Guid OpenPlayId)> TonightsOpenPlayAsync(AppDbContext context, string facilityName) =>
+        PublishedOpenPlayAsync(
+            context,
+            facilityName,
+            input: floor => TuesdayMornings(floor.Pickleball1) with
+            {
+                Days = [DayOfWeek.Monday],
+                StartDate = Today,
+                StartsAt = new TimeOnly(18, 0),
+                EndsAt = new TimeOnly(20, 0),
+                RegistrationCutoffMinutes = 30
+            });
+
+    /// <summary>A player registered, paid, and confirmed by the desk for that date.</summary>
+    private static async Task<User> ConfirmedPlayerAsync(AppDbContext context, Floor floor, Guid openPlayId, DateOnly date)
+    {
+        var player = await PlayerAsync(context);
+        var registrations = CreateRegistrationService(context, new CapturingEmailSender());
+        var registered = await registrations.RegisterAsync(
+            player.Id, openPlayId, new RegisterForOpenPlayRequest(date, true), CancellationToken.None);
+        await registrations.SendReceiptAsync(
+            player.Id, registered.Value!.RegistrationId, new OpenPlayReceiptRequest(OpenPlayReceipt), CancellationToken.None);
+        await registrations.ConfirmAsync(await OwnerActorAsync(context, floor), registered.Value.RegistrationId, CancellationToken.None);
+
+        return player;
+    }
+
+    /// <summary>What the player's one registration's QR holds.</summary>
+    private static async Task<string> QrOfAsync(AppDbContext context, User player) =>
+        CheckInPass.QrContent(await context.OpenPlayRegistrations
+            .Where(registration => registration.CustomerUserId == player.Id)
+            .Select(registration => registration.CheckInToken!)
+            .SingleAsync());
+
+    private const string VenueCode = "482913";
+
+    /// <summary>The venue owner sets their code for checking players in by hand.</summary>
+    private static async Task CheckInCodeAsync(AppDbContext context, Floor floor, string code)
+    {
+        var ownerId = await OwnerIdAsync(context, floor);
+        var owner = await context.FacilityOwners.SingleAsync(candidate => candidate.Id == ownerId);
+        owner.SetOpenPlayCheckInCode(code, Now);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+    }
+
+    private static DeskCheckInService CreateCheckInService(AppDbContext context) => new(
+        context,
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        new FixedTimeProvider(Now));
+
     /// <summary>A floor with a published Tuesday-morning open play on its first pickleball court.</summary>
     private static async Task<(Floor Floor, Guid OpenPlayId)> PublishedOpenPlayAsync(
         AppDbContext context,
@@ -4213,7 +4529,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         var desk = CreateOpenPlayService(context);
         var actor = await OwnerActorAsync(context, floor);
-        var wanted = (input ?? (unit => TuesdayMornings(unit.Pickleball1)))(floor) with { MaxPlayers = maxPlayers };
+        var wanted = (input ?? (unit => TuesdayMornings(unit.Pickleball1)))(floor) with
+        {
+            MaxPlayers = maxPlayers
+        };
         var saved = await desk.CreateAsync(actor, wanted, CancellationToken.None);
         await desk.PublishAsync(actor, saved.Value!.OpenPlay.OpenPlayId, CancellationToken.None);
         context.ChangeTracker.Clear();

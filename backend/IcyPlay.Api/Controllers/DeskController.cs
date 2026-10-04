@@ -648,6 +648,25 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
     }
 
     /// <summary>
+    /// A new code for checking open play players in by hand, replacing any old
+    /// one. The owner only. The answer is the one time the code is shown.
+    /// </summary>
+    [HttpPost("settings/open-play-check-in-code")]
+    public async Task<IActionResult> GenerateOpenPlayCheckInCode(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.GenerateOpenPlayCheckInCodeAsync(userId, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<GeneratedCheckInCode>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// The booking service answers with its own failures, which are not the
     /// desk's. Only the ones an attendant can actually provoke are spelled out.
     /// </summary>

@@ -68,6 +68,26 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Pick a reason from the list."),
+            OpenPlayRegistrationFailure.CheckInClosed => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Check-in for this session is not open right now."),
+            OpenPlayRegistrationFailure.NotRegistered => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Only a player the venue has confirmed can be checked in."),
+            OpenPlayRegistrationFailure.CheckInCodeNotSet => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The venue owner has not made a check-in code yet. Generate one in Settings first."),
+            OpenPlayRegistrationFailure.WrongCheckInCode => (
+                StatusCodes.Status403Forbidden,
+                ErrorCodes.Forbidden,
+                "That check-in code is not right."),
+            OpenPlayRegistrationFailure.CheckInCodeLocked => (
+                StatusCodes.Status429TooManyRequests,
+                ErrorCodes.RateLimitExceeded,
+                "Too many wrong codes. Try again in 5 minutes."),
             OpenPlayRegistrationFailure.UnknownTab => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

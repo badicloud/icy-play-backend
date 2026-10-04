@@ -117,6 +117,11 @@ public static class AuditAction
     public const string OpenPlayPaymentSubmitted = "OpenPlayPaymentSubmitted";
     public const string OpenPlayRegistrationConfirmed = "OpenPlayRegistrationConfirmed";
     public const string OpenPlayRegistrationRejected = "OpenPlayRegistrationRejected";
+    public const string OpenPlayCheckedIn = "OpenPlayCheckedIn";
+    public const string OpenPlayCheckInUndone = "OpenPlayCheckInUndone";
+    public const string OpenPlayCheckInWindowChanged = "OpenPlayCheckInWindowChanged";
+    public const string OpenPlayCheckInCodeChanged = "OpenPlayCheckInCodeChanged";
+    public const string OpenPlayCheckInCodeLocked = "OpenPlayCheckInCodeLocked";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";
     public const string FacilityPhotosUpdated = "FacilityPhotosUpdated";
