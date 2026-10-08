@@ -338,6 +338,15 @@ public sealed class AdminFacilityOwnersController(
         CancellationToken ct) =>
         EditAsync(request, actor => edits.CancelContractAsync(id, contractId, request, actor, ct), ct);
 
+    /// <summary>Starts a signed term that has not begun yet, today.</summary>
+    [HttpPost("{id:guid}/contracts/{contractId:guid}/activate")]
+    public Task<IActionResult> ActivateContract(
+        Guid id,
+        Guid contractId,
+        ActivateContractRequest request,
+        CancellationToken ct) =>
+        EditAsync(request, actor => edits.ActivateContractAsync(id, contractId, request, actor, ct), ct);
+
     /// <summary>
     /// Everything recorded against this owner, newest first, a page at a time.
     /// The console asks for the first page and the next one on "Load more".
@@ -417,6 +426,10 @@ public sealed class AdminFacilityOwnersController(
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This term overlaps a contract that is still live. Cancel it first, or pick later dates."),
+            EditFailure.AlreadyStarted => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This term has already started, so there is nothing to bring forward."),
             _ => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

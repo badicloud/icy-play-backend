@@ -510,6 +510,14 @@ public sealed class FacilityOwnerEditService(
         var before = RateSnapshot(contract);
         contract.SetRates(request.PlatformHourlyRate, request.CommissionPercentage, now);
 
+        if (request.PaymentMode is not null || request.OnlineHoldMinutes is not null)
+        {
+            contract.SetPaymentTerms(
+                request.PaymentMode ?? contract.PaymentMode,
+                request.OnlineHoldMinutes ?? contract.OnlineHoldMinutes,
+                now);
+        }
+
         audit.RecordChange(
             actor,
             AuditAction.ContractRatesUpdated,
@@ -533,7 +541,11 @@ public sealed class FacilityOwnerEditService(
             ["platformHourlyRate"] =
                 contract.PlatformHourlyRate.ToString("0.00", CultureInfo.InvariantCulture),
             ["commissionPercentage"] =
-                contract.CommissionPercentage.ToString("0.00", CultureInfo.InvariantCulture)
+                contract.CommissionPercentage.ToString("0.00", CultureInfo.InvariantCulture),
+            // Part of what was signed, so a switch between receipts and the
+            // gateway is on the trail with who did it and why.
+            ["paymentMode"] = contract.PaymentMode,
+            ["onlineHoldMinutes"] = contract.OnlineHoldMinutes.ToString(CultureInfo.InvariantCulture)
         };
 
     public async Task<EditResult> ReplaceContractDocumentAsync(
@@ -625,6 +637,75 @@ public sealed class FacilityOwnerEditService(
         await db.SaveChangesAsync(ct);
         catalog.Invalidate();
         logger.LogInformation("Contract {ContractId} was cancelled by {ActorUserId}.", contractId, actor.UserId);
+        return EditResult.Success();
+    }
+
+    public async Task<EditResult> ActivateContractAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        ActivateContractRequest request,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        var owner = await db.FacilityOwners
+            .Include(candidate => candidate.Contracts)
+            .SingleOrDefaultAsync(candidate => candidate.Id == facilityOwnerId, ct);
+
+        var contract = owner?.Contracts.FirstOrDefault(candidate => candidate.Id == contractId);
+
+        if (contract is null)
+        {
+            return EditResult.Fail(EditFailure.NotFound);
+        }
+
+        if (contract.CancelledAt is not null)
+        {
+            return EditResult.Fail(EditFailure.AlreadyCancelled);
+        }
+
+        // The same "today" the console uses to mark a term live, so the button
+        // and the badge never disagree about whether a term has begun.
+        var now = timeProvider.GetUtcNow();
+        var today = DateOnly.FromDateTime(now.UtcDateTime);
+
+        if (contract.StartDate <= today)
+        {
+            return EditResult.Fail(EditFailure.AlreadyStarted);
+        }
+
+        // Brought forward, it covers today too, and two live terms on one day
+        // cannot both be the one fees are worked out against.
+        var overlaps = owner!.Contracts.Any(candidate =>
+            candidate.Id != contractId &&
+            candidate.CancelledAt is null &&
+            candidate.StartDate <= contract.EndDate &&
+            today <= candidate.EndDate);
+
+        if (overlaps)
+        {
+            return EditResult.Fail(EditFailure.OverlappingContract);
+        }
+
+        var before = TermSnapshot(contract);
+        contract.Reschedule(today, contract.EndDate, contract.Notes, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.ContractActivated,
+            AuditEntityType.FacilityOwnerContract,
+            contract.Id,
+            before,
+            TermSnapshot(contract),
+            request.Reason);
+
+        await db.SaveChangesAsync(ct);
+        // The owner's courts may have been off sale with no live term; they
+        // are back on it now.
+        catalog.Invalidate();
+        logger.LogInformation(
+            "Contract {ContractId} was brought forward to start today by {ActorUserId}.",
+            contract.Id,
+            actor.UserId);
         return EditResult.Success();
     }
 

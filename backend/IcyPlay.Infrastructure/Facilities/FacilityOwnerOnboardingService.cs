@@ -350,7 +350,9 @@ public sealed class FacilityOwnerOnboardingService(
                         contract.DocumentSizeInBytes,
                         contract.PlatformHourlyRate,
                         contract.CommissionPercentage,
-                        contract.CreatedAt
+                        contract.CreatedAt,
+                        contract.PaymentMode,
+                        contract.OnlineHoldMinutes
                     })
                     .ToList()
             })
@@ -436,7 +438,10 @@ public sealed class FacilityOwnerOnboardingService(
                         contract.DocumentSizeInBytes ?? 0),
                 contract.PlatformHourlyRate,
                 contract.CommissionPercentage,
-                contract.CreatedAt))],
+                contract.CreatedAt,
+                contract.PaymentMode,
+                contract.OnlineHoldMinutes,
+                contract.CancelledAt is null && contract.StartDate > today))],
             new InvitationStatus(
                 latestInvitation?.AcceptedAt is not null,
                 latestInvitation?.CreatedAt,

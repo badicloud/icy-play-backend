@@ -134,7 +134,15 @@ public sealed record RenewContractRequest(
 public sealed record UpdateContractRatesRequest(
     decimal PlatformHourlyRate,
     decimal CommissionPercentage,
-    string? Reason);
+    string? Reason,
+    /// <summary>
+    /// How customers pay under this term: <c>Manual</c> or <c>Direct</c>. Null
+    /// leaves it as it is, so a caller that only knows about rates cannot
+    /// quietly switch a venue back to receipts.
+    /// </summary>
+    string? PaymentMode = null,
+    /// <summary>How long a booking paid online holds its court. Null leaves it as it is.</summary>
+    int? OnlineHoldMinutes = null);
 
 /// <summary>
 /// Corrects the dates of a term that already exists. A start date typed wrong
@@ -154,6 +162,9 @@ public sealed record ReplaceContractDocumentRequest(
 
 public sealed record CancelContractRequest(string? Reason);
 
+/// <summary>Starts a signed future term today. The reason goes on the trail.</summary>
+public sealed record ActivateContractRequest(string? Reason);
+
 public enum EditFailure
 {
     None,
@@ -166,7 +177,9 @@ public enum EditFailure
     UntrustedContractDocument,
     UntrustedPhotoUrl,
     /// <summary>The GCash QR code is not a secure link on the configured Cloudinary account.</summary>
-    UntrustedAssetUrl
+    UntrustedAssetUrl,
+    /// <summary>The term has already started, so there is nothing to bring forward.</summary>
+    AlreadyStarted
 }
 
 public sealed record EditResult(EditFailure Failure = EditFailure.None)
@@ -244,6 +257,12 @@ public sealed class UpdateContractRatesRequestValidator
         RuleFor(x => x.CommissionPercentage)
             .InclusiveBetween(0, 100)
             .WithMessage("Commission has to be between 0 and 100 per cent.");
+        RuleFor(x => x.PaymentMode)
+            .Must(mode => mode is null || Domain.Payments.PaymentMode.IsSupported(mode))
+            .WithMessage("Payment mode has to be Manual or Direct.");
+        RuleFor(x => x.OnlineHoldMinutes)
+            .Must(minutes => minutes is null || Domain.Payments.OnlineHold.IsSupported(minutes.Value))
+            .WithMessage("The online hold has to be between 5 and 240 minutes.");
         RuleFor(x => x.Reason).MaximumLength(500);
     }
 }
@@ -290,4 +309,9 @@ public sealed class RenewContractRequestValidator : AbstractValidator<RenewContr
 public sealed class CancelContractRequestValidator : AbstractValidator<CancelContractRequest>
 {
     public CancelContractRequestValidator() => RuleFor(x => x.Reason).MaximumLength(500);
+}
+
+public sealed class ActivateContractRequestValidator : AbstractValidator<ActivateContractRequest>
+{
+    public ActivateContractRequestValidator() => RuleFor(x => x.Reason).MaximumLength(500);
 }

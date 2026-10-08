@@ -122,7 +122,17 @@ public sealed record ContractDetail(
     decimal PlatformHourlyRate,
     /// <summary>Per cent of each billing kept for maintenance and commission.</summary>
     decimal CommissionPercentage,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    /// <summary><c>Manual</c> (GCash receipt) or <c>Direct</c> (payment gateway).</summary>
+    string PaymentMode,
+    /// <summary>How long a booking paid online holds its court.</summary>
+    int OnlineHoldMinutes,
+    /// <summary>
+    /// Signed, not cancelled, and not begun yet — so it can be started early.
+    /// Answered here by the same "today" as <see cref="IsLiveToday"/>, so the
+    /// browser's clock never decides it.
+    /// </summary>
+    bool IsUpcoming);
 
 public sealed record ContractDocumentDetail(
     string PublicId,

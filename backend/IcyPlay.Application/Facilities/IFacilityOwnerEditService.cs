@@ -105,6 +105,19 @@ public interface IFacilityOwnerEditService
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Brings a term that has not started yet forward to start today, keeping
+    /// its end date, its rates and its payment terms. For an owner whose
+    /// current term has ended or been cancelled and whose next one is already
+    /// signed: without it they are off the platform until that date arrives.
+    /// </summary>
+    Task<EditResult> ActivateContractAsync(
+        Guid facilityOwnerId,
+        Guid contractId,
+        ActivateContractRequest request,
+        AuditActor actor,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Everything recorded against this owner, newest first, one page at a
     /// time. An owner's trail only grows, and reading all of it to show the
     /// first screenful got slower with every edit.
