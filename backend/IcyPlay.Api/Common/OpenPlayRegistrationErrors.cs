@@ -52,6 +52,10 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This registration is no longer waiting for a payment."),
+            OpenPlayRegistrationFailure.PaidOnline => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This registration is paid online, so there is no receipt to send."),
             OpenPlayRegistrationFailure.UntrustedReceiptUrl => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

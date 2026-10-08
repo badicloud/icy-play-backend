@@ -101,7 +101,9 @@ public sealed class OpenPlayRegistrationService(
             return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.RegistrationClosed);
         }
 
-        if (!found.Owner.CanTakePayment)
+        // A venue paid by receipt has to have somewhere for the money to go. One
+        // paid online does not: the gateway is where it goes.
+        if (!contract.TakesDirectPayment && !found.Owner.CanTakePayment)
         {
             return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.VenueCannotBePaid);
         }
@@ -143,9 +145,12 @@ public sealed class OpenPlayRegistrationService(
             session.Id,
             customerUserId,
             openPlay.PriceFor(request.Date, venueNow, contract.PlatformHourlyRate),
-            found.Owner.PartialBookingExpiryMinutes,
+            // Paying online means leaving the site and coming back, so a
+            // direct term holds the spot for longer than a receipt does.
+            contract.TakesDirectPayment ? contract.OnlineHoldMinutes : found.Owner.PartialBookingExpiryMinutes,
             now,
-            now);
+            now,
+            contract.PaymentMode);
 
         db.OpenPlayRegistrations.Add(registration);
         await db.SaveChangesAsync(ct);
@@ -199,6 +204,12 @@ public sealed class OpenPlayRegistrationService(
         if (registration.Status is not (BookingStatus.PendingPayment or BookingStatus.PendingVerification))
         {
             return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.NotAwaitingPayment);
+        }
+
+        // Paid through the gateway, which registers the player by itself.
+        if (registration.IsPaidDirect)
+        {
+            return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.PaidOnline);
         }
 
         if (registration.HasLapsedAt(now))
@@ -555,7 +566,8 @@ public sealed class OpenPlayRegistrationService(
                     // The QR itself only while it can still get them in: a
                     // spent or expired one is not handed out to be saved or shared.
                     passState == CheckInPassState.Active ? CheckInPass.QrContent(registration.CheckInToken!) : null,
-                    registration.CheckedInAt);
+                    registration.CheckedInAt,
+                    registration.PaymentChannel);
             })
         ];
     }

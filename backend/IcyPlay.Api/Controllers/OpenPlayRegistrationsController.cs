@@ -1,7 +1,9 @@
 using System.Security.Claims;
 using IcyPlay.Api.Common;
 using IcyPlay.Application.OpenPlays;
+using IcyPlay.Application.Payments;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,8 +16,34 @@ namespace IcyPlay.Api.Controllers;
 [ApiController]
 [Authorize(Roles = UserRoleName.Customer)]
 [Route("api/v1/open-play-registrations")]
-public sealed class OpenPlayRegistrationsController(ICustomerOpenPlayService registrations) : ControllerBase
+public sealed class OpenPlayRegistrationsController(
+    ICustomerOpenPlayService registrations,
+    IOnlinePaymentService payments) : ControllerBase
 {
+    /// <summary>
+    /// Opens the payment gateway's checkout for a registration paid online, or
+    /// hands back the one already open. The player is registered by the
+    /// gateway's webhook, not by coming back.
+    /// </summary>
+    [HttpPost("{registrationId:guid}/checkout")]
+    public async Task<IActionResult> Checkout(Guid registrationId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await payments.StartCheckoutAsync(
+            PaymentPurpose.OpenPlayRegistration,
+            registrationId,
+            userId,
+            ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CheckoutStarted>(result.Value!))
+            : PaymentFailureResults.ToResult(result.Failure);
+    }
+
     /// <summary>
     /// Registers for one date and holds the spot for the venue's payment hold.
     /// Pressing it again while holding a spot answers with the same registration.

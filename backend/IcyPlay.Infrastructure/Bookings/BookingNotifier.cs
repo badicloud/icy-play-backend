@@ -2,6 +2,7 @@ using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Email;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
+using IcyPlay.Domain.Payments;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -108,6 +109,14 @@ public sealed class BookingNotifier(
 
         var days = await DaysAsync(booking.Id, ct);
 
+        // The receipt rides on the confirmation: the same figures as the
+        // receipt page, with the gateway's fee broken out — its own receipt
+        // shows only the total, and "why ₱646.15 for a ₱630 booking" is the
+        // question this answers before it is asked.
+        var receipt = await BookingReceipts.ReadAsync(db, booking.Id, ct);
+        var online = booking.IsPaidDirect;
+        var latest = receipt?.Payments.LastOrDefault();
+
         await SendAsync(
             new TransactionalEmailMessage(
                 EmailTemplateKey.BookingConfirmed,
@@ -126,8 +135,62 @@ public sealed class BookingNotifier(
                     ["total_amount"] = Money(booking.Total),
                     ["booking_url"] = BookingUrl(booking.Id),
                     ["support_email"] = Settings.SupportEmail,
-                    ["current_year"] = timeProvider.GetUtcNow().Year
+                    ["current_year"] = timeProvider.GetUtcNow().Year,
+                    ["confirmed_line"] = online
+                        ? "Your online payment went through and the booking is confirmed."
+                        : $"{booking.FacilityName} has checked your payment and confirmed the booking.",
+                    ["receipt_number"] = BookingReference.For(booking.Id),
+                    ["has_processing_fee"] = (receipt?.ProcessingFeeTotal ?? 0m) > 0m ? 1 : 0,
+                    ["processing_fee"] = Money(receipt?.ProcessingFeeTotal ?? 0m),
+                    ["amount_paid"] = Money(receipt?.AmountPaid ?? booking.Total),
+                    ["payment_method"] = online ? MethodName(latest?.PaymentMethod) : "GCash, checked by the venue",
+                    ["paid_at"] = latest?.PaidAt is DateTimeOffset paidAt
+                        ? paidAt.ToOffset(TimeSpan.FromHours(8)).ToString("d MMM yyyy, h:mm tt", Culture)
+                        : string.Empty,
+                    ["payment_reference"] = latest?.Reference ?? string.Empty,
+                    ["receipt_url"] = BookingUrl(booking.Id).Length == 0 ? string.Empty : $"{BookingUrl(booking.Id)}/receipt"
                 }),
+            booking.Id,
+            ct);
+    }
+
+    public async Task BookingPaidOnlineAsync(Booking booking, OnlinePayment payment, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(booking);
+        ArgumentNullException.ThrowIfNull(payment);
+
+        var parties = await PartiesAsync(booking.Id, ct);
+
+        if (parties is null)
+        {
+            return;
+        }
+
+        var days = await DaysAsync(booking.Id, ct);
+
+        await SendToDeskAsync(
+            parties,
+            EmailTemplateKey.BookingPaidOnline,
+            name => new Dictionary<string, object>
+            {
+                ["recipient_name"] = name,
+                ["business_name"] = parties.BusinessName,
+                ["customer_name"] = parties.CustomerName,
+                ["customer_email"] = parties.CustomerEmail,
+                ["court_name"] = booking.CourtName,
+                ["facility_name"] = booking.FacilityName,
+                ["sport_name"] = booking.SportName,
+                ["booking_dates"] = Dates(days),
+                ["booked_hours"] = booking.BookedHours,
+                ["rental_amount"] = Money(booking.RentalTotal),
+                ["platform_fee"] = Money(booking.PlatformFeeTotal),
+                ["total_amount"] = Money(booking.Total),
+                ["payment_method"] = payment.PaymentMethod ?? string.Empty,
+                ["payment_reference"] = payment.ProviderPaymentId ?? string.Empty,
+                ["court_bookings_url"] = Settings.CourtBookingsUrl,
+                ["support_email"] = Settings.SupportEmail,
+                ["current_year"] = timeProvider.GetUtcNow().Year
+            },
             booking.Id,
             ct);
     }
@@ -734,4 +797,16 @@ public sealed class BookingNotifier(
 
     private static readonly System.Globalization.CultureInfo Culture =
         System.Globalization.CultureInfo.InvariantCulture;
+
+    /// <summary>How the customer paid, in their words rather than the gateway's.</summary>
+    private static string MethodName(string? method) => method switch
+    {
+        "qrph" => "QR Ph",
+        "gcash" => "GCash",
+        "paymaya" => "Maya",
+        "card" => "Card",
+        "grab_pay" => "GrabPay",
+        null or "" => "Online",
+        _ => method
+    };
 }

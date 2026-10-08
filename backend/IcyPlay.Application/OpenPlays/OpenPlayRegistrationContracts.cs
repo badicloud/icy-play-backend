@@ -66,7 +66,10 @@ public sealed record OpenPlayRegistrationDetail(
     string? CheckInPassState,
     // What the QR holds, only while it is Active.
     string? CheckInQr,
-    DateTimeOffset? CheckedInAt);
+    DateTimeOffset? CheckedInAt,
+    // "Manual", a receipt the venue checks, or "Direct", through the payment
+    // gateway, which registers the player by itself once paid in time.
+    string PaymentChannel);
 
 public enum OpenPlayRegistrationFailure
 {
@@ -95,7 +98,9 @@ public enum OpenPlayRegistrationFailure
     CheckInCodeNotSet,
     WrongCheckInCode,
     // Too many wrong codes: shut for a few minutes.
-    CheckInCodeLocked
+    CheckInCodeLocked,
+    // Paid through the payment gateway, so there is no receipt to send.
+    PaidOnline
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

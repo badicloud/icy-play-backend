@@ -1,4 +1,5 @@
 using IcyPlay.Domain.Bookings;
+using IcyPlay.Domain.Payments;
 
 namespace IcyPlay.Application.Bookings;
 
@@ -68,6 +69,13 @@ public interface IBookingNotifier
     /// sent when a person at the venue has actually checked the payment.
     /// </summary>
     Task BookingConfirmedAsync(Booking booking, CancellationToken ct);
+
+    /// <summary>
+    /// Tells everybody on the venue's desk that a booking was paid through the
+    /// gateway and is already confirmed. Nothing to check and nothing to press:
+    /// the letter is so the diary does not change without them.
+    /// </summary>
+    Task BookingPaidOnlineAsync(Booking booking, OnlinePayment payment, CancellationToken ct);
 
     /// <summary>
     /// Tells the customer the venue turned their payment down: that the court

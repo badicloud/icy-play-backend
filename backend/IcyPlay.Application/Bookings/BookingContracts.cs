@@ -268,7 +268,13 @@ public sealed record BookingDetail(
     /// up on the wrong third of the day.
     /// </summary>
     bool IsInProgress,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    /// <summary>
+    /// How this booking is paid: <c>Manual</c>, a GCash receipt the venue
+    /// checks, or <c>Direct</c>, through the payment gateway. Decides what the
+    /// checkout's second step shows; the customer does not choose.
+    /// </summary>
+    string PaymentChannel);
 
 /// <summary>
 /// One thing that happened to a booking.
@@ -374,6 +380,13 @@ public enum BookingFailure
     NoReceipt,
     /// <summary>The booking is not waiting to be paid for, so this step does not apply.</summary>
     NotAwaitingPayment,
+    /// <summary>
+    /// The booking is paid through the payment gateway, which confirms it by
+    /// itself, so there is no receipt to send.
+    /// </summary>
+    PaidOnline,
+    /// <summary>The booking is not confirmed, so there is no payment to give a receipt for.</summary>
+    NotConfirmed,
     /// <summary>
     /// The court asked for costs more than the booking has been settled for.
     ///
@@ -700,7 +713,13 @@ public sealed record MoveQuoteResponse(
     /// Answered per request rather than once with the booking, because it
     /// turns over while the screen is open.
     /// </summary>
-    bool IsInPlay)
+    bool IsInPlay,
+    /// <summary>
+    /// How the difference would be paid, by the venue's term now: <c>Manual</c>,
+    /// a receipt the desk checks and then approves, or <c>Direct</c>, through
+    /// the gateway, which moves the booking itself once paid.
+    /// </summary>
+    string PaymentChannel = Domain.Payments.PaymentMode.Manual)
 {
     public bool IsUpgrade => BalanceDue > 0m;
 }
@@ -741,7 +760,12 @@ public sealed record UpgradeRequestResponse(
     string? ReceiptUrl,
     /// <summary>Why the venue said no, when it did.</summary>
     string? DeclineReason,
-    IReadOnlyCollection<UpgradeSlotResponse> Slots);
+    IReadOnlyCollection<UpgradeSlotResponse> Slots,
+    /// <summary>
+    /// <c>Manual</c>, a receipt the venue checks, or <c>Direct</c>, through the
+    /// payment gateway — which, paid in time, moves the booking by itself.
+    /// </summary>
+    string PaymentChannel);
 
 /// <summary>One hour an upgrade is asking for, at the price it was quoted.</summary>
 public sealed record UpgradeSlotResponse(

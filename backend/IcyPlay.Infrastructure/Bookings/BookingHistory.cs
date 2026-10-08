@@ -107,6 +107,9 @@ internal static class BookingHistory
             AuditAction.BookingMoveApproved => "The venue agreed to the move.",
             AuditAction.BookingMoveDeclined => "The venue declined the move. The booking stays where it is.",
             AuditAction.BookingConfirmed => "The venue confirmed your booking.",
+            AuditAction.BookingPaidOnline => "Paid online. Your booking is confirmed.",
+            AuditAction.BookingOnlinePaymentNeedsAttention =>
+                "Your online payment arrived, and the venue is looking at it.",
             AuditAction.BookingRejected => "The venue could not accept the payment.",
             AuditAction.BookingHoldExpired =>
                 "The hold ran out before payment arrived, so the hours went back on sale.",

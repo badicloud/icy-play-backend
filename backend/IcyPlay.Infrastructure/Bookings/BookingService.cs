@@ -191,7 +191,8 @@ public sealed class BookingService(
             dates[0],
             dates[^1],
             offering.HoldMinutes,
-            takenAt);
+            takenAt,
+            offering.PaymentMode);
 
         db.Bookings.Add(booking);
 
@@ -786,7 +787,8 @@ public sealed class BookingService(
             quote.HoldMinutes,
             request.Reason!,
             request.ReasonNote,
-            utcNow);
+            utcNow,
+            quote.PaymentMode);
 
         // Copied off the quote rather than pointing at it: these are hours the
         // booking does not hold yet, and may never hold. They carry the price
@@ -856,6 +858,12 @@ public sealed class BookingService(
         if (!waiting && upgrade.Status != UpgradeStatus.AwaitingApproval)
         {
             return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.NotAwaitingPayment);
+        }
+
+        // Paid through the gateway, which carries the move through by itself.
+        if (upgrade.IsPaidDirect)
+        {
+            return BookingResult<UpgradeRequestResponse>.Fail(BookingFailure.PaidOnline);
         }
 
         // Checked exactly as a booking's own receipt is. The browser reports
@@ -1023,7 +1031,8 @@ public sealed class BookingService(
                     slot.StartsAt,
                     slot.EndsAt,
                     slot.Amount))
-        ]);
+        ],
+        upgrade.PaymentChannel);
 
     /// <summary>The hours an upgrade is asking for, as a person would say them.</summary>
     private static string Hours(BookingUpgradeRequest upgrade)
@@ -1069,7 +1078,8 @@ public sealed class BookingService(
         ],
         Math.Max(0m, quote.RentalNew - quote.RentalNow),
         quote.HoldMinutes,
-        quote.IsInPlay);
+        quote.IsInPlay,
+        quote.PaymentMode);
 
     /// <summary>
     /// What a booking would come to on another court, and what that leaves the
@@ -1337,7 +1347,8 @@ public sealed class BookingService(
             // refused a date to every booking later the same day — an eight
             // o'clock tonight is today and has not begun, and the server would
             // happily have moved it to tomorrow.
-            ordered[0].Date.ToDateTime(ordered[0].StartsAt) <= venueNow.DateTime));
+            ordered[0].Date.ToDateTime(ordered[0].StartsAt) <= venueNow.DateTime,
+            target.PaymentMode));
     }
 
     /// <summary>
@@ -1642,6 +1653,14 @@ public sealed class BookingService(
             return BookingResult<BookingDetail>.Fail(BookingFailure.NotAwaitingPayment);
         }
 
+        // Paid through the gateway, which confirms it by itself. A receipt as
+        // well would put a booking in front of the desk that may already be
+        // paid, and a customer who paid both ways has paid twice.
+        if (booking.IsPaidDirect)
+        {
+            return BookingResult<BookingDetail>.Fail(BookingFailure.PaidOnline);
+        }
+
         if (booking.HasLapsedAt(now))
         {
             // The hours went back on sale while they were paying. Better to say
@@ -1847,9 +1866,12 @@ public sealed class BookingService(
             unit.CourtSport.Sport.Name,
             facility.TimeZone,
             contract.PlatformHourlyRate,
-            owner.PartialBookingExpiryMinutes,
+            // Paying through the gateway means leaving the site and coming
+            // back, so a direct term holds for longer than a receipt does.
+            contract.TakesDirectPayment ? contract.OnlineHoldMinutes : owner.PartialBookingExpiryMinutes,
             owner.BookingWindowDays > 0 ? owner.BookingWindowDays : BookingWindow.DefaultDays,
-            [.. closed.Select(period => (period.StartsAt, period.EndsAt))]);
+            [.. closed.Select(period => (period.StartsAt, period.EndsAt))],
+            contract.PaymentMode);
     }
 
     /// <summary>
@@ -2273,7 +2295,9 @@ public sealed class BookingService(
         /// Whether the booking has begun on the venue's clock, which is what
         /// decides whether the move screen offers dates.
         /// </summary>
-        bool IsInPlay);
+        bool IsInPlay,
+        /// <summary>How the venue's term says the difference is paid, if there is one.</summary>
+        string PaymentMode);
 
     // -------------------------------------------------------------- the rules
 
@@ -2493,7 +2517,8 @@ public sealed class BookingService(
         BookingMove.IsMovable(booking.Status) && IsInsideNotice(booking, timeZone, moveNoticeDays),
         HasStarted(booking, timeZone),
         IsPlayingNow(booking, timeZone),
-        booking.CreatedAt);
+        booking.CreatedAt,
+        booking.PaymentChannel);
 
     /// <summary>
     /// Whether the first hour has begun, on the venue's clock.
@@ -2601,7 +2626,9 @@ public sealed class BookingService(
         int HoldMinutes,
         /// <summary>How many days ahead this venue sells, today included.</summary>
         int WindowDays,
-        IReadOnlyCollection<(DateTimeOffset StartsAt, DateTimeOffset? EndsAt)> Closures)
+        IReadOnlyCollection<(DateTimeOffset StartsAt, DateTimeOffset? EndsAt)> Closures,
+        /// <summary>How the term in force says this venue is paid. See <see cref="Domain.Payments.PaymentMode"/>.</summary>
+        string PaymentMode)
     {
         /// <summary>
         /// The moment, on the venue's wall clock. Opening hours, peak windows

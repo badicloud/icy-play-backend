@@ -1,7 +1,9 @@
 using System.Security.Claims;
 using IcyPlay.Api.Common;
 using IcyPlay.Application.Bookings;
+using IcyPlay.Application.Payments;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.Payments;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,8 +25,73 @@ namespace IcyPlay.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/v1/bookings")]
-public sealed class BookingsController(IBookingService bookings) : ControllerBase
+public sealed class BookingsController(
+    IBookingService bookings,
+    IOnlinePaymentService payments,
+    IBookingReceiptService receipts) : ControllerBase
 {
+    /// <summary>
+    /// What was paid for a confirmed booking, line by line, with the payment
+    /// gateway's fee broken out. IcyPlay's account of the payment, not an
+    /// official receipt — that is the venue's to issue.
+    /// </summary>
+    [HttpGet("{bookingId:guid}/receipt")]
+    public async Task<IActionResult> Receipt(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await receipts.GetAsync(bookingId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<BookingReceipt>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
+    /// Opens the payment gateway's checkout for a booking paid online, or
+    /// hands back the one already open. The browser is sent to the URL; the
+    /// booking is confirmed by the gateway's webhook, not by coming back.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/checkout")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> Checkout(Guid bookingId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await payments.StartCheckoutAsync(PaymentPurpose.Booking, bookingId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CheckoutStarted>(result.Value!))
+            : PaymentFailureResults.ToResult(result.Failure);
+    }
+
+    /// <summary>
+    /// Opens the payment gateway's checkout for the difference on an upgrade
+    /// paid online. Paid in time, with the hours still free, the booking moves
+    /// by itself.
+    /// </summary>
+    [HttpPost("{bookingId:guid}/upgrade/{upgradeId:guid}/checkout")]
+    [Authorize(Roles = UserRoleName.Customer)]
+    public async Task<IActionResult> UpgradeCheckout(Guid bookingId, Guid upgradeId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await payments.StartCheckoutAsync(PaymentPurpose.BookingUpgrade, upgradeId, userId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CheckoutStarted>(result.Value!))
+            : PaymentFailureResults.ToResult(result.Failure);
+    }
+
     /// <summary>
     /// What can be booked on one court on one date, hour by hour, with what
     /// each hour costs and why.
@@ -525,6 +592,14 @@ public sealed class BookingsController(IBookingService bookings) : ControllerBas
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "This booking is not waiting to be paid for."),
+            BookingFailure.NotConfirmed => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "There is no receipt until the booking is confirmed."),
+            BookingFailure.PaidOnline => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This booking is paid online, so there is no receipt to send."),
             _ => (StatusCodes.Status400BadRequest, ErrorCodes.BadRequest, "The request could not be completed.")
         };
 
