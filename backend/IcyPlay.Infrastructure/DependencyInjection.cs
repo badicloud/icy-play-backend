@@ -4,6 +4,7 @@ using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.Identity;
 using IcyPlay.Application.OpenPlays;
+using IcyPlay.Application.Payments;
 using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
@@ -12,6 +13,7 @@ using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
 using IcyPlay.Infrastructure.Identity;
 using IcyPlay.Infrastructure.OpenPlays;
+using IcyPlay.Infrastructure.Payments;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
@@ -88,14 +90,30 @@ public static class DependencyInjection
         services.AddSingleton<CatalogCacheSignal>();
         services.AddScoped<IActivityCatalog, ActivityCatalog>();
         services.AddScoped<IBookingService, BookingService>();
-        services.AddScoped<IDeskService, DeskService>();
+        // Concrete as well: an upgrade paid online is carried out by the same
+        // rule the desk approves one with.
+        services.AddScoped<DeskService>();
+        services.AddScoped<IDeskService>(provider => provider.GetRequiredService<DeskService>());
         services.AddScoped<IPlatformReportService, PlatformReportService>();
         services.AddScoped<IFacilityAttendantService, FacilityAttendantService>();
         services.AddScoped<IBookingNotifier, BookingNotifier>();
+        services.AddScoped<IBookingReceiptService, BookingReceiptService>();
         services.AddHttpClient<ITransactionalEmailSender, MailjetTransactionalEmailSender>(client =>
         {
             client.BaseAddress = new Uri("https://api.mailjet.com/v3.1/");
         });
+        services.Configure<PayMongoOptions>(
+            configuration.GetSection(PayMongoOptions.SectionName));
+        services.AddHttpClient<IPaymentGateway, PayMongoGateway>(client =>
+        {
+            client.Timeout = TimeSpan.FromSeconds(30);
+        });
+        services.AddScoped<IOnlinePaymentService, OnlinePaymentService>();
+        services.AddScoped<IDeskTransactionService, DeskTransactionService>();
+        // One per thing that can be paid online. A new one is a new line here.
+        services.AddScoped<IPaymentPurposeHandler, BookingPaymentHandler>();
+        services.AddScoped<IPaymentPurposeHandler, UpgradePaymentHandler>();
+        services.AddScoped<IPaymentPurposeHandler, OpenPlayPaymentHandler>();
 
         return services;
     }
