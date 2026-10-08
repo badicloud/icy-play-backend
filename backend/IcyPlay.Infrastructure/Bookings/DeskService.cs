@@ -43,6 +43,7 @@ public sealed class DeskService(
                 facility.Id,
                 facility.Name,
                 facility.TimeZone,
+                facility.FacilityOwnerId,
                 CanSeeMoney = facility.FacilityOwner.UserId == userId
                     || facility.Attendants.Any(attendant =>
                         attendant.UserId == userId && attendant.IsActive && attendant.CanSeeMoney)
@@ -50,15 +51,34 @@ public sealed class DeskService(
             .ToListAsync(ct);
 
         var now = timeProvider.GetUtcNow();
+        var ownerIds = rows.Select(row => row.FacilityOwnerId).Distinct().ToArray();
+
+        // A handful of terms per owner, one a year. Which is in force is asked
+        // per venue below, on that venue's own date.
+        var terms = await db.FacilityOwnerContracts
+            .AsNoTracking()
+            .Where(contract => ownerIds.Contains(contract.FacilityOwnerId) && contract.CancelledAt == null)
+            .Select(contract => new { contract.FacilityOwnerId, contract.StartDate, contract.EndDate, contract.PaymentMode })
+            .ToListAsync(ct);
 
         // Each venue's own today, worked out here where the clock is trusted.
         return
         [
-            .. rows.Select(row => new DeskVenue(
-                row.Id,
-                row.Name,
-                row.CanSeeMoney,
-                DateOnly.FromDateTime(VenueClock.LocalNowIn(row.TimeZone, now).DateTime)))
+            .. rows.Select(row =>
+            {
+                var today = DateOnly.FromDateTime(VenueClock.LocalNowIn(row.TimeZone, now).DateTime);
+                var term = terms.FirstOrDefault(candidate =>
+                    candidate.FacilityOwnerId == row.FacilityOwnerId
+                    && candidate.StartDate <= today
+                    && today <= candidate.EndDate);
+
+                return new DeskVenue(
+                    row.Id,
+                    row.Name,
+                    row.CanSeeMoney,
+                    today,
+                    term?.PaymentMode ?? Domain.Payments.PaymentMode.Manual);
+            })
         ];
     }
 
@@ -1136,8 +1156,56 @@ public sealed class DeskService(
             return DeskResult<DeskUpgrade>.Fail(DeskFailure.NoReceipt);
         }
 
-        var booking = upgrade.Booking;
         var utcNow = timeProvider.GetUtcNow();
+        var (failure, wasOn) = await CarryOutUpgradeAsync(
+            upgrade,
+            actor,
+            () => upgrade.Approve(userId, utcNow),
+            utcNow,
+            ct);
+
+        if (failure != DeskFailure.None)
+        {
+            return DeskResult<DeskUpgrade>.Fail(failure);
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        logger.LogInformation(
+            "Upgrade {UpgradeId} approved at the desk. Booking {BookingId} moved to {BookableCourtId}.",
+            upgradeId,
+            upgrade.BookingId,
+            upgrade.ToBookableCourtId);
+
+        // After the save, and best effort, the same as a confirmation: the
+        // booking has moved whether or not the letter goes.
+        await TellTheCustomerAsync(
+            upgrade,
+            upgrade.IsFree
+                ? notifier.MoveApprovedAsync(upgrade, wasOn!, ct)
+                : notifier.UpgradeApprovedAsync(upgrade, ct),
+            "approved");
+
+        return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
+    }
+
+    /// <summary>
+    /// Moves the booking onto the hours an upgrade asked for, if they can still
+    /// be had, without saving. What a person's approval at the desk does, and
+    /// what an upgrade paid online does by itself — one rule, so the two can
+    /// never disagree about whether a move was sound.
+    /// </summary>
+    /// <param name="upgrade">Loaded with its slots, and its booking's.</param>
+    /// <param name="approve">Marks the upgrade approved: by a person, or by the payment.</param>
+    /// <returns>Nothing on success, with the court the booking was on.</returns>
+    internal async Task<(DeskFailure Failure, string? WasOn)> CarryOutUpgradeAsync(
+        BookingUpgradeRequest upgrade,
+        AuditActor actor,
+        Action approve,
+        DateTimeOffset utcNow,
+        CancellationToken ct)
+    {
+        var booking = upgrade.Booking;
 
         var target = await db.BookableCourts
             .Include(unit => unit.Court)
@@ -1145,7 +1213,7 @@ public sealed class DeskService(
 
         if (target is null)
         {
-            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeNotFound);
+            return (DeskFailure.UpgradeNotFound, null);
         }
 
         var venueNow = await VenueNowAsync(target.Court.FacilityId, utcNow, ct);
@@ -1169,12 +1237,12 @@ public sealed class DeskService(
 
         if (played.Length + upgrade.Slots.Count != booking.Slots.Count)
         {
-            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeStale);
+            return (DeskFailure.UpgradeStale, null);
         }
 
         if (await IsTakenAsync(target, booking.Id, [.. upgrade.Slots], utcNow, ct))
         {
-            return DeskResult<DeskUpgrade>.Fail(DeskFailure.UpgradeHoursTaken);
+            return (DeskFailure.UpgradeHoursTaken, null);
         }
 
         // Priced as it was quoted, not as the court costs today. The customer
@@ -1203,7 +1271,7 @@ public sealed class DeskService(
         db.BookingSlots.AddRange(moved);
         booking.Settle(upgrade.BalanceDue, utcNow);
 
-        upgrade.Approve(userId, utcNow);
+        approve();
 
         var because = upgrade.MoveReason is null
             ? string.Empty
@@ -1232,24 +1300,7 @@ public sealed class DeskService(
             booking.CourtName,
             upgrade.RequestedByUserId));
 
-        await db.SaveChangesAsync(ct);
-
-        logger.LogInformation(
-            "Upgrade {UpgradeId} approved at the desk. Booking {BookingId} moved to {BookableCourtId}.",
-            upgradeId,
-            booking.Id,
-            target.Id);
-
-        // After the save, and best effort, the same as a confirmation: the
-        // booking has moved whether or not the letter goes.
-        await TellTheCustomerAsync(
-            upgrade,
-            upgrade.IsFree
-                ? notifier.MoveApprovedAsync(upgrade, wasOn, ct)
-                : notifier.UpgradeApprovedAsync(upgrade, ct),
-            "approved");
-
-        return DeskResult<DeskUpgrade>.Success(await OneUpgradeAsync(upgradeId, ct));
+        return (DeskFailure.None, wasOn);
     }
 
     public async Task<DeskResult<DeskUpgrade>> DeclineUpgradeAsync(
@@ -1729,7 +1780,24 @@ public sealed class DeskService(
         return DeskResult<DeskSettings>.Success(Settings(owner, userId));
     }
 
-    private static DeskSettings Settings(Domain.Identity.FacilityOwner owner, Guid userId) => new(
+    private DeskSettings Settings(Domain.Identity.FacilityOwner owner, Guid userId)
+    {
+        // The term in force, for how the venue is paid. Today by the server's
+        // UTC date: a term changes over at most once a year, and being a few
+        // hours early or late on that one night shows a label, decides nothing.
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var term = owner.Contracts
+            .Where(contract => contract.CancelledAt is null && contract.StartDate <= today)
+            .OrderByDescending(contract => contract.StartDate)
+            .FirstOrDefault();
+
+        return Settings(owner, userId, term);
+    }
+
+    private static DeskSettings Settings(
+        Domain.Identity.FacilityOwner owner,
+        Guid userId,
+        Domain.Facilities.FacilityOwnerContract? term) => new(
         owner.PartialBookingExpiryMinutes,
         owner.MoveLimit,
         PaymentHold.MinimumMinutes,
@@ -1743,7 +1811,9 @@ public sealed class DeskService(
         BookingWindow.SmallestDays,
         BookingWindow.LargestDays,
         owner.HasOpenPlayCheckInCode,
-        owner.UserId == userId);
+        owner.UserId == userId,
+        term?.PaymentMode ?? Domain.Payments.PaymentMode.Manual,
+        term?.OnlineHoldMinutes ?? Domain.Payments.OnlineHold.DefaultMinutes);
 
     private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
         new()
@@ -1768,7 +1838,11 @@ public sealed class DeskService(
 
         return ownerId == Guid.Empty
             ? null
-            : await db.FacilityOwners.FirstOrDefaultAsync(candidate => candidate.Id == ownerId, ct);
+            : await db.FacilityOwners
+                // The terms come along so the settings can say how the venue
+                // is paid. A handful of rows, one a year.
+                .Include(candidate => candidate.Contracts)
+                .FirstOrDefaultAsync(candidate => candidate.Id == ownerId, ct);
     }
 
     /// <summary>
@@ -1924,7 +1998,8 @@ public sealed class DeskService(
                     slot.Amount,
                     slot.PlatformFee))
         ],
-        row.Booking.CreatedAt);
+        row.Booking.CreatedAt,
+        row.Booking.PaymentChannel);
 
     /// <summary>
     /// A booking with the few things around it the desk needs: which venue it

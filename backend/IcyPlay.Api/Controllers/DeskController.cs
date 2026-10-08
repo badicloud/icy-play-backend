@@ -2,6 +2,7 @@ using System.Security.Claims;
 using IcyPlay.Api.Common;
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
+using IcyPlay.Application.Payments;
 using IcyPlay.Domain.Identity;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,7 +21,10 @@ namespace IcyPlay.Api.Controllers;
 [ApiController]
 [Authorize(Roles = $"{UserRoleName.FacilityOwner},{UserRoleName.FacilityAttendant}")]
 [Route("api/v1/desk")]
-public sealed class DeskController(IDeskService desk, IBookingService bookings) : ControllerBase
+public sealed class DeskController(
+    IDeskService desk,
+    IBookingService bookings,
+    IDeskTransactionService transactions) : ControllerBase
 {
     /// <summary>
     /// The venues this person may confirm bookings for. One venue needs no
@@ -36,6 +40,55 @@ public sealed class DeskController(IDeskService desk, IBookingService bookings) 
 
         return Ok(new ApiEnvelope<IReadOnlyCollection<DeskVenue>>(
             await desk.VenuesAsync(userId, ct)));
+    }
+
+    /// <summary>
+    /// Payments made online at this person's venues, for those whose money
+    /// they may see. What a venue paid online has in place of a receipt queue.
+    /// </summary>
+    [HttpGet("transactions")]
+    public async Task<IActionResult> Transactions(
+        [FromQuery] Guid? facilityId = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken ct = default)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await transactions.ListAsync(userId, facilityId, page, pageSize, ct);
+
+        return Ok(new ApiListEnvelope<DeskTransaction>(
+            result.Items,
+            new PaginationMeta(result.Page, result.PageSize, result.TotalItems, result.TotalPages)));
+    }
+
+    /// <summary>The badge: how many arrived since this person last looked, and how many need a person.</summary>
+    [HttpGet("transactions/summary")]
+    public async Task<IActionResult> TransactionSummary(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        return Ok(new ApiEnvelope<DeskTransactionSummary>(await transactions.SummaryAsync(userId, ct)));
+    }
+
+    /// <summary>Opening the list clears this person's badge, and only theirs.</summary>
+    [HttpPost("transactions/seen")]
+    public async Task<IActionResult> TransactionsSeen(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        await transactions.MarkSeenAsync(userId, ct);
+
+        return NoContent();
     }
 
     [HttpGet("bookings")]

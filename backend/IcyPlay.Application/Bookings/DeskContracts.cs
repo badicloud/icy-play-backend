@@ -41,7 +41,13 @@ public sealed record DeskBooking(
     /// <summary>Why it was turned down, when it was.</summary>
     string? DecisionReason,
     IReadOnlyCollection<BookedSlot> Slots,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    /// <summary>
+    /// <c>Manual</c>, paid by a receipt the desk checks, or <c>Direct</c>, paid
+    /// through the gateway and confirmed by it. A direct booking has no receipt
+    /// to show, and the desk should not go looking for one.
+    /// </summary>
+    string PaymentChannel = Domain.Payments.PaymentMode.Manual);
 
 /// <summary>A venue the signed-in person may confirm bookings for.</summary>
 /// <summary>
@@ -54,7 +60,18 @@ public sealed record DeskBooking(
 /// What a date picker greys out before, so the browser's own clock, which may
 /// be wrong or elsewhere, never decides it. Null where nobody asks.
 /// </param>
-public sealed record DeskVenue(Guid Id, string Name, bool CanSeeMoney = true, DateOnly? Today = null);
+/// <param name="PaymentMode">
+/// How customers pay this venue under the term in force today: <c>Manual</c>,
+/// receipts the desk checks, or <c>Direct</c>, through the payment gateway.
+/// What decides whether the desk shows confirmation queues or online
+/// transactions.
+/// </param>
+public sealed record DeskVenue(
+    Guid Id,
+    string Name,
+    bool CanSeeMoney = true,
+    DateOnly? Today = null,
+    string PaymentMode = Domain.Payments.PaymentMode.Manual);
 
 /// <summary>
 /// One attendant as their owner sees them on the desk: who, which venue, and
@@ -195,7 +212,15 @@ public sealed record DeskSettings(
     /// <summary>Whether the venue has a code for checking open play players in by hand.</summary>
     bool HasOpenPlayCheckInCode = false,
     /// <summary>Only the owner generates the code; an attendant is told it.</summary>
-    bool CanSetOpenPlayCheckInCode = false);
+    bool CanSetOpenPlayCheckInCode = false,
+    /// <summary>
+    /// How customers pay under the term in force: <c>Manual</c> or <c>Direct</c>.
+    /// Shown, never set, here: it is part of the agreement, and only the
+    /// platform admin changes it.
+    /// </summary>
+    string PaymentMode = Domain.Payments.PaymentMode.Manual,
+    /// <summary>How long a booking paid online holds its court, under that term.</summary>
+    int OnlineHoldMinutes = Domain.Payments.OnlineHold.DefaultMinutes);
 
 /// <summary>
 /// A freshly generated check-in code, with the settings as they now stand.
