@@ -78,7 +78,7 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             Admin(),
             CancellationToken.None);
 
-        // Assert: stored, and the trail says what each went from and to — the
+        // Assert: stored, and the trail says what each went from and to â the
         // venue's own settings history reads this same entry.
         var stored = await context.FacilityOwners
             .AsNoTracking()
@@ -268,7 +268,7 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         // Assert
         var contract = await context.FacilityOwnerContracts.AsNoTracking()
             .SingleAsync(candidate => candidate.Id == contractId);
-        var entry = await LatestAsync(context, AuditAction.ContractRatesUpdated);
+        var entry = await LatestAsync(context, AuditAction.ContractRatesUpdated, contractId);
 
         using (new AssertionScope())
         {
@@ -278,6 +278,175 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
             Fields(entry.OldValuesJson)["platformHourlyRate"].Should().Be("15.00");
             entry.Reason.Should().Be("Renegotiated at renewal");
         }
+    }
+
+    [Fact]
+    public async Task UpdateContractRatesAsync_ShouldSwitchTheTermToDirectPaymentOnTheTrail()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Direct Pay Courts");
+        var contractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+
+        // Act
+        var result = await sut.UpdateContractRatesAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractRatesRequest(15.00m, 3.00m, "Signed for online payment", "Direct", 20),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var contract = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == contractId);
+        var entry = await LatestAsync(context, AuditAction.ContractRatesUpdated, contractId);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            contract.PaymentMode.Should().Be("Direct");
+            contract.OnlineHoldMinutes.Should().Be(20);
+            Fields(entry.OldValuesJson)["paymentMode"].Should().Be("Manual");
+            Fields(entry.NewValuesJson)["paymentMode"].Should().Be("Direct");
+        }
+    }
+
+    [Fact]
+    public async Task UpdateContractRatesAsync_ShouldLeavePaymentTermsAloneWhenNotSent()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Rates Only Courts");
+        var contractId = await context.FacilityOwnerContracts
+            .Where(contract => contract.FacilityOwnerId == owner.FacilityOwnerId)
+            .Select(contract => contract.Id)
+            .SingleAsync();
+        await sut.UpdateContractRatesAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractRatesRequest(15.00m, 3.00m, null, "Direct", 20),
+            Admin(),
+            CancellationToken.None);
+
+        // Act
+        await sut.UpdateContractRatesAsync(
+            owner.FacilityOwnerId,
+            contractId,
+            new UpdateContractRatesRequest(18.00m, 3.00m, null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var contract = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == contractId);
+
+        using (new AssertionScope())
+        {
+            contract.PlatformHourlyRate.Should().Be(18.00m);
+            contract.PaymentMode.Should().Be("Direct");
+            contract.OnlineHoldMinutes.Should().Be(20);
+        }
+    }
+
+    [Fact]
+    public async Task ActivateContractAsync_ShouldStartAFutureTermTodayOnceTheCurrentOneIsCancelled()
+    {
+        // Arrange: the current term cancelled, and next year's already signed.
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Early Start Courts");
+        var current = await context.FacilityOwnerContracts
+            .SingleAsync(contract => contract.FacilityOwnerId == owner.FacilityOwnerId);
+        var next = new FacilityOwnerContract(
+            owner.FacilityOwnerId,
+            current.EndDate.AddDays(1),
+            current.EndDate.AddYears(1),
+            Guid.NewGuid(),
+            null,
+            Now);
+        context.FacilityOwnerContracts.Add(next);
+        current.Cancel(Now);
+        await context.SaveChangesAsync();
+
+        // Act
+        var result = await sut.ActivateContractAsync(
+            owner.FacilityOwnerId,
+            next.Id,
+            new ActivateContractRequest("Old term cancelled by mistake"),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        var started = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(candidate => candidate.Id == next.Id);
+        var entry = await LatestAsync(context, AuditAction.ContractActivated, next.Id);
+
+        using (new AssertionScope())
+        {
+            result.Succeeded.Should().BeTrue();
+            started.StartDate.Should().Be(DateOnly.FromDateTime(Now.UtcDateTime));
+            started.EndDate.Should().Be(next.EndDate);
+            entry.Reason.Should().Be("Old term cancelled by mistake");
+        }
+    }
+
+    [Fact]
+    public async Task ActivateContractAsync_ShouldRefuseWhileAnotherTermIsStillLive()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Still Live Courts");
+        var current = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(contract => contract.FacilityOwnerId == owner.FacilityOwnerId);
+        var next = new FacilityOwnerContract(
+            owner.FacilityOwnerId,
+            current.EndDate.AddDays(1),
+            current.EndDate.AddYears(1),
+            Guid.NewGuid(),
+            null,
+            Now);
+        context.FacilityOwnerContracts.Add(next);
+        await context.SaveChangesAsync();
+
+        // Act
+        var result = await sut.ActivateContractAsync(
+            owner.FacilityOwnerId,
+            next.Id,
+            new ActivateContractRequest(null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            result.Failure.Should().Be(EditFailure.OverlappingContract);
+            (await context.FacilityOwnerContracts.AsNoTracking()
+                    .SingleAsync(candidate => candidate.Id == next.Id))
+                .StartDate.Should().Be(current.EndDate.AddDays(1));
+        }
+    }
+
+    [Fact]
+    public async Task ActivateContractAsync_ShouldRefuseATermThatHasAlreadyStarted()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (owner, sut) = await OnboardAsync(context, "Already Started Courts");
+        var current = await context.FacilityOwnerContracts.AsNoTracking()
+            .SingleAsync(contract => contract.FacilityOwnerId == owner.FacilityOwnerId);
+
+        // Act
+        var result = await sut.ActivateContractAsync(
+            owner.FacilityOwnerId,
+            current.Id,
+            new ActivateContractRequest(null),
+            Admin(),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(EditFailure.AlreadyStarted);
     }
 
     [Fact]
@@ -831,6 +1000,18 @@ public sealed class FacilityOwnerEditTests(SqlServerDatabaseFixture database)
         await context.AuditLogs
             .AsNoTracking()
             .Where(entry => entry.Action == action)
+            .OrderByDescending(entry => entry.Id)
+            .FirstAsync();
+
+    /// <summary>
+    /// The entry for one record. Ids are GUIDs and every entry here shares the
+    /// test clock, so "the latest" across the table is whichever sorts last --
+    /// another test's, as often as not.
+    /// </summary>
+    private static async Task<AuditLog> LatestAsync(AppDbContext context, string action, Guid entityId) =>
+        await context.AuditLogs
+            .AsNoTracking()
+            .Where(entry => entry.Action == action && entry.EntityId == entityId)
             .OrderByDescending(entry => entry.Id)
             .FirstAsync();
 

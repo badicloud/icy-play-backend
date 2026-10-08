@@ -1250,6 +1250,9 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
 
         public Task PaymentSubmittedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
+        public Task BookingPaidOnlineAsync(Booking booking, IcyPlay.Domain.Payments.OnlinePayment payment, CancellationToken ct) =>
+            Task.CompletedTask;
+
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct)
         {
             Confirmed.Add(booking.Id);

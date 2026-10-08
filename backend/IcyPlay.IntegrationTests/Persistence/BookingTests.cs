@@ -3987,6 +3987,228 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         }
     }
 
+    // ------------------------------------------------ paid online
+
+    /// <summary>
+    /// A booking made on receipts, a venue switched to online payment, and an
+    /// upgrade asked for after: the upgrade follows the venue's term now, and
+    /// paid in time it moves the booking with nobody at the desk asked.
+    /// </summary>
+    [Fact]
+    public async Task UpgradePaidOnline_ShouldMoveTheBookingByItselfWhenPaidInTime()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade Paid Online Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+        await PaidDirectAsync(context, floor);
+        context.ChangeTracker.Clear();
+
+        var asked = await CreateService(context).RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer, Reason: MoveReason.Weather),
+            CancellationToken.None);
+        var gateway = new StubGateway();
+        var payments = CreatePaymentService(context, gateway);
+        var checkout = await payments.StartCheckoutAsync(
+            Domain.Payments.PaymentPurpose.BookingUpgrade,
+            asked.Value!.Id,
+            floor.Customer,
+            CancellationToken.None);
+        gateway.Next = StubGateway.Paid("evt_upgrade_paid", gateway.LastSessionId!, Now.AddMinutes(5), asked.Value.BalanceDue);
+
+        // Act
+        var outcome = await payments.HandleWebhookAsync("{}", StubGateway.Signed, CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+        var upgrade = await context.BookingUpgradeRequests.AsNoTracking().SingleAsync(row => row.Id == asked.Value.Id);
+        var moved = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking);
+        var payment = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.SubjectId == asked.Value.Id);
+
+        using (new AssertionScope())
+        {
+            asked.Value.PaymentChannel.Should().Be(Domain.Payments.PaymentMode.Direct);
+            checkout.Succeeded.Should().BeTrue();
+            payment.VenueAmount.Should().Be(asked.Value.BalanceDue);
+            payment.PlatformFee.Should().Be(0m);
+            outcome.Should().Be(Application.Payments.WebhookOutcome.Accepted);
+            upgrade.Status.Should().Be(UpgradeStatus.Approved);
+            upgrade.SettledByUserId.Should().BeNull();
+            moved.BookableCourtId.Should().Be(dearer);
+            payment.Status.Should().Be(Domain.Payments.OnlinePaymentStatus.Paid);
+        }
+    }
+
+    [Fact]
+    public async Task UpgradePaidOnline_ShouldRefuseAReceipt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var floor = await FloorAsync(context, "Upgrade No Receipt Courts");
+        var sut = CreateService(context);
+        await PayableAsync(context, floor);
+        var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
+        var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
+        await PaidDirectAsync(context, floor);
+        context.ChangeTracker.Clear();
+        await CreateService(context).RequestUpgradeAsync(
+            booking,
+            floor.Customer,
+            new MoveBookingRequest(dearer, Reason: MoveReason.Weather),
+            CancellationToken.None);
+
+        // Act
+        var result = await CreateService(context).AttachUpgradeReceiptAsync(
+            booking,
+            floor.Customer,
+            new AttachReceiptRequest(Receipt),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(BookingFailure.PaidOnline);
+    }
+
+    [Fact]
+    public async Task OpenPlayPaidOnline_ShouldRegisterThePlayerWithAPassWhenPaidInTime()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Open Play Paid Online Courts");
+        await PaidDirectAsync(context, floor);
+        var registered = await CreateRegistrationService(context, new CapturingEmailSender()).RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+        var gateway = new StubGateway();
+        var payments = CreatePaymentService(context, gateway);
+        var checkout = await payments.StartCheckoutAsync(
+            Domain.Payments.PaymentPurpose.OpenPlayRegistration,
+            registered.Value!.RegistrationId,
+            floor.Customer,
+            CancellationToken.None);
+        gateway.Next = StubGateway.Paid("evt_open_play_paid", gateway.LastSessionId!, Now.AddMinutes(5), registered.Value.Total);
+
+        // Act
+        await payments.HandleWebhookAsync("{}", StubGateway.Signed, CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+        var registration = await context.OpenPlayRegistrations.AsNoTracking()
+            .SingleAsync(row => row.Id == registered.Value.RegistrationId);
+
+        using (new AssertionScope())
+        {
+            registered.Value.PaymentChannel.Should().Be(Domain.Payments.PaymentMode.Direct);
+            registered.Value.HoldsUntil.Should().Be(Now.AddMinutes(Domain.Payments.OnlineHold.DefaultMinutes));
+            checkout.Succeeded.Should().BeTrue();
+            registration.Status.Should().Be(BookingStatus.Confirmed);
+            registration.ConfirmedByUserId.Should().BeNull();
+            registration.CheckInToken.Should().NotBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayPaidOnline_ShouldRefuseAReceipt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Open Play No Receipt Courts");
+        await PaidDirectAsync(context, floor);
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
+
+        // Act
+        var result = await sut.SendReceiptAsync(
+            floor.Customer,
+            registered.Value!.RegistrationId,
+            new OpenPlayReceiptRequest(OpenPlayReceipt),
+            CancellationToken.None);
+
+        // Assert
+        result.Failure.Should().Be(OpenPlayRegistrationFailure.PaidOnline);
+    }
+
+    /// <summary>Switches the floor's owner to online payment on the term in force.</summary>
+    private static async Task PaidDirectAsync(AppDbContext context, Floor floor)
+    {
+        var ownerId = await OwnerIdAsync(context, floor);
+        var contract = await context.FacilityOwnerContracts.SingleAsync(row => row.FacilityOwnerId == ownerId);
+        contract.SetPaymentTerms(Domain.Payments.PaymentMode.Direct, Domain.Payments.OnlineHold.DefaultMinutes, Now);
+        await context.SaveChangesAsync();
+    }
+
+    private static Infrastructure.Payments.OnlinePaymentService CreatePaymentService(
+        AppDbContext context,
+        Application.Payments.IPaymentGateway gateway)
+    {
+        var clock = new FixedTimeProvider(Now);
+        var options = Options.Create(new BookingNotificationOptions
+        {
+            BookingUrl = "https://icyplay.test/bookings",
+            OpenPlayRegistrationUrl = "https://icyplay.test/open-play/registrations"
+        });
+
+        return new Infrastructure.Payments.OnlinePaymentService(
+            context,
+            gateway,
+            [
+                new UpgradePaymentHandler(context, CreateDeskService(context), new SilentNotifier(), options, clock),
+                new OpenPlayPaymentHandler(
+                    context,
+                    new OpenPlayNotifier(
+                        context,
+                        new CapturingEmailSender(),
+                        options,
+                        clock,
+                        NullLogger<OpenPlayNotifier>.Instance),
+                    new AuditLogger(context, clock),
+                    options,
+                    clock)
+            ],
+            clock,
+            NullLogger<Infrastructure.Payments.OnlinePaymentService>.Instance);
+    }
+
+    /// <summary>The gateway, as far as these need it: checkouts it opened, and the next event it vouches for.</summary>
+    private sealed class StubGateway : Application.Payments.IPaymentGateway
+    {
+        public const string Signed = "signed-by-gateway";
+
+        public string? LastSessionId { get; private set; }
+        public Application.Payments.GatewayEvent? Next { get; set; }
+
+        public string Provider => "PayMongo";
+
+        public bool IsConfigured => true;
+
+        public static Application.Payments.GatewayEvent Paid(string eventId, string sessionId, DateTimeOffset paidAt, decimal net) =>
+            new(
+                eventId,
+                Infrastructure.Payments.PayMongoGateway.CheckoutPaidEvent,
+                LiveMode: false,
+                sessionId,
+                new Application.Payments.GatewayPaidPayment($"pay_{eventId}", "qrph", net + 5m, 5m, net, paidAt));
+
+        public Task<Application.Payments.CheckoutSessionCreated> CreateCheckoutAsync(
+            Application.Payments.CheckoutRequest request,
+            CancellationToken ct)
+        {
+            LastSessionId = $"cs_{Guid.NewGuid():N}";
+
+            return Task.FromResult(new Application.Payments.CheckoutSessionCreated(LastSessionId, $"https://checkout.test/{LastSessionId}"));
+        }
+
+        public Task<Application.Payments.GatewayPaidPayment?> GetPaidPaymentAsync(string checkoutSessionId, CancellationToken ct) =>
+            Task.FromResult(Next?.Payment);
+
+        public Application.Payments.GatewayEvent? ReadEvent(string rawBody, string? signatureHeader) =>
+            signatureHeader == Signed ? Next : null;
+    }
+
     // ------------------------------------------------ open play registrations
 
     private const string OpenPlayReceipt =
@@ -4812,6 +5034,9 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         public Task PaymentSubmittedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
+
+        public Task BookingPaidOnlineAsync(Booking booking, IcyPlay.Domain.Payments.OnlinePayment payment, CancellationToken ct) =>
+            Task.CompletedTask;
 
         public Task BookingDeclinedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 

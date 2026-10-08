@@ -1,5 +1,6 @@
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Facilities;
+using IcyPlay.Domain.Payments;
 
 namespace IcyPlay.UnitTests.TestData;
 
@@ -17,6 +18,8 @@ public sealed class BookingBuilder
     private TimeOnly _startsAt = new(13, 0);
     private int _hours = 3;
     private BookingStatus _status = BookingStatus.Confirmed;
+    private string _paymentChannel = PaymentMode.Manual;
+    private int _holdMinutes = 30;
     private readonly List<(TimeOnly StartsAt, TimeOnly EndsAt)> _explicitHours = [];
 
     public BookingBuilder On(DateOnly date)
@@ -40,6 +43,18 @@ public sealed class BookingBuilder
     public BookingBuilder WithStatus(BookingStatus status)
     {
         _status = status;
+        return this;
+    }
+
+    /// <summary>
+    /// Paid through the payment gateway rather than by receipt, with the
+    /// gateway's hold. Only meaningful with a status that has not been
+    /// through the desk: a direct booking never is.
+    /// </summary>
+    public BookingBuilder PaidDirect(int holdMinutes = OnlineHold.DefaultMinutes)
+    {
+        _paymentChannel = PaymentMode.Direct;
+        _holdMinutes = holdMinutes;
         return this;
     }
 
@@ -76,8 +91,9 @@ public sealed class BookingBuilder
             platformHourlyRate: 15m,
             startDate: _date,
             endDate: _date,
-            holdMinutes: 30,
-            createdAt: createdAt);
+            holdMinutes: _holdMinutes,
+            createdAt: createdAt,
+            paymentChannel: _paymentChannel);
 
         var hours = _explicitHours.Count > 0
             ? _explicitHours

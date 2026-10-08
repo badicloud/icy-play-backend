@@ -1256,6 +1256,9 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
 
         public Task BookingConfirmedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
+        public Task BookingPaidOnlineAsync(Booking booking, IcyPlay.Domain.Payments.OnlinePayment payment, CancellationToken ct) =>
+            Task.CompletedTask;
+
         public Task BookingDeclinedAsync(Booking booking, CancellationToken ct) => Task.CompletedTask;
 
         public Task UpgradeSubmittedAsync(BookingUpgradeRequest upgrade, CancellationToken ct) =>
