@@ -32,7 +32,7 @@
                   <tr><td class="email-title" style="padding-bottom: 12px; color: #071955; font-size: 34px; font-weight: 800; line-height: 42px;">Your court is booked</td></tr>
                   <tr><td style="padding-bottom: 18px;"><div style="width: 52px; height: 3px; border-radius: 999px; background-color: #1767f5;"></div></td></tr>
                   <tr><td style="padding-bottom: 14px; color: #33466b; font-size: 16px; line-height: 26px;">Hi {{var:recipient_name:"there"}},</td></tr>
-                  <tr><td style="padding-bottom: 26px; color: #526585; font-size: 16px; line-height: 26px;"><strong style="color: #071955;">{{var:facility_name}}</strong> has checked your payment and confirmed the booking. Thank you for using IcyPlay &mdash; the court is yours, so turn up and play.</td></tr>
+                  <tr><td style="padding-bottom: 26px; color: #526585; font-size: 16px; line-height: 26px;">{{var:confirmed_line:"Your booking is confirmed."}} Thank you for using IcyPlay &mdash; the court is yours, so turn up and play.</td></tr>
 
                   <tr>
                     <td style="padding: 20px 22px; border-radius: 12px; background-color: #eef5ff;">
@@ -63,8 +63,25 @@
                           <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:platform_fee}}</td>
                         </tr>
                         <tr>
-                          <td style="padding-top: 12px; border-top: 1px solid #dbe7f6; color: #071955; font-size: 16px; font-weight: 800; line-height: 24px;">Paid</td>
-                          <td align="right" style="padding-top: 12px; border-top: 1px solid #dbe7f6; color: #071955; font-size: 22px; font-weight: 800; line-height: 28px;">&#8369;{{var:total_amount}}</td>
+                          <td style="padding-top: 10px; border-top: 1px solid #dbe7f6; color: #33466b; font-size: 14px; font-weight: 700; line-height: 22px;">Booking total</td>
+                          <td align="right" style="padding-top: 10px; border-top: 1px solid #dbe7f6; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:total_amount}}</td>
+                        </tr>
+                        {% if var:has_processing_fee == 1 %}
+                        <tr>
+                          <td style="padding-top: 8px; color: #526585; font-size: 14px; line-height: 22px;">Payment processing fee<br><span style="color: #94a3b8; font-size: 12px;">{{var:payment_method:""}}, via PayMongo &middot; VAT incl.</span></td>
+                          <td align="right" valign="top" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:processing_fee:"0.00"}}</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                          <td style="padding-top: 12px; border-top: 1px solid #dbe7f6; color: #071955; font-size: 16px; font-weight: 800; line-height: 24px;">Amount paid</td>
+                          <td align="right" style="padding-top: 12px; border-top: 1px solid #dbe7f6; color: #071955; font-size: 22px; font-weight: 800; line-height: 28px;">&#8369;{{var:amount_paid:"0.00"}}</td>
+                        </tr>
+                        <tr>
+                          <td colspan="2" style="padding-top: 14px; color: #64748b; font-size: 12px; line-height: 19px;">
+                            Receipt {{var:receipt_number:""}} &middot; Paid with {{var:payment_method:""}}
+                            {% if var:has_processing_fee == 1 %}<br>Paid {{var:paid_at:""}} &middot; PayMongo ref {{var:payment_reference:""}}{% endif %}
+                            <br>This is IcyPlay&rsquo;s record of your payment, not an official receipt. For an official receipt, ask {{var:facility_name}}.
+                          </td>
                         </tr>
                       </table>
                     </td>
@@ -73,6 +90,12 @@
                   <tr>
                     <td align="center" style="padding: 26px 0 8px;">
                       <a class="email-button" href="{{var:booking_url}}" target="_blank" style="display: inline-block; min-width: 250px; padding: 16px 26px; border-radius: 9px; background-color: #1767f5; box-shadow: 0 8px 18px rgba(23, 103, 245, 0.24); color: #ffffff; font-size: 16px; font-weight: 700; line-height: 20px; text-align: center; text-decoration: none;">View your booking&nbsp;&nbsp;&#8250;</a>
+                    </td>
+                  </tr>
+
+                  <tr>
+                    <td align="center" style="padding: 4px 0 8px;">
+                      <a class="email-button" href="{{var:receipt_url:""}}" target="_blank" style="display: inline-block; min-width: 250px; padding: 15px 26px; border-radius: 9px; background-color: #ffffff; border: 1px solid #c7dcfb; color: #1767f5; font-size: 16px; font-weight: 700; line-height: 20px; text-align: center; text-decoration: none;">View or download your receipt</a>
                     </td>
                   </tr>
 
