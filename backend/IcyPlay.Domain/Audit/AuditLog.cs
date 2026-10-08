@@ -117,6 +117,12 @@ public static class AuditAction
     public const string OpenPlayPaymentSubmitted = "OpenPlayPaymentSubmitted";
     public const string OpenPlayRegistrationConfirmed = "OpenPlayRegistrationConfirmed";
     public const string OpenPlayRegistrationRejected = "OpenPlayRegistrationRejected";
+
+    /// <summary>The payment gateway reported a registration paid, in time, and it registered itself.</summary>
+    public const string OpenPlayPaidOnline = "OpenPlayPaidOnline";
+
+    /// <summary>A registration paid online that could not register the player by itself. The venue decides.</summary>
+    public const string OpenPlayOnlinePaymentNeedsAttention = "OpenPlayOnlinePaymentNeedsAttention";
     public const string OpenPlayCheckedIn = "OpenPlayCheckedIn";
     public const string OpenPlayCheckInUndone = "OpenPlayCheckInUndone";
     public const string OpenPlayCheckInWindowChanged = "OpenPlayCheckInWindowChanged";
@@ -163,10 +169,23 @@ public static class AuditAction
     /// </summary>
     public const string BookingHoldExpired = "BookingHoldExpired";
     public const string BookingConfirmed = "BookingConfirmed";
+
+    /// <summary>The payment gateway reported the booking paid, in time, and it confirmed itself.</summary>
+    public const string BookingPaidOnline = "BookingPaidOnline";
+
+    /// <summary>
+    /// The payment gateway reported a payment that could not confirm the booking by
+    /// itself — paid after the hold ran out, or for a booking no longer waiting. The
+    /// money is real; the venue decides.
+    /// </summary>
+    public const string BookingOnlinePaymentNeedsAttention = "BookingOnlinePaymentNeedsAttention";
     public const string BookingRejected = "BookingRejected";
     public const string FacilityAttendantMoneyAccessChanged = "FacilityAttendantMoneyAccessChanged";
     public const string ContractCommenced = "ContractCommenced";
     public const string ContractCancelled = "ContractCancelled";
+
+    /// <summary>A signed term that had not started yet was brought forward to start today.</summary>
+    public const string ContractActivated = "ContractActivated";
     public const string ContractDocumentReplaced = "ContractDocumentReplaced";
     public const string ContractRatesUpdated = "ContractRatesUpdated";
     public const string ContractTermUpdated = "ContractTermUpdated";

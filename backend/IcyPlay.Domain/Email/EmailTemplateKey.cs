@@ -37,6 +37,13 @@ public static class EmailTemplateKey
     /// </summary>
     public const string BookingConfirmed = "booking-confirmed";
 
+    /// <summary>
+    /// Tells the venue a booking was paid through the payment gateway and is
+    /// already confirmed. Unlike the receipt letter, nobody is being asked to
+    /// do anything.
+    /// </summary>
+    public const string BookingPaidOnline = "booking-paid-online";
+
     /// <summary>Tells the venue somebody has paid and is waiting to be confirmed.</summary>
     public const string BookingPaymentSubmitted = "booking-payment-submitted";
 

@@ -4,6 +4,7 @@ using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace IcyPlay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261008045850_SeedBookingPaidOnlineEmailTemplate")]
+    partial class SeedBookingPaidOnlineEmailTemplate
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -328,13 +331,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<string>("MoveReasonNote")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
-
-                    b.Property<string>("PaymentChannel")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("Manual");
 
                     b.Property<DateTimeOffset?>("ReceiptUploadedAt")
                         .HasColumnType("datetimeoffset");
@@ -2477,13 +2473,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("HoldsUntil")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<string>("PaymentChannel")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("Manual");
-
                     b.Property<decimal>("PlatformFee")
                         .HasColumnType("decimal(10,2)");
 
@@ -2569,37 +2558,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.ToTable("OpenPlaySessions", "dbo");
                 });
 
-            modelBuilder.Entity("IcyPlay.Domain.Payments.DeskReadMarker", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("Feed")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("nvarchar(40)");
-
-                    b.Property<DateTimeOffset>("SeenAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<DateTimeOffset?>("UpdatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "Feed")
-                        .IsUnique();
-
-                    b.ToTable("DeskReadMarkers", "dbo");
-                });
-
             modelBuilder.Entity("IcyPlay.Domain.Payments.OnlinePayment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2625,13 +2583,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasColumnType("datetimeoffset");
 
                     b.Property<Guid>("CustomerUserId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(300)
-                        .HasColumnType("nvarchar(300)");
-
-                    b.Property<Guid>("FacilityId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("FacilityOwnerId")
@@ -2667,11 +2618,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("nvarchar(40)");
 
-                    b.Property<byte[]>("RowVersion")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("rowversion");
-
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -2695,8 +2641,6 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("FacilityOwnerId", "Status");
 
                     b.HasIndex("Purpose", "SubjectId");
-
-                    b.HasIndex("FacilityId", "Status", "PaidAt");
 
                     b.ToTable("OnlinePayments", "dbo");
                 });

@@ -1,5 +1,6 @@
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Common;
+using IcyPlay.Domain.Payments;
 
 namespace IcyPlay.Domain.OpenPlays;
 
@@ -35,9 +36,16 @@ public sealed class OpenPlayRegistration : Entity
         OpenPlayPrice price,
         int holdMinutes,
         DateTimeOffset agreedToPolicyAt,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        string paymentChannel = PaymentMode.Manual)
     {
+        if (!PaymentMode.IsSupported(paymentChannel))
+        {
+            throw new ArgumentException($"'{paymentChannel}' is not a payment mode.", nameof(paymentChannel));
+        }
+
         SessionId = sessionId;
+        PaymentChannel = paymentChannel;
         CustomerUserId = customerUserId;
         RegistrationFee = price.RegistrationFee;
         Discount = price.Discount;
@@ -282,6 +290,37 @@ public sealed class OpenPlayRegistration : Entity
     /// The desk looked at the payment and it is good: the player is registered,
     /// and gets the QR that checks them in at this session.
     /// </summary>
+    /// <summary>
+    /// How the player pays: a receipt the desk checks, or the payment gateway.
+    /// The venue's term when they joined, kept.
+    /// </summary>
+    public string PaymentChannel { get; private set; } = PaymentMode.Manual;
+
+    public bool IsPaidDirect => PaymentChannel == PaymentMode.Direct;
+
+    /// <summary>Whether a payment that arrived at <paramref name="paidAt"/> registers the player by itself.</summary>
+    public bool CanBeConfirmedOnlineBy(DateTimeOffset paidAt) =>
+        IsPaidDirect && Status == BookingStatus.PendingPayment && paidAt < HoldsUntil;
+
+    /// <summary>
+    /// The payment gateway says the player paid, in time: they are registered
+    /// and get their check-in pass, with nobody at the desk asked.
+    /// <see cref="ConfirmedByUserId"/> stays empty, which is how the trail
+    /// tells this apart from a person's confirmation.
+    /// </summary>
+    public void ConfirmPaidOnline(DateTimeOffset paidAt, DateTimeOffset now)
+    {
+        if (!CanBeConfirmedOnlineBy(paidAt))
+        {
+            throw new InvalidOperationException("Only a registration paid online and in time can confirm itself.");
+        }
+
+        Status = BookingStatus.Confirmed;
+        ConfirmedAt = now;
+        CheckInToken ??= CheckInPass.NewToken();
+        UpdatedAt = now;
+    }
+
     public void Confirm(Guid confirmedByUserId, DateTimeOffset now)
     {
         if (Status != BookingStatus.PendingVerification)

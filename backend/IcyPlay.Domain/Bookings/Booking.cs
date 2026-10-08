@@ -1,5 +1,6 @@
 using IcyPlay.Domain.Common;
 using IcyPlay.Domain.Facilities;
+using IcyPlay.Domain.Payments;
 
 namespace IcyPlay.Domain.Bookings;
 
@@ -30,9 +31,16 @@ public sealed class Booking : Entity
         DateOnly startDate,
         DateOnly endDate,
         int holdMinutes,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        string paymentChannel = PaymentMode.Manual)
     {
+        if (!PaymentMode.IsSupported(paymentChannel))
+        {
+            throw new ArgumentException($"'{paymentChannel}' is not a payment mode.", nameof(paymentChannel));
+        }
+
         BookableCourtId = bookableCourtId;
+        PaymentChannel = paymentChannel;
         CustomerUserId = customerUserId;
         Kind = kind;
         CourtName = courtName;
@@ -58,6 +66,19 @@ public sealed class Booking : Entity
     }
 
     public BookingStatus Status { get; private set; } = BookingStatus.PendingPayment;
+
+    /// <summary>
+    /// How this booking is paid: a receipt the desk checks, or the payment
+    /// gateway. See <see cref="PaymentMode"/>.
+    ///
+    /// A snapshot of the owner's term when it was made, like the rate. The
+    /// admin can change a venue from one to the other while bookings are in
+    /// flight, and a booking started on a receipt has to finish on one — the
+    /// desk is already looking for it, and the bill already counts it.
+    /// </summary>
+    public string PaymentChannel { get; private set; } = PaymentMode.Manual;
+
+    public bool IsPaidDirect => PaymentChannel == PaymentMode.Direct;
 
     /// <summary>
     /// Hourly, a whole day, or a run of whole days.
@@ -310,6 +331,49 @@ public sealed class Booking : Entity
         PaidTotal = Total;
         UpdatedAt = now;
     }
+
+    /// <summary>
+    /// The payment gateway says the customer paid, and in time.
+    ///
+    /// Nobody at the venue is asked: the gateway's word is the check a person
+    /// makes of a receipt. Only from waiting to be paid, and only on a booking
+    /// paid this way — a receipt booking confirmed by a gateway would mean the
+    /// customer had paid twice.
+    ///
+    /// <paramref name="paidAt"/> is the gateway's time of payment, not when we
+    /// heard about it. A webhook can arrive late, and somebody who paid at
+    /// minute fourteen must not lose their court because the notice arrived at
+    /// minute sixteen.
+    /// </summary>
+    public void ConfirmPaidOnline(DateTimeOffset paidAt, DateTimeOffset now)
+    {
+        if (!IsPaidDirect)
+        {
+            throw new InvalidOperationException("This booking is paid by receipt, not online.");
+        }
+
+        if (Status != BookingStatus.PendingPayment)
+        {
+            throw new InvalidOperationException("Only a booking waiting to be paid can be paid.");
+        }
+
+        if (paidAt >= HoldsUntil)
+        {
+            throw new InvalidOperationException("The hold ran out before this was paid.");
+        }
+
+        Status = BookingStatus.Confirmed;
+        ConfirmedAt = now;
+        PaidTotal = Total;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Whether a payment that arrived at <paramref name="paidAt"/> can confirm
+    /// this booking by itself. Anything else is a person's decision.
+    /// </summary>
+    public bool CanBeConfirmedOnlineBy(DateTimeOffset paidAt) =>
+        IsPaidDirect && Status == BookingStatus.PendingPayment && paidAt < HoldsUntil;
 
     /// <summary>
     /// Somebody at the venue has looked at the payment and it is not.

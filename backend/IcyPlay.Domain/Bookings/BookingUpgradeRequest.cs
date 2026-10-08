@@ -36,9 +36,16 @@ public sealed class BookingUpgradeRequest : Entity
         int holdMinutes,
         string moveReason,
         string? moveReasonNote,
-        DateTimeOffset requestedAt)
+        DateTimeOffset requestedAt,
+        string paymentChannel = Payments.PaymentMode.Manual)
     {
+        if (!Payments.PaymentMode.IsSupported(paymentChannel))
+        {
+            throw new ArgumentException($"'{paymentChannel}' is not a payment mode.", nameof(paymentChannel));
+        }
+
         BookingId = bookingId;
+        PaymentChannel = paymentChannel;
         MoveReason = moveReason;
         MoveReasonNote = string.IsNullOrWhiteSpace(moveReasonNote) ? null : moveReasonNote.Trim();
         ToBookableCourtId = toBookableCourtId;
@@ -137,6 +144,24 @@ public sealed class BookingUpgradeRequest : Entity
     public string Status { get; private set; } = UpgradeStatus.AwaitingPayment;
 
     /// <summary>
+    /// How the difference is paid: a receipt the desk checks, or the payment
+    /// gateway. The venue's term when the move was asked for, kept, like the
+    /// booking's own. Meaningless on a free move, which has nothing to pay.
+    /// </summary>
+    public string PaymentChannel { get; private set; } = Payments.PaymentMode.Manual;
+
+    public bool IsPaidDirect => PaymentChannel == Payments.PaymentMode.Direct;
+
+    /// <summary>
+    /// Whether a payment that arrived at <paramref name="paidAt"/> can carry
+    /// the move through by itself: paid online, still waiting for the money,
+    /// and in time. Whether the hours are still free is asked separately, of
+    /// the diary, when it is carried out.
+    /// </summary>
+    public bool CanBeSettledOnlineBy(DateTimeOffset paidAt) =>
+        IsPaidDirect && !IsFree && Status == UpgradeStatus.AwaitingPayment && paidAt < HoldsUntil;
+
+    /// <summary>
     /// When the hours being asked for go back on sale.
     ///
     /// Stops mattering once a receipt is attached, exactly as a booking's own
@@ -213,6 +238,24 @@ public sealed class BookingUpgradeRequest : Entity
     {
         Status = UpgradeStatus.Approved;
         SettledByUserId = attendantUserId;
+        SettledAt = now;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// The payment gateway says the difference was paid, in time, and the
+    /// hours were still free: the booking moves with nobody at the desk asked.
+    /// <see cref="SettledByUserId"/> stays empty, which is how the trail tells
+    /// this apart from a person's approval.
+    /// </summary>
+    public void ApprovePaidOnline(DateTimeOffset paidAt, DateTimeOffset now)
+    {
+        if (!CanBeSettledOnlineBy(paidAt))
+        {
+            throw new InvalidOperationException("Only an upgrade paid online and in time can approve itself.");
+        }
+
+        Status = UpgradeStatus.Approved;
         SettledAt = now;
         UpdatedAt = now;
     }

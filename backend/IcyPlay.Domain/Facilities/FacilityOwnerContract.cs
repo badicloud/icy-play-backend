@@ -1,5 +1,6 @@
 using IcyPlay.Domain.Common;
 using IcyPlay.Domain.Identity;
+using IcyPlay.Domain.Payments;
 
 namespace IcyPlay.Domain.Facilities;
 
@@ -152,10 +153,42 @@ public sealed class FacilityOwnerContract : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// How customers pay this owner's venues during the term: GCash with a
+    /// receipt the desk checks, or through the payment gateway. See
+    /// <see cref="Payments.PaymentMode"/>.
+    ///
+    /// On the term, beside the rates, for the same reason they are: it is part
+    /// of what was signed, it is the platform admin's to set, and changing it
+    /// must not reach back into terms already served.
+    /// </summary>
+    public string PaymentMode { get; private set; } = Payments.PaymentMode.Manual;
+
+    /// <summary>
+    /// How long a booking paid through the gateway keeps its court. Unused on a
+    /// manual term, whose hold is the owner's own
+    /// <see cref="FacilityOwner.PartialBookingExpiryMinutes"/>.
+    /// </summary>
+    public int OnlineHoldMinutes { get; private set; } = OnlineHold.DefaultMinutes;
+
+    public bool TakesDirectPayment => PaymentMode == Payments.PaymentMode.Direct;
+
     public void SetRates(decimal platformHourlyRate, decimal commissionPercentage, DateTimeOffset now)
     {
         PlatformHourlyRate = platformHourlyRate;
         CommissionPercentage = commissionPercentage;
+        UpdatedAt = now;
+    }
+
+    public void SetPaymentTerms(string paymentMode, int onlineHoldMinutes, DateTimeOffset now)
+    {
+        if (!Payments.PaymentMode.IsSupported(paymentMode))
+        {
+            throw new ArgumentException($"'{paymentMode}' is not a payment mode.", nameof(paymentMode));
+        }
+
+        PaymentMode = paymentMode;
+        OnlineHoldMinutes = OnlineHold.Clamp(onlineHoldMinutes);
         UpdatedAt = now;
     }
 

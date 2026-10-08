@@ -4,6 +4,7 @@ using IcyPlay.Domain.Email;
 using IcyPlay.Domain.Facilities;
 using IcyPlay.Domain.Identity;
 using IcyPlay.Domain.OpenPlays;
+using IcyPlay.Domain.Payments;
 using Microsoft.EntityFrameworkCore;
 
 namespace IcyPlay.Infrastructure.Persistence;
@@ -52,9 +53,72 @@ public sealed class AppDbContext : DbContext
     public DbSet<OpenPlay> OpenPlays => Set<OpenPlay>();
     public DbSet<OpenPlaySession> OpenPlaySessions => Set<OpenPlaySession>();
     public DbSet<OpenPlayRegistration> OpenPlayRegistrations => Set<OpenPlayRegistration>();
+    public DbSet<OnlinePayment> OnlinePayments => Set<OnlinePayment>();
+    public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
+    public DbSet<DeskReadMarker> DeskReadMarkers => Set<DeskReadMarker>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<DeskReadMarker>(entity =>
+        {
+            entity.ToTable("DeskReadMarkers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Feed).HasMaxLength(40).IsRequired();
+            // One marker per person per list.
+            entity.HasIndex(x => new { x.UserId, x.Feed }).IsUnique();
+        });
+
+        modelBuilder.Entity<OnlinePayment>(entity =>
+        {
+            entity.ToTable("OnlinePayments");
+            entity.HasKey(x => x.Id);
+            // The webhook and a direct question to the gateway can settle the
+            // same payment in the same moment. The row version makes the
+            // second save fail rather than confirm a booking twice.
+            entity.Property<byte[]>("RowVersion").IsRowVersion();
+            entity.Property(x => x.Purpose).HasMaxLength(40).IsRequired();
+            entity.Property(x => x.Provider).HasMaxLength(40).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(30).IsRequired();
+            entity.Property(x => x.CheckoutSessionId).HasMaxLength(100);
+            entity.Property(x => x.CheckoutUrl).HasMaxLength(1000);
+            entity.Property(x => x.ProviderPaymentId).HasMaxLength(100);
+            entity.Property(x => x.PaymentMethod).HasMaxLength(40);
+            entity.Property(x => x.AttentionReason).HasMaxLength(40);
+            entity.Property(x => x.Description).HasMaxLength(300);
+            // Money, so a fixed scale: these are what a split will route to
+            // two accounts, and drift between them is a payout that is short.
+            entity.Property(x => x.VenueAmount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.AmountCharged).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.ProcessingFee).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.NetAmount).HasColumnType("decimal(10,2)");
+            entity.Ignore(x => x.AmountDue);
+            entity.Ignore(x => x.IsPending);
+            entity.Ignore(x => x.CoversWhatIsDue);
+            // What the webhook looks up by.
+            entity.HasIndex(x => x.CheckoutSessionId)
+                .IsUnique()
+                .HasFilter("[CheckoutSessionId] IS NOT NULL");
+            // "Is there a checkout open for this already", and later a
+            // booking's payments on the desk.
+            entity.HasIndex(x => new { x.Purpose, x.SubjectId });
+            // The desk's "needs attention" list, and an owner's payouts.
+            entity.HasIndex(x => new { x.FacilityOwnerId, x.Status });
+            // A venue's online transactions, newest first.
+            entity.HasIndex(x => new { x.FacilityId, x.Status, x.PaidAt });
+        });
+
+        modelBuilder.Entity<PaymentWebhookEvent>(entity =>
+        {
+            entity.ToTable("PaymentWebhookEvents");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Provider).HasMaxLength(40).IsRequired();
+            entity.Property(x => x.EventId).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.EventType).HasMaxLength(100).IsRequired();
+            // The guard against acting on one delivery twice.
+            entity.HasIndex(x => new { x.Provider, x.EventId }).IsUnique();
+        });
+
         modelBuilder.HasDefaultSchema("dbo");
 
         modelBuilder.Entity<User>(entity =>
@@ -396,6 +460,20 @@ public sealed class AppDbContext : DbContext
                     Subject = "Your registration for {{var:open_play_title}} was not accepted",
                     IsActive = true,
                     CreatedAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    UpdatedAt = (DateTimeOffset?)null
+                },
+                new
+                {
+                    Id = Guid.Parse("4e7a1c93-5b20-4f8d-a6e2-9c31d07b85f4"),
+                    Key = EmailTemplateKey.BookingPaidOnline,
+                    Provider = EmailProviderName.Mailjet,
+                    ExternalTemplateId = 8416086L,
+                    // "Already confirmed" in the subject: the desk is used to
+                    // payment letters that ask it to check something, and this
+                    // one asks nothing.
+                    Subject = "{{var:customer_name}} paid online for {{var:court_name}}, already confirmed",
+                    IsActive = true,
+                    CreatedAt = new DateTimeOffset(2026, 10, 8, 0, 0, 0, TimeSpan.Zero),
                     UpdatedAt = (DateTimeOffset?)null
                 });
         });
@@ -812,6 +890,12 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.RejectionReason).HasMaxLength(30);
             entity.Property(x => x.RejectionNote).HasMaxLength(RejectReason.NoteLimit);
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
+            // Every booking made before there was a choice was paid by receipt.
+            entity.Property(x => x.PaymentChannel)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(PaymentMode.Manual);
+            entity.Ignore(x => x.IsPaidDirect);
             // What a venue's console asks for: the bookings touching a stretch
             // of days.
             entity.HasIndex(x => new { x.StartDate, x.EndDate });
@@ -868,6 +952,12 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.RentalNow).HasColumnType("decimal(10,2)");
             entity.Property(x => x.RentalNew).HasColumnType("decimal(10,2)");
             entity.Property(x => x.BalanceDue).HasColumnType("decimal(10,2)");
+            // Every move asked for before there was a choice was paid by receipt.
+            entity.Property(x => x.PaymentChannel)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(PaymentMode.Manual);
+            entity.Ignore(x => x.IsPaidDirect);
             entity.Ignore(x => x.IsOpen);
             // The two questions asked of this table: what is open on this
             // booking, and what is waiting on this court.
@@ -1064,6 +1154,12 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.CancellationReason).HasMaxLength(500);
             entity.Property(x => x.RejectionReason).HasMaxLength(30);
             entity.Property(x => x.RejectionNote).HasMaxLength(RejectReason.NoteLimit);
+            // Every registration made before there was a choice was paid by receipt.
+            entity.Property(x => x.PaymentChannel)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(PaymentMode.Manual);
+            entity.Ignore(x => x.IsPaidDirect);
             entity.Ignore(x => x.Total);
             entity.Ignore(x => x.IsRegistered);
             entity.Ignore(x => x.IsCheckedIn);
@@ -1140,6 +1236,13 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.CommissionPercentage)
                 .HasColumnType("decimal(5,2)")
                 .HasDefaultValue(PlatformRates.DefaultCommissionPercentage);
+            // Every term signed before there was a choice is paid by receipt.
+            entity.Property(x => x.PaymentMode)
+                .HasMaxLength(20)
+                .IsRequired()
+                .HasDefaultValue(PaymentMode.Manual);
+            entity.Property(x => x.OnlineHoldMinutes).HasDefaultValue(OnlineHold.DefaultMinutes);
+            entity.Ignore(x => x.TakesDirectPayment);
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Notes).HasMaxLength(1000);
             entity.Property(x => x.DocumentPublicId).HasMaxLength(300);
