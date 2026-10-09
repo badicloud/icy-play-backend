@@ -3999,7 +3999,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     {
         // Arrange
         await using var context = database.CreateContext();
-        var floor = await FloorAsync(context, "Upgrade Paid Online Courts");
+        var floor = await WithCustomerAsync(context, await FloorAsync(context, "Upgrade Paid Online Courts"));
         var sut = CreateService(context);
         await PayableAsync(context, floor);
         var dearer = await SecondCourtAsync(context, floor, pickleballRate: 900m);
@@ -4013,7 +4013,8 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             new MoveBookingRequest(dearer, Reason: MoveReason.Weather),
             CancellationToken.None);
         var gateway = new StubGateway();
-        var payments = CreatePaymentService(context, gateway);
+        var mail = new CapturingEmailSender();
+        var payments = CreatePaymentService(context, gateway, mail);
         var checkout = await payments.StartCheckoutAsync(
             Domain.Payments.PaymentPurpose.BookingUpgrade,
             asked.Value!.Id,
@@ -4029,6 +4030,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         var upgrade = await context.BookingUpgradeRequests.AsNoTracking().SingleAsync(row => row.Id == asked.Value.Id);
         var moved = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == booking);
         var payment = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.SubjectId == asked.Value.Id);
+        var bookingReceipt = await new BookingReceiptService(context).GetAsync(booking, floor.Customer, CancellationToken.None);
 
         using (new AssertionScope())
         {
@@ -4041,6 +4043,15 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             upgrade.SettledByUserId.Should().BeNull();
             moved.BookableCourtId.Should().Be(dearer);
             payment.Status.Should().Be(Domain.Payments.OnlinePaymentStatus.Paid);
+            // The customer is told it moved, with the booking's receipt as it stands now.
+            mail.Sent.Should().Contain(message =>
+                message.TemplateKey == EmailTemplateKey.BookingUpgradeApproved
+                && message.Attachments != null
+                && message.Attachments.Single().FileName.StartsWith("IcyPlay-Receipt-UP-"));
+            // The booking's own receipt names the upgrade and leaves its money out.
+            bookingReceipt.Value!.Upgrades.Should().ContainSingle();
+            bookingReceipt.Value.OriginalSummary.Should().Contain("as first booked");
+            bookingReceipt.Value.Payments.Should().BeEmpty();
         }
     }
 
@@ -4078,12 +4089,14 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     {
         // Arrange
         await using var context = database.CreateContext();
-        var (floor, openPlayId) = await PublishedOpenPlayAsync(context, "Open Play Paid Online Courts");
+        var (published, openPlayId) = await PublishedOpenPlayAsync(context, "Open Play Paid Online Courts");
+        var floor = await WithCustomerAsync(context, published);
         await PaidDirectAsync(context, floor);
         var registered = await CreateRegistrationService(context, new CapturingEmailSender()).RegisterAsync(
             floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Tuesday, true), CancellationToken.None);
         var gateway = new StubGateway();
-        var payments = CreatePaymentService(context, gateway);
+        var mail = new CapturingEmailSender();
+        var payments = CreatePaymentService(context, gateway, mail);
         var checkout = await payments.StartCheckoutAsync(
             Domain.Payments.PaymentPurpose.OpenPlayRegistration,
             registered.Value!.RegistrationId,
@@ -4107,6 +4120,11 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             registration.Status.Should().Be(BookingStatus.Confirmed);
             registration.ConfirmedByUserId.Should().BeNull();
             registration.CheckInToken.Should().NotBeNull();
+            // The player's confirmation carries their receipt.
+            mail.Sent.Should().Contain(message =>
+                message.TemplateKey == EmailTemplateKey.OpenPlayConfirmed
+                && message.Attachments != null
+                && message.Attachments.Single().FileName.StartsWith("IcyPlay-Receipt-OP-"));
         }
     }
 
@@ -4132,6 +4150,16 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         result.Failure.Should().Be(OpenPlayRegistrationFailure.PaidOnline);
     }
 
+    /// <summary>A customer with an account, because the letters are written to them.</summary>
+    private static async Task<Floor> WithCustomerAsync(AppDbContext context, Floor floor)
+    {
+        var customer = new User($"payer-{Guid.NewGuid():N}@example.com", "Paula Payer", null);
+        context.Users.Add(customer);
+        await context.SaveChangesAsync();
+
+        return floor with { Customer = customer.Id };
+    }
+
     /// <summary>Switches the floor's owner to online payment on the term in force.</summary>
     private static async Task PaidDirectAsync(AppDbContext context, Floor floor)
     {
@@ -4143,9 +4171,11 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
     private static Infrastructure.Payments.OnlinePaymentService CreatePaymentService(
         AppDbContext context,
-        Application.Payments.IPaymentGateway gateway)
+        Application.Payments.IPaymentGateway gateway,
+        CapturingEmailSender? mail = null)
     {
         var clock = new FixedTimeProvider(Now);
+        mail ??= new CapturingEmailSender();
         var options = Options.Create(new BookingNotificationOptions
         {
             BookingUrl = "https://icyplay.test/bookings",
@@ -4156,12 +4186,17 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             context,
             gateway,
             [
-                new UpgradePaymentHandler(context, CreateDeskService(context), new SilentNotifier(), options, clock),
+                new UpgradePaymentHandler(
+                    context,
+                    CreateDeskService(context),
+                    new BookingNotifier(context, mail, options, clock, NullLogger<BookingNotifier>.Instance),
+                    options,
+                    clock),
                 new OpenPlayPaymentHandler(
                     context,
                     new OpenPlayNotifier(
                         context,
-                        new CapturingEmailSender(),
+                        mail,
                         options,
                         clock,
                         NullLogger<OpenPlayNotifier>.Instance),

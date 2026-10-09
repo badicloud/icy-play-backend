@@ -75,7 +75,7 @@ public sealed class UpgradePaymentHandler(
             row.FacilityId,
             upgrade.BalanceDue,
             0m,
-            $"UP-{upgrade.Id.ToString("N")[..10].ToUpperInvariant()}",
+            UpgradeReference.For(upgrade.Id),
             $"Move from {row.CourtName} to {upgrade.ToCourtName} at {row.FacilityName}",
             [new CheckoutLineItem($"Upgrade to {upgrade.ToCourtName}", upgrade.BalanceDue)],
             $"{options.Value.BookingUrl.TrimEnd('/')}/{upgrade.BookingId}/upgrade"));

@@ -2,6 +2,7 @@ using System.Globalization;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.OpenPlays;
 using IcyPlay.Domain.Email;
+using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -91,9 +92,36 @@ public sealed class OpenPlayNotifier(
                 EmailTemplateKey.OpenPlayConfirmed,
                 about.PlayerEmail,
                 about.PlayerName,
-                Common(about, about.PlayerName)),
+                Common(about, about.PlayerName),
+                await ReceiptAsync(registrationId, ct)),
             registrationId,
             ct);
+    }
+
+    /// <summary>
+    /// The player's receipt as a PDF, for the confirmation to carry. Without
+    /// one if it cannot be made: being told they are registered is what the
+    /// player is waiting for, and a failed attachment must not cost them it.
+    /// </summary>
+    private async Task<IReadOnlyCollection<EmailAttachment>?> ReceiptAsync(Guid registrationId, CancellationToken ct)
+    {
+        try
+        {
+            var receipt = await OpenPlayReceipts.ReadAsync(db, registrationId, ct);
+
+            return receipt is null
+                ? null
+                : [new EmailAttachment(ReceiptPdf.FileName(receipt.Number), "application/pdf", ReceiptPdf.Render(receipt))];
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(
+                exception,
+                "Could not make the receipt PDF for open play registration {RegistrationId}. Sent without it.",
+                registrationId);
+
+            return null;
+        }
     }
 
     public async Task DeclinedAsync(Guid registrationId, CancellationToken ct)

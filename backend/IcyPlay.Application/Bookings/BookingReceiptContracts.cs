@@ -26,13 +26,29 @@ public sealed record BookingReceipt(
     decimal BookingTotal,
     /// <summary><c>Manual</c> (GCash receipt checked by the venue) or <c>Direct</c> (paid online).</summary>
     string PaymentChannel,
-    /// <summary>Each online payment against the booking: the first, and any upgrade since.</summary>
+    /// <summary>The booking's own online payment. An upgrade has a receipt of its own.</summary>
     IReadOnlyCollection<ReceiptPayment> Payments,
-    /// <summary>The gateway's fees across those payments, which the customer paid on top.</summary>
+    /// <summary>The gateway's fee on that payment, which the customer paid on top.</summary>
     decimal ProcessingFeeTotal,
-    /// <summary>Everything the customer handed over: the booking, upgrades, and the gateway's fees.</summary>
+    /// <summary>What the customer handed over for the booking itself, the gateway's fee included.</summary>
     decimal AmountPaid,
-    DateTimeOffset? ConfirmedAt);
+    DateTimeOffset? ConfirmedAt,
+    /// <summary>
+    /// Set when the booking has moved since it was paid for: the hours as
+    /// first bought, in a sentence, in place of <see cref="Slots"/> — which
+    /// would be the hours now, on a court at a price this payment was not for.
+    /// </summary>
+    string? OriginalSummary = null,
+    /// <summary>Upgrades paid for since, each with a receipt of its own.</summary>
+    IReadOnlyCollection<UpgradeReceiptSummary>? Upgrades = null);
+
+/// <summary>An upgrade paid for on a booking, named so its own receipt can be found.</summary>
+public sealed record UpgradeReceiptSummary(
+    string ReceiptNumber,
+    string? FromCourtName,
+    string ToCourtName,
+    decimal AmountPaid,
+    DateTimeOffset? PaidAt);
 
 public sealed record ReceiptPayment(
     string Description,

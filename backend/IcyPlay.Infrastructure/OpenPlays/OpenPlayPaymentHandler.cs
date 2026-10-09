@@ -84,7 +84,7 @@ public sealed class OpenPlayPaymentHandler(
             row.FacilityId,
             venueAmount,
             registration.PlatformFee,
-            $"OP-{registration.Id.ToString("N")[..10].ToUpperInvariant()}",
+            OpenPlayReference.For(registration.Id),
             $"{row.Title} at {row.FacilityName}",
             lines,
             $"{options.Value.OpenPlayRegistrationUrl.TrimEnd('/')}/{registration.Id}"));

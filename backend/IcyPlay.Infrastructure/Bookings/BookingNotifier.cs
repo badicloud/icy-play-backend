@@ -149,7 +149,8 @@ public sealed class BookingNotifier(
                         : string.Empty,
                     ["payment_reference"] = latest?.Reference ?? string.Empty,
                     ["receipt_url"] = BookingUrl(booking.Id).Length == 0 ? string.Empty : $"{BookingUrl(booking.Id)}/receipt"
-                }),
+                },
+                ReceiptAttachment(receipt, booking.Id)),
             booking.Id,
             ct);
     }
@@ -329,7 +330,10 @@ public sealed class BookingNotifier(
                     ["booking_url"] = BookingUrl(upgrade.BookingId),
                     ["support_email"] = Settings.SupportEmail,
                     ["current_year"] = timeProvider.GetUtcNow().Year
-                }),
+                },
+                // The upgrade's own receipt: the move and what was paid for it,
+                // never the booking's first payment beside it.
+                await UpgradeAttachmentAsync(upgrade.Id, upgrade.BookingId, ct)),
             upgrade.BookingId,
             ct);
     }
@@ -797,6 +801,53 @@ public sealed class BookingNotifier(
 
     private static readonly System.Globalization.CultureInfo Culture =
         System.Globalization.CultureInfo.InvariantCulture;
+
+    /// <summary>
+    /// The receipt as a PDF, for the confirmation to carry. Without one if it
+    /// cannot be made: the confirmation is what the customer is waiting for,
+    /// and a failed attachment must not cost them it. The receipt page still
+    /// has everything.
+    /// </summary>
+    private IReadOnlyCollection<EmailAttachment>? ReceiptAttachment(BookingReceipt? receipt, Guid bookingId)
+    {
+        if (receipt is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return [new EmailAttachment(ReceiptPdf.FileName(receipt), "application/pdf", ReceiptPdf.Render(receipt))];
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Could not make the receipt PDF for booking {BookingId}. Sent without it.", bookingId);
+
+            return null;
+        }
+    }
+
+    /// <summary>An upgrade's receipt as a PDF. Without one if it cannot be made.</summary>
+    private async Task<IReadOnlyCollection<EmailAttachment>?> UpgradeAttachmentAsync(
+        Guid upgradeId,
+        Guid bookingId,
+        CancellationToken ct)
+    {
+        try
+        {
+            var receipt = await UpgradeReceipts.ReadAsync(db, upgradeId, ct);
+
+            return receipt is null
+                ? null
+                : [new EmailAttachment(ReceiptPdf.FileName(receipt.Number), "application/pdf", ReceiptPdf.Render(receipt))];
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            logger.LogError(exception, "Could not make the upgrade receipt PDF for booking {BookingId}. Sent without it.", bookingId);
+
+            return null;
+        }
+    }
 
     /// <summary>How the customer paid, in their words rather than the gateway's.</summary>
     private static string MethodName(string? method) => method switch
