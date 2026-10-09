@@ -188,6 +188,58 @@ public sealed class MailjetTransactionalEmailSenderTests
         templateStore.VerifyAll();
     }
 
+    [Fact]
+    public async Task Should_Send_Attachment_As_Base64_When_Message_Carries_One()
+    {
+        // Arrange
+        var cancellationToken = CancellationToken.None;
+        var templateStore = new Mock<IEmailTemplateStore>(MockBehavior.Strict);
+        templateStore
+            .Setup(store => store.GetActiveAsync(
+                EmailTemplateKey.AccountVerification,
+                EmailProviderName.Mailjet,
+                cancellationToken))
+            .ReturnsAsync(new EmailTemplateDescriptor(8278054, "Subject"));
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.OK);
+        var sut = CreateSender(handler, templateStore.Object);
+        var message = new TransactionalEmailMessageBuilder()
+            .WithAttachment(new EmailAttachment("receipt.pdf", "application/pdf", [1, 2, 3]))
+            .Build();
+
+        // Act
+        await sut.SendAsync(message, cancellationToken);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            handler.RequestBody.Should().Contain("\"Filename\":\"receipt.pdf\"");
+            handler.RequestBody.Should().Contain("\"ContentType\":\"application/pdf\"");
+            handler.RequestBody.Should().Contain("\"Base64Content\":\"AQID\"");
+        }
+    }
+
+    [Fact]
+    public async Task Should_Leave_Attachments_Out_When_Message_Has_None()
+    {
+        // Arrange
+        var cancellationToken = CancellationToken.None;
+        var templateStore = new Mock<IEmailTemplateStore>(MockBehavior.Strict);
+        templateStore
+            .Setup(store => store.GetActiveAsync(
+                EmailTemplateKey.AccountVerification,
+                EmailProviderName.Mailjet,
+                cancellationToken))
+            .ReturnsAsync(new EmailTemplateDescriptor(8278054, "Subject"));
+        var handler = new CapturingHttpMessageHandler(HttpStatusCode.OK);
+        var sut = CreateSender(handler, templateStore.Object);
+
+        // Act
+        await sut.SendAsync(new TransactionalEmailMessageBuilder().Build(), cancellationToken);
+
+        // Assert
+        handler.RequestBody.Should().NotContain("Attachments");
+    }
+
     private static MailjetTransactionalEmailSender CreateSender(
         HttpMessageHandler handler,
         IEmailTemplateStore templateStore,

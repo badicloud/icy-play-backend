@@ -17,7 +17,11 @@ public sealed class MailjetTransactionalEmailSender(
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
-        PropertyNamingPolicy = null
+        PropertyNamingPolicy = null,
+        // An absent property, not a null one, for the parts a letter may not
+        // have. Dictionary entries such as the template's variables are not
+        // affected.
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
     private readonly MailjetOptions mailjetOptions = options.Value;
@@ -60,7 +64,19 @@ public sealed class MailjetTransactionalEmailSender(
                     TemplateID = template.ExternalTemplateId,
                     TemplateLanguage = true,
                     Subject = template.Subject,
-                    Variables = message.Variables
+                    Variables = message.Variables,
+                    // Left out entirely when there are none, rather than sent
+                    // empty: most letters have nothing attached.
+                    Attachments = message.Attachments is { Count: > 0 } attachments
+                        ? attachments
+                            .Select(attachment => new
+                            {
+                                ContentType = attachment.ContentType,
+                                Filename = attachment.FileName,
+                                Base64Content = Convert.ToBase64String(attachment.Content)
+                            })
+                            .ToArray()
+                        : null
                 }
             }
         };

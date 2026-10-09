@@ -8,6 +8,7 @@ public sealed class TransactionalEmailMessageBuilder
     private string templateKey = EmailTemplateKey.AccountVerification;
     private string recipientEmail = "customer@example.com";
     private string recipientName = "IcyPlay Customer";
+    private readonly List<EmailAttachment> attachments = [];
     private IReadOnlyDictionary<string, object> variables =
         new Dictionary<string, object>
         {
@@ -24,12 +25,19 @@ public sealed class TransactionalEmailMessageBuilder
         return this;
     }
 
+    public TransactionalEmailMessageBuilder WithAttachment(EmailAttachment attachment)
+    {
+        attachments.Add(attachment);
+        return this;
+    }
+
     public TransactionalEmailMessage Build()
     {
         return new TransactionalEmailMessage(
             templateKey,
             recipientEmail,
             recipientName,
-            variables);
+            variables,
+            attachments.Count == 0 ? null : [.. attachments]);
     }
 }
