@@ -431,6 +431,55 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
         listed.TotalItems.Should().Be(0);
     }
 
+    /// <summary>
+    /// A QR code that ran out, or an e-wallet that declined: nothing was paid,
+    /// so it is no transaction of the venue's and no reason for a badge.
+    /// </summary>
+    [Fact]
+    public async Task DeskTransactions_ShouldLeaveOutAnAttemptThatEndedUnpaid()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Unpaid Attempt Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var facilityId = await context.Facilities
+            .Where(facility => facility.FacilityOwnerId == venue.FacilityOwnerId)
+            .Select(facility => facility.Id)
+            .SingleAsync();
+        var attempt = new OnlinePayment(
+            PaymentPurpose.Booking,
+            bookingId,
+            venue.FacilityOwnerId,
+            venue.CustomerUserId,
+            500m,
+            15m,
+            PayMongoGateway.ProviderName,
+            Now,
+            facilityId);
+        attempt.OpenIntent($"pi_{Guid.NewGuid():N}", "qrph", 523.04m, "data:image/png;base64,QR", null, Now.AddMinutes(10), Now);
+        attempt.EndUnpaid(PayMongoGateway.QrPhExpiredEvent, Now.AddMinutes(10));
+        context.OnlinePayments.Add(attempt);
+        await context.SaveChangesAsync();
+        var transactions = new DeskTransactionService(context, new FixedTimeProvider(Now.AddMinutes(11)));
+
+        // Act
+        var listed = await transactions.ListAsync(venue.OwnerUserId, null, 1, 20, CancellationToken.None);
+        var summary = await transactions.SummaryAsync(venue.OwnerUserId, CancellationToken.None);
+
+        // Assert
+        var saved = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.Id == attempt.Id);
+
+        using (new AssertionScope())
+        {
+            listed.TotalItems.Should().Be(0);
+            summary.Unseen.Should().Be(0);
+            saved.Status.Should().Be(OnlinePaymentStatus.Failed);
+            saved.ChosenMethod.Should().Be("qrph");
+            saved.QuotedTotal.Should().Be(523.04m);
+            saved.QrCodeImage.Should().BeNull();
+        }
+    }
+
     private static GatewayEvent PaidEvent(string eventId, string sessionId, DateTimeOffset paidAt, decimal net) =>
         new(
             eventId,
@@ -642,6 +691,10 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
 
         public bool IsConfigured => true;
 
+        public string CheckoutExperience => Application.Payments.CheckoutExperience.Hosted;
+
+        public IReadOnlyList<PaymentMethodQuote> QuoteMethods(decimal amountDue) => [];
+
         public Task<CheckoutSessionCreated> CreateCheckoutAsync(CheckoutRequest request, CancellationToken ct)
         {
             CheckoutsOpened++;
@@ -652,6 +705,12 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
         }
 
         public Task<GatewayPaidPayment?> GetPaidPaymentAsync(string checkoutSessionId, CancellationToken ct) =>
+            Task.FromResult(Next?.Payment);
+
+        public Task<PaymentIntentStarted> StartPaymentIntentAsync(PaymentIntentRequest request, CancellationToken ct) =>
+            throw new NotSupportedException("These tests pay at a hosted checkout.");
+
+        public Task<GatewayPaidPayment?> GetPaidIntentPaymentAsync(string paymentIntentId, CancellationToken ct) =>
             Task.FromResult(Next?.Payment);
 
         public GatewayEvent? ReadEvent(string rawBody, string? signatureHeader) =>

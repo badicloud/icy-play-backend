@@ -34,8 +34,55 @@ public sealed class PayMongoOptions
     public string[] PaymentMethodTypes { get; init; } = ["qrph", "gcash", "paymaya", "card"];
 
     /// <summary>
+    /// <c>Hosted</c> (the default) sends the customer to PayMongo's checkout
+    /// page; <c>Integrated</c> lets them pick and pay on our second step.
+    /// Anything else is read as <c>Hosted</c>.
+    /// </summary>
+    public string CheckoutExperience { get; init; } = Application.Payments.CheckoutExperience.Hosted;
+
+    /// <summary>
+    /// PayMongo's published rates, VAT excluded, for the methods our own page
+    /// offers — keyed by their payment method type, in the order of
+    /// <see cref="PaymentMethodTypes"/>. Card is left out: it is paid on
+    /// PayMongo's page, which passes its own fee on. Configurable because a
+    /// negotiated rate replaces the published one.
+    /// </summary>
+    public Dictionary<string, PayMongoFeeRate> FeeRates
+    {
+        get; init;
+    } = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["qrph"] = new()
+        {
+            Percent = 1.34m
+        },
+        ["gcash"] = new()
+        {
+            Percent = 2.23m
+        },
+        ["paymaya"] = new()
+        {
+            Percent = 1.79m
+        }
+    };
+
+    /// <summary>
     /// How old a signed event may be before it is turned away as a replay.
     /// Generous, because PayMongo retries and our clock is not theirs.
     /// </summary>
     public int SignatureToleranceSeconds { get; init; } = 600;
+}
+
+/// <summary>One method's rate, as PayMongo publishes it: 2.23 for 2.23%, plus pesos.</summary>
+public sealed class PayMongoFeeRate
+{
+    public decimal Percent
+    {
+        get; init;
+    }
+
+    public decimal Fixed
+    {
+        get; init;
+    }
 }

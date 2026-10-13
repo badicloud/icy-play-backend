@@ -23,6 +23,19 @@ public interface IPaymentGateway
         get;
     }
 
+    /// <summary>One of <see cref="Payments.CheckoutExperience"/>: what the second step looks like.</summary>
+    string CheckoutExperience
+    {
+        get;
+    }
+
+    /// <summary>
+    /// What each method our own page offers would charge for an amount owed,
+    /// in the order they are offered. Only the methods whose fee we work out
+    /// ourselves: a card is paid on the gateway's page, which adds its own.
+    /// </summary>
+    IReadOnlyList<PaymentMethodQuote> QuoteMethods(decimal amountDue);
+
     Task<CheckoutSessionCreated> CreateCheckoutAsync(CheckoutRequest request, CancellationToken ct);
 
     /// <summary>
@@ -30,6 +43,18 @@ public interface IPaymentGateway
     /// has not arrived. Null while nothing has been paid on it.
     /// </summary>
     Task<GatewayPaidPayment?> GetPaidPaymentAsync(string checkoutSessionId, CancellationToken ct);
+
+    /// <summary>
+    /// Starts one method of payment for an exact amount, on our own page: a
+    /// QR code to show, or an e-wallet page to send the customer to.
+    /// </summary>
+    Task<PaymentIntentStarted> StartPaymentIntentAsync(PaymentIntentRequest request, CancellationToken ct);
+
+    /// <summary>
+    /// Asks the gateway whether a payment started on our own page has been
+    /// paid, for when its webhook has not arrived. Null while it has not.
+    /// </summary>
+    Task<GatewayPaidPayment?> GetPaidIntentPaymentAsync(string paymentIntentId, CancellationToken ct);
 
     /// <summary>
     /// Reads an event the gateway posted, from the exact bytes it sent.

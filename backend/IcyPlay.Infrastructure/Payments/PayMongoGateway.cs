@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using IcyPlay.Application.Payments;
+using IcyPlay.Domain.Payments;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -28,6 +29,19 @@ public sealed class PayMongoGateway(
     /// <summary>The one event that says a checkout was paid.</summary>
     public const string CheckoutPaidEvent = "checkout_session.payment.paid";
 
+    /// <summary>A payment started on our own page went through.</summary>
+    public const string PaymentPaidEvent = "payment.paid";
+
+    /// <summary>A payment started on our own page was declined, or the customer gave up at the e-wallet.</summary>
+    public const string PaymentFailedEvent = "payment.failed";
+
+    /// <summary>A QR Ph code shown on our own page ran out before anyone paid it.</summary>
+    public const string QrPhExpiredEvent = "qrph.expired";
+
+    /// <summary>What PayMongo allows for a QR Ph code's life, in seconds.</summary>
+    private const int ShortestQrSeconds = 60;
+    private const int LongestQrSeconds = 9000;
+
     private PayMongoOptions Settings => options.Value;
 
     public string Provider => ProviderName;
@@ -35,6 +49,19 @@ public sealed class PayMongoGateway(
     public bool IsConfigured => !string.IsNullOrWhiteSpace(Settings.SecretKey);
 
     private bool CanReadEvents => !string.IsNullOrWhiteSpace(Settings.WebhookSecret);
+
+    public string CheckoutExperience => Application.Payments.CheckoutExperience.From(Settings.CheckoutExperience);
+
+    public IReadOnlyList<PaymentMethodQuote> QuoteMethods(decimal amountDue) =>
+        Settings.PaymentMethodTypes
+            .Where(Settings.FeeRates.ContainsKey)
+            .Select(method =>
+            {
+                var rate = Settings.FeeRates[method];
+                var total = new ProcessingFeeRate(rate.Percent, rate.Fixed).GrossUp(amountDue);
+                return new PaymentMethodQuote(method, amountDue, total - amountDue, total);
+            })
+            .ToArray();
 
     public async Task<CheckoutSessionCreated> CreateCheckoutAsync(CheckoutRequest request, CancellationToken ct)
     {
@@ -148,6 +175,119 @@ public sealed class PayMongoGateway(
             .FirstOrDefault(candidate => candidate is not null);
     }
 
+    /// <summary>
+    /// Three calls, the way PayMongo has it: a payment intent for the amount,
+    /// a payment method of the one type, then the two joined — which is what
+    /// hands back the QR code or the e-wallet's page. All server side, with
+    /// the secret key: the browser never talks to PayMongo.
+    /// </summary>
+    public async Task<PaymentIntentStarted> StartPaymentIntentAsync(PaymentIntentRequest request, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (request.Amount <= 0m)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), request.Amount, "Only something owed can be charged.");
+        }
+
+        var isQr = string.Equals(request.Method, "qrph", StringComparison.OrdinalIgnoreCase);
+
+        using var intent = await CallAsync(
+            HttpMethod.Post,
+            "/v1/payment_intents",
+            new Dictionary<string, object?>
+            {
+                ["amount"] = Centavos(request.Amount),
+                ["currency"] = "PHP",
+                ["payment_method_allowed"] = new[] { request.Method },
+                ["description"] = request.Description,
+                ["metadata"] = request.Metadata
+            },
+            ct);
+        var intentId = intent.RootElement.GetProperty("data").GetProperty("id").GetString()
+            ?? throw new HttpRequestException("PayMongo answered without a payment intent id.");
+
+        var qrSeconds = Math.Clamp((int)request.QrLifetime.TotalSeconds, ShortestQrSeconds, LongestQrSeconds);
+        var method = new Dictionary<string, object?> { ["type"] = request.Method };
+
+        if (isQr)
+        {
+            method["expiry_seconds"] = qrSeconds;
+        }
+
+        using var created = await CallAsync(HttpMethod.Post, "/v1/payment_methods", method, ct);
+        var methodId = created.RootElement.GetProperty("data").GetProperty("id").GetString()
+            ?? throw new HttpRequestException("PayMongo answered without a payment method id.");
+
+        var attach = new Dictionary<string, object?> { ["payment_method"] = methodId };
+
+        if (!isQr)
+        {
+            // Where the e-wallet sends the customer back to — paid, declined
+            // or gave up — so nobody is left on a page of theirs with no way home.
+            attach["return_url"] = request.ReturnUrl;
+        }
+
+        using var attached = await CallAsync(
+            HttpMethod.Post,
+            $"/v1/payment_intents/{Uri.EscapeDataString(intentId)}/attach",
+            attach,
+            ct);
+
+        var nextAction = attached.RootElement.GetProperty("data").GetProperty("attributes").TryGetProperty("next_action", out var next)
+            && next.ValueKind == JsonValueKind.Object
+                ? next
+                : default;
+
+        var redirectUrl = nextAction.ValueKind == JsonValueKind.Object
+            && nextAction.TryGetProperty("redirect", out var redirect)
+            && redirect.ValueKind == JsonValueKind.Object
+            && redirect.TryGetProperty("url", out var url)
+                ? url.GetString()
+                : null;
+
+        var qrImage = nextAction.ValueKind == JsonValueKind.Object
+            && nextAction.TryGetProperty("code", out var code)
+            && code.ValueKind == JsonValueKind.Object
+            && code.TryGetProperty("image_url", out var image)
+                ? image.GetString()
+                : null;
+
+        if (string.IsNullOrWhiteSpace(redirectUrl) && string.IsNullOrWhiteSpace(qrImage))
+        {
+            throw new HttpRequestException($"PayMongo gave no next step for {request.Method} on {intentId}.");
+        }
+
+        return new PaymentIntentStarted(
+            intentId,
+            string.IsNullOrWhiteSpace(redirectUrl) ? null : redirectUrl,
+            string.IsNullOrWhiteSpace(qrImage) ? null : AsDataUrl(qrImage),
+            isQr ? timeProvider.GetUtcNow().AddSeconds(qrSeconds) : null);
+    }
+
+    public async Task<GatewayPaidPayment?> GetPaidIntentPaymentAsync(string paymentIntentId, CancellationToken ct)
+    {
+        // The payments on an intent come back only to the secret key — which
+        // is the only key this server uses.
+        using var document = await CallAsync(
+            HttpMethod.Get,
+            $"/v1/payment_intents/{Uri.EscapeDataString(paymentIntentId)}",
+            body: null,
+            ct);
+
+        if (!document.RootElement.TryGetProperty("data", out var data) ||
+            !data.TryGetProperty("attributes", out var attributes) ||
+            !attributes.TryGetProperty("payments", out var payments) ||
+            payments.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        return payments.EnumerateArray()
+            .Select(ReadPayment)
+            .FirstOrDefault(candidate => candidate is not null);
+    }
+
     public GatewayEvent? ReadEvent(string rawBody, string? signatureHeader)
     {
         if (string.IsNullOrEmpty(rawBody) || string.IsNullOrWhiteSpace(signatureHeader) || !CanReadEvents)
@@ -190,23 +330,57 @@ public sealed class PayMongoGateway(
             }
 
             string? sessionId = null;
+            string? intentId = null;
+            string? failureCode = null;
             GatewayPaidPayment? payment = null;
 
             if (attributes.TryGetProperty("data", out var resource) && resource.ValueKind == JsonValueKind.Object)
             {
-                sessionId = resource.TryGetProperty("id", out var sessionElement) ? sessionElement.GetString() : null;
+                var resourceId = resource.TryGetProperty("id", out var idOfResource) ? idOfResource.GetString() : null;
+                var resourceType = resource.TryGetProperty("type", out var typeOfResource) ? typeOfResource.GetString() : null;
+                var resourceAttributes = resource.TryGetProperty("attributes", out var found) && found.ValueKind == JsonValueKind.Object
+                    ? found
+                    : default;
 
-                if (resource.TryGetProperty("attributes", out var resourceAttributes) &&
-                    resourceAttributes.TryGetProperty("payments", out var payments) &&
-                    payments.ValueKind == JsonValueKind.Array)
+                switch (resourceType)
                 {
-                    payment = payments.EnumerateArray()
-                        .Select(ReadPayment)
-                        .FirstOrDefault(candidate => candidate is not null);
+                    case "payment":
+                        // A payment started on our own page: the event is the
+                        // payment itself, and names the intent it belongs to.
+                        payment = ReadPayment(resource);
+                        intentId = StringOf(resourceAttributes, "payment_intent_id");
+                        failureCode = StringOf(resourceAttributes, "failed_code");
+                        break;
+
+                    case "payment_intent":
+                        intentId = resourceId;
+                        break;
+
+                    case not (null or "checkout_session"):
+                        // Anything else — a QR code that expired, say — is
+                        // ours only through the intent it names, if it names one.
+                        intentId = StringOf(resourceAttributes, "payment_intent_id")
+                            ?? (resourceId?.StartsWith("pi_", StringComparison.Ordinal) == true ? resourceId : null);
+                        break;
+
+                    default:
+                        // A hosted checkout, and the payments made on it.
+                        sessionId = resourceId;
+
+                        if (resourceAttributes.ValueKind == JsonValueKind.Object &&
+                            resourceAttributes.TryGetProperty("payments", out var payments) &&
+                            payments.ValueKind == JsonValueKind.Array)
+                        {
+                            payment = payments.EnumerateArray()
+                                .Select(ReadPayment)
+                                .FirstOrDefault(candidate => candidate is not null);
+                        }
+
+                        break;
                 }
             }
 
-            return new GatewayEvent(eventId, eventType, liveMode, sessionId, payment);
+            return new GatewayEvent(eventId, eventType, liveMode, sessionId, payment, intentId, failureCode);
         }
     }
 
@@ -249,6 +423,62 @@ public sealed class PayMongoGateway(
             Encoding.ASCII.GetBytes(expected),
             Encoding.ASCII.GetBytes(sent.ToLowerInvariant()));
     }
+
+    /// <summary>
+    /// One call to PayMongo's v1 API with the secret key, wrapped the way it
+    /// expects (<c>data.attributes</c>). A refusal is logged with PayMongo's
+    /// own words — which name the field it disliked and hold nothing secret —
+    /// and thrown, so the caller can tell the customer it did not work.
+    /// </summary>
+    private async Task<JsonDocument> CallAsync(
+        HttpMethod method,
+        string path,
+        IReadOnlyDictionary<string, object?>? body,
+        CancellationToken ct)
+    {
+        using var message = new HttpRequestMessage(method, new Uri(new Uri(Settings.BaseUrl), path));
+
+        if (body is not null)
+        {
+            message.Content = JsonContent.Create(new { data = new { attributes = body } });
+        }
+
+        message.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic",
+            Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Settings.SecretKey}:")));
+
+        using var response = await http.SendAsync(message, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            logger.LogError(
+                "PayMongo refused {Method} {Path}: {Status} {Body}",
+                method,
+                path,
+                (int)response.StatusCode,
+                text);
+
+            throw new HttpRequestException($"PayMongo answered {(int)response.StatusCode} to {method} {path}.");
+        }
+
+        return JsonDocument.Parse(text);
+    }
+
+    private static string? StringOf(JsonElement attributes, string name) =>
+        attributes.ValueKind == JsonValueKind.Object &&
+        attributes.TryGetProperty(name, out var value) &&
+        value.ValueKind == JsonValueKind.String &&
+        !string.IsNullOrWhiteSpace(value.GetString())
+            ? value.GetString()
+            : null;
+
+    /// <summary>
+    /// PayMongo sends the QR code as Base64, said to be ready for an
+    /// <c>img</c> tag. Made so either way, whether or not it came as a data URL.
+    /// </summary>
+    private static string AsDataUrl(string image) =>
+        image.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ? image : $"data:image/png;base64,{image}";
 
     private static GatewayPaidPayment? ReadPayment(JsonElement element)
     {

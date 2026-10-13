@@ -15,4 +15,11 @@ public static class OnlinePaymentStatus
     /// and never refunded automatically — the venue decides.
     /// </summary>
     public const string NeedsAttention = "NeedsAttention";
+
+    /// <summary>
+    /// A way of paying started on our own page ended with nothing paid: the
+    /// e-wallet declined it or the customer gave up there, or the QR code ran
+    /// out. Nothing is owed back. The customer can start another.
+    /// </summary>
+    public const string Failed = "Failed";
 }

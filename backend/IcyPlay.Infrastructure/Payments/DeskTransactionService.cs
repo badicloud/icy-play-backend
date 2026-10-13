@@ -130,7 +130,8 @@ public sealed class DeskTransactionService(AppDbContext db, TimeProvider timePro
     /// <summary>
     /// Paid payments at venues this person works and may see the money of:
     /// the owner always, an attendant only once the owner has shared it.
-    /// A checkout still open is not a transaction yet.
+    /// A checkout still open is not a transaction yet, and an attempt that
+    /// ended with nothing paid never becomes one.
     /// </summary>
     private IQueryable<OnlinePayment> Settled(Guid userId)
     {
@@ -143,7 +144,8 @@ public sealed class DeskTransactionService(AppDbContext db, TimeProvider timePro
         return db.OnlinePayments
             .AsNoTracking()
             .Where(payment => venueIds.Contains(payment.FacilityId)
-                && payment.Status != OnlinePaymentStatus.Pending);
+                && (payment.Status == OnlinePaymentStatus.Paid
+                    || payment.Status == OnlinePaymentStatus.NeedsAttention));
     }
 
     private async Task<DateTimeOffset?> SeenAtAsync(Guid userId, CancellationToken ct) =>

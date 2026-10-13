@@ -2621,6 +2621,10 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("nvarchar(1000)");
 
+                    b.Property<string>("ChosenMethod")
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -2631,17 +2635,32 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
 
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<Guid>("FacilityId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("FacilityOwnerId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<decimal?>("NetAmount")
                         .HasColumnType("decimal(10,2)");
 
+                    b.Property<string>("NextActionUrl")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
                     b.Property<DateTimeOffset?>("PaidAt")
                         .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("PaymentIntentId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("PaymentMethod")
                         .HasMaxLength(40)
@@ -2667,6 +2686,12 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("nvarchar(40)");
 
+                    b.Property<string>("QrCodeImage")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<decimal?>("QuotedTotal")
+                        .HasColumnType("decimal(10,2)");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
@@ -2691,6 +2716,10 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("CheckoutSessionId")
                         .IsUnique()
                         .HasFilter("[CheckoutSessionId] IS NOT NULL");
+
+                    b.HasIndex("PaymentIntentId")
+                        .IsUnique()
+                        .HasFilter("[PaymentIntentId] IS NOT NULL");
 
                     b.HasIndex("FacilityOwnerId", "Status");
 

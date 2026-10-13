@@ -18,6 +18,39 @@ public sealed record CheckoutRequest(
 
 public sealed record CheckoutSessionCreated(string SessionId, string CheckoutUrl);
 
+/// <summary>
+/// One way to pay, and what it comes to: what is owed, the gateway's fee on
+/// top, VAT included, and the total the customer is charged.
+/// </summary>
+public sealed record PaymentMethodQuote(string Method, decimal AmountDue, decimal ProcessingFee, decimal Total);
+
+/// <summary>
+/// One way of paying, started on our own page rather than the gateway's: a
+/// single method and a single amount, the gateway's fee already in it.
+/// </summary>
+public sealed record PaymentIntentRequest(
+    /// <summary>The gateway's word for the method: qrph, gcash, paymaya.</summary>
+    string Method,
+    /// <summary>What the customer is charged, the fee included.</summary>
+    decimal Amount,
+    string Description,
+    /// <summary>Where an e-wallet sends the customer back to, whether they paid or not.</summary>
+    string ReturnUrl,
+    /// <summary>How long a QR code may be scanned for. Ignored by the other methods.</summary>
+    TimeSpan QrLifetime,
+    IReadOnlyDictionary<string, string> Metadata);
+
+/// <summary>
+/// What the customer does next: scan <see cref="QrCodeImage"/> (a data URL),
+/// or be sent to <see cref="RedirectUrl"/> to approve in their e-wallet.
+/// </summary>
+public sealed record PaymentIntentStarted(
+    string PaymentIntentId,
+    string? RedirectUrl,
+    string? QrCodeImage,
+    /// <summary>When a QR code stops working. Null for the others.</summary>
+    DateTimeOffset? ExpiresAt);
+
 /// <summary>A payment the gateway says was made, as read from one of its events.</summary>
 public sealed record GatewayPaidPayment(
     string PaymentId,
@@ -29,14 +62,19 @@ public sealed record GatewayPaidPayment(
 
 /// <summary>
 /// One event from the gateway, already checked to be from the gateway.
-/// <see cref="Payment"/> is null on events that carry no payment.
+/// <see cref="Payment"/> is null on events that carry no paid payment. An
+/// event is about a hosted checkout (<see cref="CheckoutSessionId"/>) or a
+/// payment started on our own page (<see cref="PaymentIntentId"/>).
 /// </summary>
 public sealed record GatewayEvent(
     string EventId,
     string EventType,
     bool LiveMode,
     string? CheckoutSessionId,
-    GatewayPaidPayment? Payment);
+    GatewayPaidPayment? Payment,
+    string? PaymentIntentId = null,
+    /// <summary>The gateway's reason, on an event saying a payment failed.</summary>
+    string? FailureCode = null);
 
 /// <summary>
 /// What is owed for one thing, worked out by the handler that owns it.
