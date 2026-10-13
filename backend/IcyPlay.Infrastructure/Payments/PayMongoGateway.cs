@@ -80,7 +80,7 @@ public sealed class PayMongoGateway(
                         currency = "PHP",
                         quantity = 1
                     }).ToArray(),
-                    ["payment_method_types"] = Settings.PaymentMethodTypes,
+                    ["payment_method_types"] = request.PaymentMethodTypes ?? Settings.PaymentMethodTypes,
                     ["success_url"] = request.SuccessUrl,
                     ["cancel_url"] = request.CancelUrl,
                     ["reference_number"] = request.ReferenceNumber,
@@ -440,7 +440,13 @@ public sealed class PayMongoGateway(
 
         if (body is not null)
         {
-            message.Content = JsonContent.Create(new { data = new { attributes = body } });
+            message.Content = JsonContent.Create(new
+            {
+                data = new
+                {
+                    attributes = body
+                }
+            });
         }
 
         message.Headers.Authorization = new AuthenticationHeaderValue(

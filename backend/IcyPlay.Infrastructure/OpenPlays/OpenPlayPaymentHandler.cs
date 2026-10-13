@@ -87,7 +87,8 @@ public sealed class OpenPlayPaymentHandler(
             OpenPlayReference.For(registration.Id),
             $"{row.Title} at {row.FacilityName}",
             lines,
-            $"{options.Value.OpenPlayRegistrationUrl.TrimEnd('/')}/{registration.Id}"));
+            $"{options.Value.OpenPlayRegistrationUrl.TrimEnd('/')}/{registration.Id}",
+            registration.HoldsUntil));
     }
 
     public async Task<Settlement> SettleAsync(OnlinePayment payment, DateTimeOffset now, CancellationToken ct)

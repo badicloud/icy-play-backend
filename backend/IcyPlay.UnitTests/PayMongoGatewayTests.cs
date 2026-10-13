@@ -157,6 +157,33 @@ public sealed class PayMongoGatewayTests
     }
 
     [Fact]
+    public async Task Should_Offer_Only_The_Methods_Asked_For_When_Checkout_Names_Them()
+    {
+        // Arrange
+        var paymongo = new FakePayMongo()
+            .Answer("/v2/checkout_sessions", """{"data":{"id":"cs_card","attributes":{"checkout_url":"https://checkout.paymongo.com/cs_card"}}}""");
+        var gateway = Gateway(new HttpClient(paymongo));
+        var request = new CheckoutRequest(
+            "BK-0001",
+            "Court",
+            [new CheckoutLineItem("Court", 600m)],
+            "https://icyplay.test/s",
+            "https://icyplay.test/c",
+            new Dictionary<string, string>(),
+            ["card"]);
+
+        // Act
+        await gateway.CreateCheckoutAsync(request, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            paymongo.Body(0).GetProperty("payment_method_types").EnumerateArray().Select(type => type.GetString()).Should().Equal("card");
+            paymongo.Body(0).GetProperty("pass_on_fees").GetBoolean().Should().BeTrue();
+        }
+    }
+
+    [Fact]
     public async Task Should_Throw_When_PayMongo_Refuses_The_Checkout()
     {
         // Arrange

@@ -213,10 +213,16 @@ public sealed class OnlinePayment : Entity
     /// </summary>
     public bool CanStillBePaid => Status is OnlinePaymentStatus.Pending or OnlinePaymentStatus.Failed;
 
-    public void OpenCheckout(string checkoutSessionId, string checkoutUrl, DateTimeOffset now)
+    /// <summary>
+    /// Records the gateway's hosted checkout. <paramref name="method"/> is set
+    /// when the customer picked it on our page and the checkout offers only
+    /// that — a card — so it is never handed back as the all-methods page.
+    /// </summary>
+    public void OpenCheckout(string checkoutSessionId, string checkoutUrl, DateTimeOffset now, string? method = null)
     {
         CheckoutSessionId = checkoutSessionId;
         CheckoutUrl = checkoutUrl;
+        ChosenMethod = method;
         UpdatedAt = now;
     }
 

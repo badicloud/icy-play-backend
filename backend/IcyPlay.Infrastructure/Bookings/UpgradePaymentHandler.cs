@@ -78,7 +78,8 @@ public sealed class UpgradePaymentHandler(
             UpgradeReference.For(upgrade.Id),
             $"Move from {row.CourtName} to {upgrade.ToCourtName} at {row.FacilityName}",
             [new CheckoutLineItem($"Upgrade to {upgrade.ToCourtName}", upgrade.BalanceDue)],
-            $"{options.Value.BookingUrl.TrimEnd('/')}/{upgrade.BookingId}/upgrade"));
+            $"{options.Value.BookingUrl.TrimEnd('/')}/{upgrade.BookingId}/upgrade",
+            upgrade.HoldsUntil));
     }
 
     public async Task<Settlement> SettleAsync(OnlinePayment payment, DateTimeOffset now, CancellationToken ct)

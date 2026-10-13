@@ -431,6 +431,360 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
         listed.TotalItems.Should().Be(0);
     }
 
+    // ------------------------------------------------ paying on our own page
+
+    [Fact]
+    public async Task GetOptionsAsync_ShouldQuoteEachMethodAndShowNoAttemptYet()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Options Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var options = await sut.GetOptionsAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Succeeded.Should().BeTrue();
+            options.Value!.Experience.Should().Be(CheckoutExperience.Integrated);
+            options.Value.AmountDue.Should().Be(515m);
+            options.Value.Methods.Select(method => method.Total).Should().Equal(520m, 525m);
+            options.Value.Current.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task GetOptionsAsync_ShouldRefuseABookingPaidByReceipt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Receipt Options Courts", PaymentMode.Manual);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var options = await sut.GetOptionsAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+        var started = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Failure.Should().Be(PaymentFailure.NotPaidOnline);
+            started.Failure.Should().Be(PaymentFailure.NotPaidOnline);
+            gateway.IntentsStarted.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task StartMethodAsync_ShouldShowAQrCodeNoLongerThanTheHoldAndHandItBackWhenAskedAgain()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "QR Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var first = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+        var second = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, " QRPH ", CancellationToken.None);
+        var options = await sut.GetOptionsAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+
+        // Assert
+        var payment = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.SubjectId == bookingId);
+
+        using (new AssertionScope())
+        {
+            first.Succeeded.Should().BeTrue();
+            first.Value!.Method.Should().Be("qrph");
+            first.Value.Total.Should().Be(520m);
+            first.Value.Status.Should().Be(OnlinePaymentStatus.Pending);
+            first.Value.QrCodeImage.Should().Be("data:image/png;base64,QR");
+            first.Value.SecondsLeft.Should().Be(OnlineHold.DefaultMinutes * 60);
+            second.Value!.PaymentId.Should().Be(first.Value.PaymentId);
+            gateway.IntentsStarted.Should().Be(1);
+            gateway.LastIntentRequest!.Amount.Should().Be(520m);
+            gateway.LastIntentRequest.QrLifetime.Should().Be(TimeSpan.FromMinutes(OnlineHold.DefaultMinutes));
+            payment.ChosenMethod.Should().Be("qrph");
+            payment.QuotedTotal.Should().Be(520m);
+            payment.CheckoutSessionId.Should().BeNull();
+            options.Value!.Current!.PaymentId.Should().Be(first.Value.PaymentId);
+        }
+    }
+
+    /// <summary>
+    /// The code ran out and the gateway has not said so yet. The server's
+    /// clock decides: the page is told it ended, and asking for QR Ph again
+    /// makes a fresh code rather than handing back the dead one.
+    /// </summary>
+    [Fact]
+    public async Task GetOptionsAsync_ShouldShowAQrCodeAsEndedOnceItsTimeIsUpByTheServersClock()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Ran Out Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated, QrLasts = TimeSpan.FromMinutes(5) };
+        var first = await CreateService(context, gateway, new RecordingNotifier())
+            .StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+        context.ChangeTracker.Clear();
+        var later = CreateService(context, gateway, new RecordingNotifier(), Now.AddMinutes(6));
+
+        // Act
+        var options = await later.GetOptionsAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+        var again = await later.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            options.Value!.Current!.PaymentId.Should().Be(first.Value!.PaymentId);
+            options.Value.Current.Status.Should().Be(OnlinePaymentStatus.Failed);
+            options.Value.Current.FailureReason.Should().Be(PayMongoGateway.QrPhExpiredEvent);
+            options.Value.Current.QrCodeImage.Should().BeNull();
+            options.Value.Current.SecondsLeft.Should().BeNull();
+            again.Value!.PaymentId.Should().NotBe(first.Value.PaymentId);
+            gateway.IntentsStarted.Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task StartMethodAsync_ShouldSendTheCustomerToTheirEWalletAndBringThemBackHere()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "GCash Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var started = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "gcash", CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            started.Value!.RedirectUrl.Should().StartWith("https://gcash.test/authorize/");
+            started.Value.QrCodeImage.Should().BeNull();
+            started.Value.SecondsLeft.Should().BeNull();
+            started.Value.Total.Should().Be(525m);
+            gateway.LastIntentRequest!.ReturnUrl.Should().EndWith($"/{bookingId}?payment=returned");
+        }
+    }
+
+    [Fact]
+    public async Task StartMethodAsync_ShouldRefuseAMethodTheVenuesPageDoesNotOffer()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Unknown Method Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var started = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "bitcoin", CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            started.Failure.Should().Be(PaymentFailure.UnknownMethod);
+            gateway.IntentsStarted.Should().Be(0);
+            (await context.OnlinePayments.AsNoTracking().AnyAsync(row => row.SubjectId == bookingId)).Should().BeFalse();
+        }
+    }
+
+    /// <summary>
+    /// A card is paid on the gateway's own page, offering the card alone —
+    /// and that page is never handed out as the one with every method.
+    /// </summary>
+    [Fact]
+    public async Task StartMethodAsync_ShouldOpenACardOnlyCheckoutThatIsNeverHandedBackAsTheFullPage()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Card Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+
+        // Act
+        var card = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "card", CancellationToken.None);
+        var cardRequest = gateway.LastRequest;
+        var hosted = await sut.StartCheckoutAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            card.Value!.Method.Should().Be("card");
+            card.Value.RedirectUrl.Should().StartWith("https://checkout.test/");
+            card.Value.Total.Should().Be(515m);
+            cardRequest!.PaymentMethodTypes.Should().Equal("card");
+            cardRequest.SuccessUrl.Should().EndWith("?payment=success");
+            hosted.Value!.CheckoutUrl.Should().NotBe(card.Value.RedirectUrl);
+            gateway.LastRequest!.PaymentMethodTypes.Should().BeNull();
+            gateway.CheckoutsOpened.Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_ShouldConfirmABookingPaidOnOurOwnPage()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Own Page Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var notifier = new RecordingNotifier();
+        var sut = CreateService(context, gateway, notifier);
+        var started = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+        gateway.Next = IntentPaidEvent("evt_own_page", gateway.LastIntentId!, Now.AddMinutes(3), net: 515m);
+
+        // Act
+        var outcome = await sut.HandleWebhookAsync("{}", ValidSignature, CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+        var booking = await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == bookingId);
+        var payment = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.Id == started.Value!.PaymentId);
+
+        using (new AssertionScope())
+        {
+            outcome.Should().Be(WebhookOutcome.Accepted);
+            booking.Status.Should().Be(BookingStatus.Confirmed);
+            payment.Status.Should().Be(OnlinePaymentStatus.Paid);
+            payment.AmountCharged.Should().Be(520m);
+            notifier.Confirmed.Should().ContainSingle().Which.Should().Be(bookingId);
+        }
+    }
+
+    /// <summary>
+    /// A hosted checkout's payment raises payment.paid as well as the
+    /// checkout's own event. Only the checkout's is acted on.
+    /// </summary>
+    [Fact]
+    public async Task HandleWebhookAsync_ShouldIgnoreAPaymentEventThatIsNotOneOfOurPagesPayments()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Hosted Echo Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway();
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+        await sut.StartCheckoutAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+        gateway.Next = IntentPaidEvent("evt_hosted_echo", "pi_belongs_to_a_checkout", Now.AddMinutes(3), net: 515m);
+
+        // Act
+        var outcome = await sut.HandleWebhookAsync("{}", ValidSignature, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            outcome.Should().Be(WebhookOutcome.Ignored);
+            (await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == bookingId))
+                .Status.Should().Be(BookingStatus.PendingPayment);
+        }
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_ShouldEndAnExpiredQrCodeAndLetTheCustomerStartAnother()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Expired QR Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+        var first = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+        gateway.Next = IntentEndedEvent("evt_qr_expired", PayMongoGateway.QrPhExpiredEvent, gateway.LastIntentId!, failureCode: null);
+
+        // Act
+        var outcome = await sut.HandleWebhookAsync("{}", ValidSignature, CancellationToken.None);
+        var options = await sut.GetOptionsAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+        var again = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            outcome.Should().Be(WebhookOutcome.Accepted);
+            options.Value!.Current!.Status.Should().Be(OnlinePaymentStatus.Failed);
+            options.Value.Current.FailureReason.Should().Be(PayMongoGateway.QrPhExpiredEvent);
+            options.Value.Current.QrCodeImage.Should().BeNull();
+            again.Value!.PaymentId.Should().NotBe(first.Value!.PaymentId);
+            again.Value.Status.Should().Be(OnlinePaymentStatus.Pending);
+            gateway.IntentsStarted.Should().Be(2);
+            (await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == bookingId))
+                .Status.Should().Be(BookingStatus.PendingPayment);
+        }
+    }
+
+    [Fact]
+    public async Task HandleWebhookAsync_ShouldKeepTheGatewaysReasonWhenAnEWalletDeclines()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Declined Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+        var started = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "gcash", CancellationToken.None);
+        gateway.Next = IntentEndedEvent("evt_declined", PayMongoGateway.PaymentFailedEvent, gateway.LastIntentId!, "insufficient_funds");
+
+        // Act
+        await sut.HandleWebhookAsync("{}", ValidSignature, CancellationToken.None);
+
+        // Assert
+        var payment = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.Id == started.Value!.PaymentId);
+
+        using (new AssertionScope())
+        {
+            payment.Status.Should().Be(OnlinePaymentStatus.Failed);
+            payment.FailureReason.Should().Be("insufficient_funds");
+        }
+    }
+
+    /// <summary>
+    /// The QR code was shown, then the customer went to GCash instead — and
+    /// paid the QR code after all. Asking the gateway finds it, whichever
+    /// attempt it was.
+    /// </summary>
+    [Fact]
+    public async Task VerifyAsync_ShouldFindAPaymentOnOurOwnPageWhicheverAttemptWasPaid()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Either Attempt Courts", PaymentMode.Direct);
+        var bookingId = await BookAsync(context, venue);
+        var gateway = new FakeGateway { CheckoutExperience = CheckoutExperience.Integrated };
+        var sut = CreateService(context, gateway, new RecordingNotifier());
+        var qr = await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "qrph", CancellationToken.None);
+        await sut.StartMethodAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, "gcash", CancellationToken.None);
+        gateway.PaidIntentId = await context.OnlinePayments
+            .Where(row => row.Id == qr.Value!.PaymentId)
+            .Select(row => row.PaymentIntentId)
+            .SingleAsync();
+        gateway.Next = IntentPaidEvent("evt_unused", gateway.PaidIntentId!, Now.AddMinutes(4), net: 515m);
+
+        // Act
+        var verified = await sut.VerifyAsync(PaymentPurpose.Booking, bookingId, venue.CustomerUserId, CancellationToken.None);
+
+        // Assert
+        context.ChangeTracker.Clear();
+        var paid = await context.OnlinePayments.AsNoTracking().SingleAsync(row => row.Status == OnlinePaymentStatus.Paid && row.SubjectId == bookingId);
+
+        using (new AssertionScope())
+        {
+            verified.Should().BeTrue();
+            paid.Id.Should().Be(qr.Value!.PaymentId);
+            (await context.Bookings.AsNoTracking().SingleAsync(row => row.Id == bookingId))
+                .Status.Should().Be(BookingStatus.Confirmed);
+        }
+    }
+
     /// <summary>
     /// A QR code that ran out, or an e-wallet that declined: nothing was paid,
     /// so it is no transaction of the venue's and no reason for a badge.
@@ -479,6 +833,18 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
             saved.QrCodeImage.Should().BeNull();
         }
     }
+
+    private static GatewayEvent IntentPaidEvent(string eventId, string intentId, DateTimeOffset paidAt, decimal net) =>
+        new(
+            eventId,
+            PayMongoGateway.PaymentPaidEvent,
+            LiveMode: false,
+            CheckoutSessionId: null,
+            new GatewayPaidPayment($"pay_{eventId}", "qrph", net + 5m, 5m, net, paidAt),
+            intentId);
+
+    private static GatewayEvent IntentEndedEvent(string eventId, string eventType, string intentId, string? failureCode) =>
+        new(eventId, eventType, LiveMode: false, CheckoutSessionId: null, Payment: null, intentId, failureCode);
 
     private static GatewayEvent PaidEvent(string eventId, string sessionId, DateTimeOffset paidAt, decimal net) =>
         new(
@@ -691,9 +1057,39 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
 
         public bool IsConfigured => true;
 
-        public string CheckoutExperience => Application.Payments.CheckoutExperience.Hosted;
+        public int IntentsStarted
+        {
+            get; private set;
+        }
+        public PaymentIntentRequest? LastIntentRequest
+        {
+            get; private set;
+        }
+        public string? LastIntentId
+        {
+            get; private set;
+        }
 
-        public IReadOnlyList<PaymentMethodQuote> QuoteMethods(decimal amountDue) => [];
+        /// <summary>How long a QR code lasts, when not as long as it was asked for.</summary>
+        public TimeSpan? QrLasts
+        {
+            get; set;
+        }
+
+        /// <summary>The one intent the gateway says was paid, when asked about intents.</summary>
+        public string? PaidIntentId
+        {
+            get; set;
+        }
+
+        public string CheckoutExperience { get; set; } = Application.Payments.CheckoutExperience.Hosted;
+
+        /// <summary>Round fees, so a test reads its totals at a glance.</summary>
+        public IReadOnlyList<PaymentMethodQuote> QuoteMethods(decimal amountDue) =>
+        [
+            new("qrph", amountDue, 5m, amountDue + 5m),
+            new("gcash", amountDue, 10m, amountDue + 10m)
+        ];
 
         public Task<CheckoutSessionCreated> CreateCheckoutAsync(CheckoutRequest request, CancellationToken ct)
         {
@@ -707,11 +1103,22 @@ public sealed class OnlinePaymentTests(SqlServerDatabaseFixture database)
         public Task<GatewayPaidPayment?> GetPaidPaymentAsync(string checkoutSessionId, CancellationToken ct) =>
             Task.FromResult(Next?.Payment);
 
-        public Task<PaymentIntentStarted> StartPaymentIntentAsync(PaymentIntentRequest request, CancellationToken ct) =>
-            throw new NotSupportedException("These tests pay at a hosted checkout.");
+        public Task<PaymentIntentStarted> StartPaymentIntentAsync(PaymentIntentRequest request, CancellationToken ct)
+        {
+            IntentsStarted++;
+            LastIntentRequest = request;
+            LastIntentId = $"pi_{Guid.NewGuid():N}";
+            var isQr = request.Method == "qrph";
+
+            return Task.FromResult(new PaymentIntentStarted(
+                LastIntentId,
+                isQr ? null : $"https://{request.Method}.test/authorize/{LastIntentId}",
+                isQr ? "data:image/png;base64,QR" : null,
+                isQr ? Now.Add(QrLasts ?? request.QrLifetime) : null));
+        }
 
         public Task<GatewayPaidPayment?> GetPaidIntentPaymentAsync(string paymentIntentId, CancellationToken ct) =>
-            Task.FromResult(Next?.Payment);
+            Task.FromResult(PaidIntentId is null || PaidIntentId == paymentIntentId ? Next?.Payment : null);
 
         public GatewayEvent? ReadEvent(string rawBody, string? signatureHeader) =>
             signatureHeader == ValidSignature ? Next : null;
