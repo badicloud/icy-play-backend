@@ -228,6 +228,148 @@ Mailjet sends transactional emails such as:
 
 Email sending should be queued through Hangfire so API requests are not delayed by external email service calls.
 
+### PayMongo (online payments)
+
+PayMongo takes online payment for venues whose contract term is set to
+**Direct**: court bookings, upgrades and Open Play registrations. Venues set to
+**Manual** keep the GCash receipt upload and never touch PayMongo, whatever the
+settings below say. The mode is set per contract term by the platform admin.
+
+#### Settings
+
+| Setting | Value | Notes |
+| --- | --- | --- |
+| `PayMongo__SecretKey` | `sk_live_…` in production, `sk_test_…` elsewhere | Secret. Server side only; the browser never talks to PayMongo |
+| `PayMongo__WebhookSecret` | `whsk_…` | Secret. Shown once by PayMongo for **that** webhook; a new webhook has a new one |
+| `PayMongo__CheckoutExperience` | `Hosted` (default) or `Integrated` | What step two looks like. Anything else is read as `Hosted` |
+| `PayMongo__FeeRates__<method>__Percent` | Optional | Only if PayMongo gives a negotiated rate. Defaults are the published rates |
+| `PayMongo__FeeRates__<method>__Fixed` | Optional | Pesos added per payment, before VAT |
+
+`CheckoutExperience`:
+
+* `Hosted`: step two sends the customer straight to PayMongo's own checkout
+  page, where they pick how to pay and PayMongo adds its fee (`pass_on_fees`).
+* `Integrated`: step two shows each method with its total before the customer
+  picks. QR Ph is shown on our page; GCash and Maya go straight to the
+  e-wallet and come back to us whether they paid, failed or gave up; a card
+  goes to PayMongo's page offering the card alone.
+
+It is a global setting, not a venue's. Switching it needs only an API restart:
+no migration and no frontend change. Attempts already open keep working either
+way. If anything goes wrong with `Integrated`, setting it back to `Hosted` is
+the rollback.
+
+Default fee rates, from PayMongo's published pricing (VAT excluded; the API
+adds 12% VAT on the fee and rounds each part up, so the venue is never short):
+
+| Method | Key | Rate |
+| --- | --- | --- |
+| QR Ph | `qrph` | 1.34% |
+| GCash | `gcash` | 2.23% |
+| Maya | `paymaya` | 1.79% |
+| Card | — | Worked out by PayMongo on its page |
+
+Example of a negotiated rate:
+
+```text
+PayMongo__FeeRates__gcash__Percent=2.0
+```
+
+#### Webhook
+
+Create one webhook in the PayMongo dashboard for each mode. Test-mode and
+live-mode webhooks are separate, and a live payment is only ever reported to a
+live webhook.
+
+```text
+Endpoint URL: https://<api-host>/api/v1/webhooks/paymongo
+```
+
+Events to subscribe to:
+
+| Event | What it does |
+| --- | --- |
+| `checkout_session.payment.paid` | Confirms a payment made on PayMongo's page (Hosted, and cards under Integrated) |
+| `payment.paid` | Confirms a QR Ph, GCash or Maya payment made from our page |
+| `payment.failed` | Closes an attempt the e-wallet declined, so the customer can try again |
+| `qrph.expired` | Closes a QR code that ran out |
+
+Rules:
+
+* **Editing** a webhook's URL keeps its secret. **Creating** a new one gives a
+  new `whsk_…`, which must go into `PayMongo__WebhookSecret` before the API is
+  restarted, or every event is turned away as unsigned.
+* Every event is checked against the signature. An unsigned or tampered one is
+  answered `401` and ignored.
+* A webhook that never arrives does not strand a customer: the waiting page
+  asks the API every few seconds, and the API asks PayMongo directly. The
+  webhook is still what confirms most payments, and the only thing that
+  confirms one when the customer has closed the page.
+
+#### Database
+
+These migrations must be applied (EF Core, in order) before the API starts:
+
+| Migration | Adds |
+| --- | --- |
+| `20261006131511_AddOnlinePayments` | `OnlinePayments`, `PaymentWebhookEvents`; payment mode and online hold on contract terms; payment channel on bookings |
+| `20261008045850_SeedBookingPaidOnlineEmailTemplate` | The "paid online" email template row (Mailjet `8416086`) |
+| `20261008053833_AddPaymentChannelToUpgradesAndOpenPlay` | How each upgrade and registration is paid |
+| `20261008061137_AddDeskOnlineTransactions` | The desk's online transactions and its unseen badge |
+| `20261008220852_AddOnlinePaymentRowVersion` | Stops the webhook and a direct check settling one payment twice |
+| `20261012055221_AddPaymentIntents` | Method, quoted total, QR code and e-wallet link for payments started on our page |
+
+None of them removes or rewrites data. The new required columns default to
+**`Manual`** (payment mode and payment channel) and **15 minutes** (online
+hold), so after deploying, every existing contract term, booking, upgrade and
+registration carries on exactly as before. **No venue takes online payment
+until the platform admin sets its contract term to Direct** (Facility owners →
+the owner → Rates and payment). A term that starts in the future can be
+started today from the same page.
+
+#### Mailjet templates
+
+The online payment emails use Mailjet templates by ID. If production uses a
+different Mailjet account from development, recreate them there from
+`docs/email-templates/` and update the IDs in the `EmailTemplates` table:
+
+* `booking-paid-online.html`: the owner and desk are told a booking was paid
+  online and is already confirmed
+* `booking-confirmed.html`: now carries the receipt section and the processing
+  fee line
+
+Confirmation emails attach the receipt as a PDF, made by the API (QuestPDF,
+Community licence). Nothing to configure.
+
+#### Test mode only
+
+* With a `sk_test_…` key, a QR Ph code is **still a real code**: scanning it
+  with a real bank or e-wallet app pays for real. Our page shows a
+  "Simulate payment (test mode)" link beside it instead, opening PayMongo's
+  page that pretends to pay it. The link is only shown when PayMongo marks the
+  payment as test mode, or the key is a test key. It never appears with a live
+  key.
+* Test cards (any future expiry, any CVC): `4343434343434345` succeeds;
+  `4120000000000007` asks for 3-D Secure (pick Authorize); `4111111111111111`
+  is declined.
+* The GCash and Maya test pages have Authorize and Fail buttons in place of a
+  real login.
+
+#### Local development
+
+PayMongo cannot reach `localhost`, so a webhook needs a tunnel:
+
+```bash
+cloudflared tunnel --url http://localhost:5182
+```
+
+Use the `https://….trycloudflare.com` address it prints as the test webhook's
+endpoint URL, with `/api/v1/webhooks/paymongo` on the end. The address changes
+every time `cloudflared` restarts, so **edit** the webhook's URL each time
+(editing keeps the secret). Keep `PayMongo__SecretKey` and
+`PayMongo__WebhookSecret` in `appsettings.Development.json`, which is not
+committed.
+
 ---
 
 ## Configuration and Secrets
@@ -245,6 +387,8 @@ Use environment variables or a secret manager for:
 * Cloudinary API secret
 * Mailjet API key
 * Mailjet API secret
+* PayMongo secret key
+* PayMongo webhook secret
 * Redis connection string
 * Frontend URL
 * Backend public URL
@@ -265,6 +409,9 @@ Mailjet__ApiSecret=api-secret
 Cloudinary__CloudName=cloud-name
 Cloudinary__ApiKey=cloudinary-api-key
 Cloudinary__ApiSecret=cloudinary-api-secret
+PayMongo__SecretKey=sk_live_...
+PayMongo__WebhookSecret=whsk_...
+PayMongo__CheckoutExperience=Hosted
 PlatformAdmin__SeedEmails__0=first.admin@example.com
 Redis__ConnectionString=redis-connection-string
 Frontend__BaseUrl=https://app.icypay-booking.com
@@ -493,6 +640,11 @@ Before releasing to production:
 * Facility Owner verification works.
 * Billing generation works.
 * Email sending works.
+* PayMongo live keys are set (`sk_live_…`), and the webhook secret belongs to the live webhook.
+* The live PayMongo webhook points at the production API and subscribes to the four events in the PayMongo section.
+* `PayMongo__CheckoutExperience` is the one intended (`Hosted` or `Integrated`).
+* One small real payment at a Direct venue confirms by webhook, emails both sides, and shows on the desk's online transactions.
+* A Manual venue's booking still asks for a GCash receipt.
 * Logs are visible.
 
 ---
@@ -667,4 +819,5 @@ After MVP validation, consider:
 * `database-design.md`
 * `notification-workflow.md`
 * `billing-workflow.md`
+* `payment-workflow.md`
 * `roadmap.md`
