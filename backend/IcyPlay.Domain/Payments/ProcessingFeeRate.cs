@@ -1,22 +1,25 @@
 namespace IcyPlay.Domain.Payments;
 
 /// <summary>
-/// What the gateway takes for one way of paying: a percentage of what is
-/// charged, plus a fixed amount, with VAT on top of both — the gateway's
-/// published rates exclude it.
+/// What the gateway takes for one way of paying, as it actually charges it: a
+/// single percentage of what is charged, VAT already inside it, plus any fixed
+/// amount.
+///
+/// PayMongo publishes its rates without VAT (GCash 2.23%), but what it takes
+/// from a payment is that rate with VAT added and rounded to a round figure —
+/// 2.5% for GCash, 2.0% for Maya, 1.5% for QR Ph — times what was charged,
+/// rounded to the centavo. Working VAT out separately came to 2.4976% for
+/// GCash, a hair under, and left a payment a centavo short. So the rate here
+/// is the one the gateway takes, never the one it publishes.
 ///
 /// The customer pays this, not the venue. So what is charged is grossed up:
 /// the smallest amount that, once the gateway has taken its fee, still leaves
-/// exactly what is owed. The fee is worked out the way that costs the most —
-/// each part rounded up to the centavo — so a gateway that rounds the other
-/// way only ever leaves a centavo over, never one short. Short would flag the
-/// payment for the desk; over is lost in the rounding.
+/// what is owed. The fee is rounded up to the centavo, where the gateway
+/// rounds to the nearest, so at worst a centavo is left over — never one
+/// short. Short would flag the payment for the desk.
 /// </summary>
 public sealed record ProcessingFeeRate
 {
-    /// <summary>Philippine VAT, charged on the gateway's fee.</summary>
-    public const decimal Vat = 0.12m;
-
     public ProcessingFeeRate(decimal percent, decimal fixedAmount = 0m)
     {
         if (percent is < 0m or >= 50m)
@@ -33,18 +36,14 @@ public sealed record ProcessingFeeRate
         FixedAmount = fixedAmount;
     }
 
-    /// <summary>As published: 2.23 for 2.23%.</summary>
+    /// <summary>As the gateway takes it, VAT included: 2.5 for 2.5%.</summary>
     public decimal Percent { get; }
 
-    /// <summary>Pesos added to every payment, before VAT.</summary>
+    /// <summary>Pesos added to every payment, VAT included.</summary>
     public decimal FixedAmount { get; }
 
-    /// <summary>The fee, VAT included, on an amount charged — rounded against us.</summary>
-    public decimal FeeOn(decimal charged)
-    {
-        var fee = UpToCentavo((charged * Percent / 100m) + FixedAmount);
-        return fee + UpToCentavo(fee * Vat);
-    }
+    /// <summary>The fee on an amount charged, rounded against us.</summary>
+    public decimal FeeOn(decimal charged) => UpToCentavo((charged * Percent / 100m) + FixedAmount);
 
     /// <summary>What to charge so that <paramref name="amountDue"/> is what arrives.</summary>
     public decimal GrossUp(decimal amountDue)
@@ -54,12 +53,9 @@ public sealed record ProcessingFeeRate
             throw new ArgumentOutOfRangeException(nameof(amountDue), amountDue, "Only something owed can be charged.");
         }
 
-        const decimal withVat = 1m + Vat;
-
         // The answer without rounding, which no real total can be below; then
-        // up a centavo at a time until rounding leaves enough. One or two steps.
-        var charged = UpToCentavo(
-            (amountDue + (FixedAmount * withVat)) / (1m - (Percent / 100m * withVat)));
+        // up a centavo at a time until rounding leaves enough. One step at most.
+        var charged = UpToCentavo((amountDue + FixedAmount) / (1m - (Percent / 100m)));
 
         while (charged - FeeOn(charged) < amountDue)
         {

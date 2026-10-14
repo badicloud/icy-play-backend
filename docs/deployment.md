@@ -242,8 +242,8 @@ settings below say. The mode is set per contract term by the platform admin.
 | `PayMongo__SecretKey` | `sk_live_…` in production, `sk_test_…` elsewhere | Secret. Server side only; the browser never talks to PayMongo |
 | `PayMongo__WebhookSecret` | `whsk_…` | Secret. Shown once by PayMongo for **that** webhook; a new webhook has a new one |
 | `PayMongo__CheckoutExperience` | `Hosted` (default) or `Integrated` | What step two looks like. Anything else is read as `Hosted` |
-| `PayMongo__FeeRates__<method>__Percent` | Optional | Only if PayMongo gives a negotiated rate. Defaults are the published rates |
-| `PayMongo__FeeRates__<method>__Fixed` | Optional | Pesos added per payment, before VAT |
+| `PayMongo__FeeRates__<method>__Percent` | Optional | Only if PayMongo gives a negotiated rate. The rate it **takes**, VAT included (2.5 for 2.5%) |
+| `PayMongo__FeeRates__<method>__Fixed` | Optional | Pesos added per payment, VAT included |
 
 `CheckoutExperience`:
 
@@ -259,15 +259,23 @@ no migration and no frontend change. Attempts already open keep working either
 way. If anything goes wrong with `Integrated`, setting it back to `Hosted` is
 the rollback.
 
-Default fee rates, from PayMongo's published pricing (VAT excluded; the API
-adds 12% VAT on the fee and rounds each part up, so the venue is never short):
+Default fee rates: what PayMongo actually **takes** from a payment, VAT
+included. Its pricing page shows the rates without VAT; what it charges is
+that rate with VAT added and rounded to a round figure, times the total, to
+the nearest centavo. Every test payment so far matches this.
 
-| Method | Key | Rate |
-| --- | --- | --- |
-| QR Ph | `qrph` | 1.34% |
-| GCash | `gcash` | 2.23% |
-| Maya | `paymaya` | 1.79% |
-| Card | — | Worked out by PayMongo on its page |
+| Method | Key | Published (VAT excluded) | Taken (VAT included) — what to configure |
+| --- | --- | --- | --- |
+| QR Ph | `qrph` | 1.34% | **1.5%** |
+| GCash | `gcash` | 2.23% | **2.5%** |
+| Maya | `paymaya` | 1.79% | **2.0%** |
+| Card | — | 3.125% + ₱13.39 | Worked out by PayMongo on its page |
+
+The API rounds the fee **up** where PayMongo rounds to the nearest, so a
+customer pays at most a centavo more than PayMongo's own checkout would ask,
+and what reaches the venue is never short. Configuring the published rate
+instead (2.23 for GCash) leaves payments a centavo short: they arrive flagged
+"Needs attention" and the booking is not confirmed.
 
 Example of a negotiated rate:
 

@@ -41,11 +41,13 @@ public sealed class PayMongoOptions
     public string CheckoutExperience { get; init; } = Application.Payments.CheckoutExperience.Hosted;
 
     /// <summary>
-    /// PayMongo's published rates, VAT excluded, for the methods our own page
+    /// What PayMongo actually takes, VAT included, for the methods our own page
     /// offers — keyed by their payment method type, in the order of
-    /// <see cref="PaymentMethodTypes"/>. Card is left out: it is paid on
-    /// PayMongo's page, which passes its own fee on. Configurable because a
-    /// negotiated rate replaces the published one.
+    /// <see cref="PaymentMethodTypes"/>. Not the published rates, which leave
+    /// VAT out: QR Ph 1.34%, GCash 2.23% and Maya 1.79% are charged as 1.5%,
+    /// 2.5% and 2.0% of the total. Card is left out: it is paid on PayMongo's
+    /// page, which passes its own fee on. Configurable because a negotiated
+    /// rate replaces the standard one.
     /// </summary>
     public Dictionary<string, PayMongoFeeRate> FeeRates
     {
@@ -54,15 +56,15 @@ public sealed class PayMongoOptions
     {
         ["qrph"] = new()
         {
-            Percent = 1.34m
+            Percent = 1.5m
         },
         ["gcash"] = new()
         {
-            Percent = 2.23m
+            Percent = 2.5m
         },
         ["paymaya"] = new()
         {
-            Percent = 1.79m
+            Percent = 2.0m
         }
     };
 
@@ -73,7 +75,7 @@ public sealed class PayMongoOptions
     public int SignatureToleranceSeconds { get; init; } = 600;
 }
 
-/// <summary>One method's rate, as PayMongo publishes it: 2.23 for 2.23%, plus pesos.</summary>
+/// <summary>One method's rate as PayMongo takes it, VAT included: 2.5 for 2.5%, plus pesos.</summary>
 public sealed class PayMongoFeeRate
 {
     public decimal Percent

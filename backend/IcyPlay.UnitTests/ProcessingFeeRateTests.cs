@@ -6,19 +6,19 @@ namespace IcyPlay.UnitTests;
 public sealed class ProcessingFeeRateTests
 {
     [Theory]
-    [InlineData(1.34, 0, 630, 639.61)]
-    [InlineData(2.23, 0, 630, 646.14)]
-    [InlineData(1.79, 0, 630, 642.90)]
-    [InlineData(3.125, 13.39, 630, 668.40)]
-    [InlineData(2.23, 0, 15.50, 15.91)]
+    [InlineData(2.5, 515, 528.21)]
+    [InlineData(2.0, 515, 525.52)]
+    [InlineData(1.5, 515, 522.85)]
+    [InlineData(2.5, 630, 646.16)]
+    [InlineData(1.5, 630, 639.60)]
+    [InlineData(2.5, 15.50, 15.90)]
     public void Should_Charge_Smallest_Total_That_Leaves_Amount_Due_When_Fee_Is_Taken(
         decimal percent,
-        decimal fixedAmount,
         decimal amountDue,
         decimal expectedTotal)
     {
         // Arrange
-        var rate = new ProcessingFeeRate(percent, fixedAmount);
+        var rate = new ProcessingFeeRate(percent);
 
         // Act
         var total = rate.GrossUp(amountDue);
@@ -32,45 +32,78 @@ public sealed class ProcessingFeeRateTests
         }
     }
 
+    /// <summary>
+    /// Regression: a GCash payment of ₱528.20 for ₱515 was charged a ₱13.21 fee
+    /// by PayMongo and arrived ₱514.99 — a centavo short, flagged for the desk,
+    /// and paid a second time by the customer. VAT had been worked out apart
+    /// from the rate (2.4976%) where PayMongo takes a round 2.5%.
+    /// </summary>
     [Fact]
-    public void Should_Include_Vat_When_Working_Out_Fee()
+    public void Should_Leave_Amount_Due_When_GCash_Total_That_Came_Up_Short_Is_Worked_Out_Again()
     {
         // Arrange
-        var rate = new ProcessingFeeRate(2.23m);
+        var gcash = new ProcessingFeeRate(2.5m);
 
         // Act
-        var fee = rate.FeeOn(646.15m);
+        var total = gcash.GrossUp(515m);
 
         // Assert
-        fee.Should().Be(16.14m);
+        using (new AssertionScope())
+        {
+            total.Should().Be(528.21m);
+            (total - PayMongoFee(total, 2.5m)).Should().Be(515m);
+        }
     }
 
-    [Fact]
-    public void Should_Round_Each_Part_Of_Fee_Up_When_It_Falls_Between_Centavos()
+    /// <summary>
+    /// What PayMongo took on real test payments, read back from the database:
+    /// the rate VAT included, times what was charged, to the nearest centavo.
+    /// Ours never comes out under theirs, and never more than a centavo over.
+    /// </summary>
+    [Theory]
+    [InlineData(2.5, 646.15, 16.15)]
+    [InlineData(2.5, 528.20, 13.21)]
+    [InlineData(2.5, 102.56, 2.56)]
+    [InlineData(2.5, 117.96, 2.95)]
+    [InlineData(2.0, 525.54, 10.51)]
+    [InlineData(1.5, 421.33, 6.32)]
+    [InlineData(1.5, 319.81, 4.80)]
+    [InlineData(1.5, 1263.96, 18.96)]
+    public void Should_Never_Work_Out_Less_Than_PayMongo_Took_When_Fee_Is_Worked_Out(
+        decimal percent,
+        decimal charged,
+        decimal paymongoFee)
     {
         // Arrange
-        var rate = new ProcessingFeeRate(1.34m);
+        var rate = new ProcessingFeeRate(percent);
 
         // Act
-        var fee = rate.FeeOn(639.60m);
+        var fee = rate.FeeOn(charged);
 
         // Assert
-        fee.Should().Be(9.61m);
+        using (new AssertionScope())
+        {
+            PayMongoFee(charged, percent).Should().Be(paymongoFee);
+            fee.Should().BeInRange(paymongoFee, paymongoFee + 0.01m);
+        }
     }
 
-    [Fact]
-    public void Should_Leave_At_Least_Amount_Due_When_Amounts_Across_A_Wide_Range_Are_Grossed_Up()
+    [Theory]
+    [InlineData(1.5)]
+    [InlineData(2.0)]
+    [InlineData(2.5)]
+    public void Should_Leave_At_Least_Amount_Due_When_PayMongo_Takes_Its_Fee_Across_A_Wide_Range(decimal percent)
     {
         // Arrange
-        var rate = new ProcessingFeeRate(1.34m);
+        var rate = new ProcessingFeeRate(percent);
         var leftShort = new List<decimal>();
 
         // Act
-        for (var amountDue = 1m; amountDue <= 2000m; amountDue += 0.37m)
+        for (var amountDue = 1m; amountDue <= 5000m; amountDue += 0.37m)
         {
             var total = rate.GrossUp(amountDue);
 
-            if (total - rate.FeeOn(total) < amountDue)
+            if (total - PayMongoFee(total, percent) < amountDue)
             {
                 leftShort.Add(amountDue);
             }
@@ -86,7 +119,7 @@ public sealed class ProcessingFeeRateTests
     public void Should_Refuse_To_Gross_Up_When_Nothing_Is_Owed(decimal amountDue)
     {
         // Arrange
-        var rate = new ProcessingFeeRate(1.34m);
+        var rate = new ProcessingFeeRate(2.5m);
 
         // Act
         var grossUp = () => rate.GrossUp(amountDue);
@@ -98,7 +131,7 @@ public sealed class ProcessingFeeRateTests
     [Theory]
     [InlineData(-0.5, 0)]
     [InlineData(50, 0)]
-    [InlineData(1.34, -1)]
+    [InlineData(1.5, -1)]
     public void Should_Refuse_Rate_When_It_Is_Out_Of_Range(decimal percent, decimal fixedAmount)
     {
         // Arrange
@@ -110,4 +143,8 @@ public sealed class ProcessingFeeRateTests
         // Assert
         create.Should().Throw<ArgumentOutOfRangeException>();
     }
+
+    /// <summary>PayMongo's own sum, as its payments show it: to the nearest centavo, halves up.</summary>
+    private static decimal PayMongoFee(decimal charged, decimal percent) =>
+        Math.Round(charged * percent / 100m, 2, MidpointRounding.AwayFromZero);
 }

@@ -235,7 +235,7 @@ public sealed class PayMongoGatewayTests
     }
 
     [Fact]
-    public void Should_Quote_Each_Method_With_Its_Published_Rate_When_Rates_Are_Not_Configured()
+    public void Should_Quote_Each_Method_With_The_Rate_PayMongo_Takes_When_Rates_Are_Not_Configured()
     {
         // Arrange
         var gateway = Gateway();
@@ -245,9 +245,9 @@ public sealed class PayMongoGatewayTests
 
         // Assert
         quotes.Should().Equal(
-            new PaymentMethodQuote("qrph", 630m, 9.61m, 639.61m),
-            new PaymentMethodQuote("gcash", 630m, 16.14m, 646.14m),
-            new PaymentMethodQuote("paymaya", 630m, 12.90m, 642.90m));
+            new PaymentMethodQuote("qrph", 630m, 9.60m, 639.60m),
+            new PaymentMethodQuote("gcash", 630m, 16.16m, 646.16m),
+            new PaymentMethodQuote("paymaya", 630m, 12.86m, 642.86m));
     }
 
     [Fact]
