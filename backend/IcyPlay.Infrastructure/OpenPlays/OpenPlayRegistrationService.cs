@@ -114,6 +114,7 @@ public sealed class OpenPlayRegistrationService(
 
         var session = await db.OpenPlaySessions
             .Include(candidate => candidate.Registrations)
+            .Include(candidate => candidate.FreePlayers)
             .SingleOrDefaultAsync(candidate => candidate.OpenPlayId == openPlay.Id && candidate.Date == request.Date, ct);
 
         if (session is null)

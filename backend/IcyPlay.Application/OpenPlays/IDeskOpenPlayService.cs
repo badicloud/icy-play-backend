@@ -66,6 +66,13 @@ public interface IDeskOpenPlayService
         OpenPlayCheckInWindowInput input,
         CancellationToken cancellationToken);
 
+    /// <summary>Sets how many free players the desk may add per session. Allowed after publishing.</summary>
+    Task<OpenPlayResult<DeskOpenPlay>> SetFreeSpotsAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayFreeSpotsInput input,
+        CancellationToken cancellationToken);
+
     /// <summary>Deletes a draft. Only a draft: nobody can have registered for it.</summary>
     Task<OpenPlayResult<bool>> DeleteDraftAsync(AuditActor actor, Guid openPlayId, CancellationToken cancellationToken);
 }

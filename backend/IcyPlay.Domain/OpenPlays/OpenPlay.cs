@@ -133,6 +133,17 @@ public sealed class OpenPlay : Entity
     /// </summary>
     public int CheckInOpensMinutes { get; private set; } = OpenPlayLimits.DefaultCheckInLeadMinutes;
 
+    /// <summary>
+    /// How many players the desk may put into each session for free, to make
+    /// up a game when too few signed up. Inside <see cref="MaxPlayers"/>, not
+    /// on top of it, and not held back: paying players can still take every
+    /// spot. Zero turns it off.
+    /// </summary>
+    public int FreeSpots
+    {
+        get; private set;
+    }
+
     public int RegistrationCutoffMinutes
     {
         get; private set;
@@ -316,6 +327,30 @@ public sealed class OpenPlay : Entity
         }
 
         CheckInOpensMinutes = minutesBeforeStart;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Sets how many free players the desk may add per session. Allowed after
+    /// publishing, like the check-in window: it is how the venue fills a
+    /// short game, not part of what a player signed up for. Lowering it takes
+    /// nobody out who is already in.
+    /// </summary>
+    public void SetFreeSpots(int freeSpots, DateTimeOffset now)
+    {
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        if (freeSpots < 0 || freeSpots > MaxPlayers)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(freeSpots),
+                $"Free spots can be from 0 to the most players, {MaxPlayers}.");
+        }
+
+        FreeSpots = freeSpots;
         UpdatedAt = now;
     }
 
@@ -538,6 +573,8 @@ public sealed class OpenPlay : Entity
         Title = title.Trim();
         Level = level;
         MaxPlayers = maxPlayers;
+        // Fewer players than free spots leaves the free spots at the most there can be.
+        FreeSpots = Math.Min(FreeSpots, maxPlayers);
         RegistrationFee = registrationFee;
         StartsAt = startsAt;
         EndsAt = endsAt;

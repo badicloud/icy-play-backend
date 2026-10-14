@@ -1,3 +1,5 @@
+using System.Data;
+using System.Globalization;
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.OpenPlays;
 using IcyPlay.Domain.Audit;
@@ -126,7 +128,13 @@ public sealed class DeskCheckInService(
 
         var (registration, door) = await RegistrationAtDoorAsync(actor, registrationId, ct);
 
-        if (registration is null || door is null)
+        if (registration is null)
+        {
+            // Not a registration: a free player, checked in the same way.
+            return await ChangeFreeCheckInAsync(actor, registrationId, request, undo: false, ct);
+        }
+
+        if (door is null)
         {
             return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
         }
@@ -167,7 +175,12 @@ public sealed class DeskCheckInService(
 
         var (registration, door) = await RegistrationAtDoorAsync(actor, registrationId, ct);
 
-        if (registration is null || door is null)
+        if (registration is null)
+        {
+            return await ChangeFreeCheckInAsync(actor, registrationId, request, undo: true, ct);
+        }
+
+        if (door is null)
         {
             return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
         }
@@ -187,6 +200,168 @@ public sealed class DeskCheckInService(
         return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
     }
 
+    public async Task<OpenPlayRegistrationResult<CheckInRoster>> AddFreePlayerAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        AddFreePlayerRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var door = await DoorAsync(actor.UserId ?? Guid.Empty, openPlayId, date, ct);
+
+        if (door is null)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (door.IsOver)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.SessionOver);
+        }
+
+        var name = request.FullName?.Trim();
+        var mobile = string.IsNullOrWhiteSpace(request.Mobile) ? null : request.Mobile.Trim();
+
+        if (string.IsNullOrEmpty(name)
+            || name.Length > OpenPlayFreePlayer.NameLimit
+            || mobile is { Length: > OpenPlayFreePlayer.MobileLimit })
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.InvalidFreePlayer);
+        }
+
+        var now = timeProvider.GetUtcNow();
+
+        // Counting the spots and taking one happen together, as they do when a
+        // player registers: a player joining online at the same moment must
+        // not be sold the spot the desk is filling.
+        await using (var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, ct))
+        {
+            var session = await db.OpenPlaySessions
+                .Include(candidate => candidate.Registrations)
+                .Include(candidate => candidate.FreePlayers)
+                .SingleOrDefaultAsync(candidate => candidate.OpenPlayId == openPlayId && candidate.Date == date, ct);
+
+            if (session is null)
+            {
+                session = new OpenPlaySession(openPlayId, date, now);
+                db.OpenPlaySessions.Add(session);
+            }
+
+            if (session.FreePlayers.Count >= door.OpenPlay.FreeSpots)
+            {
+                return Fail<CheckInRoster>(OpenPlayRegistrationFailure.FreeSpotsUsed);
+            }
+
+            if (session.SpotsLeftAt(now, door.OpenPlay.MaxPlayers) == 0)
+            {
+                return Fail<CheckInRoster>(OpenPlayRegistrationFailure.Full);
+            }
+
+            var player = session.AddFreePlayer(
+                door.OpenPlay.FreeSpots,
+                door.OpenPlay.MaxPlayers,
+                name,
+                mobile,
+                actor.UserId!.Value,
+                now);
+
+            // Somebody the desk adds while the door is open is standing at it.
+            if (door.IsOpen)
+            {
+                player.CheckIn(actor.UserId!.Value, now);
+            }
+
+            db.OpenPlayFreePlayers.Add(player);
+            RecordFree(actor, AuditAction.OpenPlayFreePlayerAdded, door, player, "Put in for free by the desk.");
+
+            await db.SaveChangesAsync(ct);
+            await transaction.CommitAsync(ct);
+        }
+
+        return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<CheckInRoster>> RemoveFreePlayerAsync(
+        AuditActor actor,
+        Guid freePlayerId,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+
+        var (player, door) = await FreePlayerAtDoorAsync(actor, freePlayerId, ct);
+
+        if (player is null || door is null)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (door.IsOver)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.SessionOver);
+        }
+
+        RecordFree(actor, AuditAction.OpenPlayFreePlayerRemoved, door, player, "Taken back out by the desk.");
+        db.OpenPlayFreePlayers.Remove(player);
+        await db.SaveChangesAsync(ct);
+
+        return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
+    }
+
+    /// <summary>
+    /// Checks a free player in by hand, or takes it back, with the venue's
+    /// code — the same rule as a registered player checked in without a QR.
+    /// </summary>
+    private async Task<OpenPlayRegistrationResult<CheckInRoster>> ChangeFreeCheckInAsync(
+        AuditActor actor,
+        Guid freePlayerId,
+        CheckInCodeRequest request,
+        bool undo,
+        CancellationToken ct)
+    {
+        var (player, door) = await FreePlayerAtDoorAsync(actor, freePlayerId, ct);
+
+        if (player is null || door is null)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (await CodeRefusalAsync(actor, door, request.Code, ct) is OpenPlayRegistrationFailure refused)
+        {
+            return Fail<CheckInRoster>(refused);
+        }
+
+        var now = timeProvider.GetUtcNow();
+
+        if (undo)
+        {
+            if (player.IsCheckedIn)
+            {
+                player.UndoCheckIn(now);
+                RecordFree(actor, AuditAction.OpenPlayCheckInUndone, door, player, "Check-in taken back.");
+                await db.SaveChangesAsync(ct);
+            }
+        }
+        else
+        {
+            if (!door.IsOpen)
+            {
+                return Fail<CheckInRoster>(OpenPlayRegistrationFailure.CheckInClosed);
+            }
+
+            if (!player.IsCheckedIn)
+            {
+                player.CheckIn(actor.UserId!.Value, now);
+                RecordFree(actor, AuditAction.OpenPlayCheckedIn, door, player, "Checked in by hand from the roster.");
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
+    }
+
     // ------------------------------------------------------------ the reads
 
     private sealed record Door(
@@ -196,7 +371,9 @@ public sealed class DeskCheckInService(
         string CourtName,
         string UnitLabel,
         string TimeZone,
-        bool IsOpen);
+        bool IsOpen,
+        // The session has finished on the venue's clock.
+        bool IsOver);
 
     private static OpenPlayRegistrationResult<T> Fail<T>(OpenPlayRegistrationFailure failure) =>
         OpenPlayRegistrationResult<T>.Fail(failure);
@@ -245,7 +422,8 @@ public sealed class DeskCheckInService(
             row.CourtName,
             DeskService.UnitLabel(row.SportName, row.DivisionNumber, row.Divisions),
             row.TimeZone,
-            row.OpenPlay.IsCheckInOpen(date, venueNow));
+            row.OpenPlay.IsCheckInOpen(date, venueNow),
+            venueNow >= date.ToDateTime(row.OpenPlay.EndsAt));
     }
 
     private async Task<(OpenPlayRegistration? Registration, Door? Door)> RegistrationAtDoorAsync(
@@ -271,6 +449,25 @@ public sealed class DeskCheckInService(
         return (registration, door);
     }
 
+    private async Task<(OpenPlayFreePlayer? Player, Door? Door)> FreePlayerAtDoorAsync(
+        AuditActor actor,
+        Guid freePlayerId,
+        CancellationToken ct)
+    {
+        var player = await db.OpenPlayFreePlayers
+            .Include(candidate => candidate.Session)
+            .SingleOrDefaultAsync(candidate => candidate.Id == freePlayerId, ct);
+
+        if (player is null)
+        {
+            return (null, null);
+        }
+
+        var door = await DoorAsync(actor.UserId ?? Guid.Empty, player.Session.OpenPlayId, player.Session.Date, ct);
+
+        return (player, door);
+    }
+
     private async Task<CheckInRoster> RosterOfAsync(Door door, CancellationToken ct)
     {
         var rows = await db.OpenPlayRegistrations
@@ -289,8 +486,31 @@ public sealed class DeskCheckInService(
             })
             .ToListAsync(ct);
 
+        var free = await db.OpenPlayFreePlayers
+            .AsNoTracking()
+            .Where(player => player.Session.OpenPlayId == door.OpenPlay.Id && player.Session.Date == door.Date)
+            .Select(player => new { player.Id, player.FullName, player.Mobile, player.CheckedInAt })
+            .ToListAsync(ct);
+
+        // Everybody holding a spot, the ones still paying included, for
+        // whether there is room for one more.
+        var now = timeProvider.GetUtcNow();
+        var registrations = await db.OpenPlayRegistrations
+            .AsNoTracking()
+            .Where(registration => registration.Session.OpenPlayId == door.OpenPlay.Id
+                && registration.Session.Date == door.Date)
+            .ToListAsync(ct);
+        var spotsTaken = registrations.Count(registration => registration.HoldsSpotAt(now)) + free.Count;
+
         var players = rows
             .Select(row => new CheckInPlayer(row.Id, row.Name ?? "A player", ShortName(row.Name), row.CheckedInAt))
+            .Concat(free.Select(player => new CheckInPlayer(
+                player.Id,
+                player.FullName,
+                ShortName(player.FullName),
+                player.CheckedInAt,
+                IsFree: true,
+                player.Mobile)))
             .OrderBy(player => player.CheckedInAt is null ? 1 : 0)
             .ThenByDescending(player => player.CheckedInAt)
             .ThenBy(player => player.FullName)
@@ -310,7 +530,10 @@ public sealed class DeskCheckInService(
             door.OpenPlay.MaxPlayers,
             players.Count,
             players.Count(player => player.CheckedInAt is not null),
-            players);
+            players,
+            door.OpenPlay.FreeSpots,
+            free.Count,
+            !door.IsOver && free.Count < door.OpenPlay.FreeSpots && spotsTaken < door.OpenPlay.MaxPlayers);
     }
 
     /// <summary>
@@ -419,6 +642,26 @@ public sealed class DeskCheckInService(
 
     private static DateTime VenueTime(Door door, DateTimeOffset moment) =>
         VenueClock.LocalNowIn(door.TimeZone, moment).DateTime;
+
+    /// <summary>
+    /// A free player in the trail, against the open play so it shows in the
+    /// owner's activity: the name, the date, and whether they were checked in.
+    /// A removed free player leaves only this behind.
+    /// </summary>
+    private void RecordFree(AuditActor actor, string action, Door door, OpenPlayFreePlayer player, string reason) =>
+        audit.RecordEvent(
+            actor,
+            action,
+            AuditEntityType.OpenPlay,
+            door.OpenPlay.Id,
+            new Dictionary<string, string?>
+            {
+                ["freePlayerId"] = player.Id.ToString(),
+                ["name"] = player.FullName,
+                ["date"] = door.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+                ["checkedInAt"] = player.CheckedInAt?.ToString("O")
+            },
+            reason);
 
     private void Record(AuditActor actor, string action, OpenPlayRegistration registration, string reason) =>
         audit.RecordEvent(

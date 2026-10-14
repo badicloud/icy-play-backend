@@ -131,6 +131,24 @@ public sealed class AdminOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
     }
 
+    /// <summary>Sets how many free players the desk may add per session. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/free-spots")]
+    public async Task<IActionResult> FreeSpots(
+        Guid facilityOwnerId,
+        Guid openPlayId,
+        OpenPlayFreeSpotsInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetFreeSpotsForOwnerAsync(facilityOwnerId, actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
     [HttpDelete("{openPlayId:guid}")]
     public async Task<IActionResult> Delete(Guid facilityOwnerId, Guid openPlayId, CancellationToken ct)
     {

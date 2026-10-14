@@ -4730,6 +4730,202 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     /// hour before by default, has just opened, and registration, closing half
     /// an hour before, is still open.
     /// </summary>
+    // ------------------------------------------------ free players
+
+    [Fact]
+    public async Task FreePlayer_AddedByTheDesk_ShouldTakeASpot_StandOnTheRoster_AndShowAsACountToPlayers()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Free Player Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(2), CancellationToken.None);
+        await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        var sut = CreateCheckInService(context);
+
+        // Act
+        var added = await sut.AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest(" Coach Ramon ", "09171234567"), CancellationToken.None);
+        var listed = await new OpenPlayCatalog(context, new FixedTimeProvider(Now)).ListAsync(null, null, CancellationToken.None);
+
+        // Assert
+        var roster = added.Value!;
+        var free = roster.Players.Single(player => player.IsFree);
+        var tonight = listed.Single(entry => entry.OpenPlayId == openPlayId).UpcomingSessions.Single(session => session.Date == Today);
+
+        using (new AssertionScope())
+        {
+            added.Succeeded.Should().BeTrue();
+            free.FullName.Should().Be("Coach Ramon");
+            free.DisplayName.Should().Be("Coach R.");
+            free.Mobile.Should().Be("09171234567");
+            // Added at the door while check-in is open: they are standing at it.
+            free.CheckedInAt.Should().Be(Now);
+            roster.Registered.Should().Be(2);
+            roster.FreeSpots.Should().Be(2);
+            roster.FreePlayers.Should().Be(1);
+            roster.CanAddFreePlayer.Should().BeTrue();
+            tonight.SpotsLeft.Should().Be(10);
+            tonight.AddedByVenue.Should().Be(1);
+            (await context.AuditLogs.AnyAsync(entry =>
+                entry.Action == AuditAction.OpenPlayFreePlayerAdded && entry.EntityId == openPlayId)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task FreePlayer_BeyondTheOpenPlaysFreeSpots_ShouldBeRefused()
+    {
+        // Arrange: the venue allows one free player per session; none at all by default.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Free Spots Used Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateCheckInService(context);
+        var whileOff = await sut.AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Liza", null), CancellationToken.None);
+        await CreateOpenPlayService(context).SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(1), CancellationToken.None);
+        await sut.AddFreePlayerAsync(desk, openPlayId, Today, new AddFreePlayerRequest("Coach Ramon", null), CancellationToken.None);
+
+        // Act
+        var second = await sut.AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Liza", null), CancellationToken.None);
+        var roster = await sut.RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            whileOff.Failure.Should().Be(OpenPlayRegistrationFailure.FreeSpotsUsed);
+            second.Failure.Should().Be(OpenPlayRegistrationFailure.FreeSpotsUsed);
+            roster.Value!.FreePlayers.Should().Be(1);
+            roster.Value.CanAddFreePlayer.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task FreePlayer_InTheLastSpot_ShouldLeaveNothingForAPlayerToRegisterFor()
+    {
+        // Arrange: two spots, one taken by a paying player.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(
+            context,
+            "Last Spot Free Courts",
+            maxPlayers: 2,
+            input: floor => TuesdayMornings(floor.Pickleball1) with
+            {
+                Days = [DayOfWeek.Monday],
+                StartDate = Today,
+                StartsAt = new TimeOnly(18, 0),
+                EndsAt = new TimeOnly(20, 0),
+                RegistrationCutoffMinutes = 30,
+                FreeSpots = 2
+            });
+        var desk = await OwnerActorAsync(context, floor);
+        await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+        await CreateCheckInService(context).AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Coach Ramon", null), CancellationToken.None);
+        var latecomer = await PlayerAsync(context);
+
+        // Act
+        var registered = await CreateRegistrationService(context, new CapturingEmailSender()).RegisterAsync(
+            latecomer.Id, openPlayId, new RegisterForOpenPlayRequest(Today, true), CancellationToken.None);
+        var oneMore = await CreateCheckInService(context).AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Liza", null), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            registered.Failure.Should().Be(OpenPlayRegistrationFailure.Full);
+            oneMore.Failure.Should().Be(OpenPlayRegistrationFailure.Full);
+        }
+    }
+
+    [Fact]
+    public async Task FreePlayer_ShouldBeCheckedInByHandWithTheVenueCode_AndTakenBackOut()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Free Player Door Courts");
+        await CheckInCodeAsync(context, floor, VenueCode);
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(2), CancellationToken.None);
+        var sut = CreateCheckInService(context);
+        var added = await sut.AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Coach Ramon", null), CancellationToken.None);
+        var freePlayerId = added.Value!.Players.Single().RegistrationId;
+
+        // Act
+        var wrongCode = await sut.UndoAsync(desk, freePlayerId, new CheckInCodeRequest("000000"), CancellationToken.None);
+        var undone = await sut.UndoAsync(desk, freePlayerId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+        var checkedIn = await sut.CheckInAsync(desk, freePlayerId, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+        var removed = await sut.RemoveFreePlayerAsync(desk, freePlayerId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            wrongCode.Failure.Should().Be(OpenPlayRegistrationFailure.WrongCheckInCode);
+            undone.Value!.Players.Single().CheckedInAt.Should().BeNull();
+            checkedIn.Value!.CheckedIn.Should().Be(1);
+            removed.Value!.Players.Should().BeEmpty();
+            removed.Value.CanAddFreePlayer.Should().BeTrue();
+            (await context.OpenPlayFreePlayers.AnyAsync(player => player.Id == freePlayerId)).Should().BeFalse();
+            (await context.AuditLogs.AnyAsync(entry =>
+                entry.Action == AuditAction.OpenPlayFreePlayerRemoved && entry.EntityId == openPlayId)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task FreePlayer_FromAnotherVenuesDesk_ShouldNotBeAdded_OrRemoved()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Free Player Own Courts");
+        var (otherFloor, _) = await TonightsOpenPlayAsync(context, "Free Player Other Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var otherDesk = await OwnerActorAsync(context, otherFloor);
+        await CreateOpenPlayService(context).SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(2), CancellationToken.None);
+        var sut = CreateCheckInService(context);
+        var added = await sut.AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Coach Ramon", null), CancellationToken.None);
+
+        // Act
+        var addedElsewhere = await sut.AddFreePlayerAsync(
+            otherDesk, openPlayId, Today, new AddFreePlayerRequest("Liza", null), CancellationToken.None);
+        var removedElsewhere = await sut.RemoveFreePlayerAsync(
+            otherDesk, added.Value!.Players.Single().RegistrationId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            addedElsewhere.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
+            removedElsewhere.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
+            (await context.OpenPlayFreePlayers.CountAsync(player => player.Session.OpenPlayId == openPlayId)).Should().Be(1);
+        }
+    }
+
+    [Fact]
+    public async Task FreeSpots_OnAPublishedOpenPlay_ShouldChange_AndBeRecorded()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Free Spots Edit Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateOpenPlayService(context);
+
+        // Act
+        var set = await sut.SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(4), CancellationToken.None);
+        var tooMany = await sut.SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(13), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            set.Succeeded.Should().BeTrue();
+            set.Value!.FreeSpots.Should().Be(4);
+            set.Value.Status.Should().Be(OpenPlayStatus.Published);
+            tooMany.Failure.Should().Be(OpenPlayFailure.Invalid);
+            (await context.AuditLogs.AnyAsync(entry =>
+                entry.Action == AuditAction.OpenPlayFreeSpotsChanged && entry.EntityId == openPlayId)).Should().BeTrue();
+        }
+    }
+
     private static Task<(Floor Floor, Guid OpenPlayId)> TonightsOpenPlayAsync(AppDbContext context, string facilityName) =>
         PublishedOpenPlayAsync(
             context,

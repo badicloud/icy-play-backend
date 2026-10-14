@@ -17,11 +17,19 @@ public sealed record CheckInScanRequest(string Scanned);
 /// "Juan D.": for the wide screen on the venue's wall, which anybody walking
 /// past can read.
 /// </param>
+/// <param name="RegistrationId">The registration, or the free player's own id when <paramref name="IsFree"/>.</param>
+/// <param name="IsFree">Put in for free by the venue, not registered and paid.</param>
+/// <param name="Mobile">A free player's number, for the desk. Never a registered player's.</param>
 public sealed record CheckInPlayer(
     Guid RegistrationId,
     string FullName,
     string DisplayName,
-    DateTimeOffset? CheckedInAt);
+    DateTimeOffset? CheckedInAt,
+    bool IsFree = false,
+    string? Mobile = null);
+
+/// <summary>A player the desk puts into a session for free. The mobile number is optional.</summary>
+public sealed record AddFreePlayerRequest(string? FullName, string? Mobile);
 
 /// <summary>
 /// One session's door: who is registered, who has arrived, and whether the
@@ -42,7 +50,13 @@ public sealed record CheckInRoster(
     int MaxPlayers,
     int Registered,
     int CheckedIn,
-    IReadOnlyCollection<CheckInPlayer> Players);
+    IReadOnlyCollection<CheckInPlayer> Players,
+    // How many the desk may put in for free, and how many it has.
+    int FreeSpots = 0,
+    int FreePlayers = 0,
+    // Whether one more can be put in for free right now: a free spot and a
+    // spot left, before the session ends. The server's answer, not the page's.
+    bool CanAddFreePlayer = false);
 
 /// <summary>What a scan came to. Each reads as one line on the desk's screen.</summary>
 public static class CheckInOutcome

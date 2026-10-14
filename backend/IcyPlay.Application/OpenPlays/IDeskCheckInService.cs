@@ -30,8 +30,28 @@ public interface IDeskCheckInService
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Checks a registered player in by hand, from the roster. Needs the
-    /// venue's check-in code, since there is no QR to vouch for them.
+    /// Puts a player into the session for free, to make up a game: up to the
+    /// open play's free spots, while there is a spot, before the session ends.
+    /// Checked in at once when the check-in window is open, since the desk is
+    /// adding somebody standing in front of it.
+    /// </summary>
+    Task<OpenPlayRegistrationResult<CheckInRoster>> AddFreePlayerAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        AddFreePlayerRequest request,
+        CancellationToken cancellationToken);
+
+    /// <summary>Takes a free player back out, before the session ends. Their spot opens again.</summary>
+    Task<OpenPlayRegistrationResult<CheckInRoster>> RemoveFreePlayerAsync(
+        AuditActor actor,
+        Guid freePlayerId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Checks a registered player — or a free one, by their own id — in by
+    /// hand, from the roster. Needs the venue's check-in code, since there is
+    /// no QR to vouch for them.
     /// </summary>
     Task<OpenPlayRegistrationResult<CheckInRoster>> CheckInAsync(
         AuditActor actor,

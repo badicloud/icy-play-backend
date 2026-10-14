@@ -111,6 +111,68 @@ public sealed class OpenPlaySessionTests
         }
     }
 
+    [Fact]
+    public void Should_Count_A_Free_Player_When_Spots_Are_Counted()
+    {
+        // Arrange
+        var session = NewSession();
+        session.Registrations.Add(Register(1));
+
+        // Act
+        session.AddFreePlayer(2, 4, "Coach Ramon", null, TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            session.SpotsTakenAt(TestTimes.UtcNow.AddMinutes(1)).Should().Be(2);
+            session.SpotsLeftAt(TestTimes.UtcNow.AddMinutes(1), 4).Should().Be(2);
+            session.FreePlayers.Single().FullName.Should().Be("Coach Ramon");
+        }
+    }
+
+    [Fact]
+    public void Should_Refuse_A_Free_Player_When_Every_Free_Spot_Is_Used()
+    {
+        // Arrange
+        var session = NewSession();
+        session.AddFreePlayer(1, 4, "Coach Ramon", null, TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Act
+        var act = () => session.AddFreePlayer(1, 4, "Liza", null, TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Assert
+        act.Should().Throw<InvalidOperationException>().WithMessage("*free spot*");
+    }
+
+    [Fact]
+    public void Should_Refuse_A_Free_Player_When_The_Session_Is_Full()
+    {
+        // Arrange
+        var session = NewSession();
+        session.Registrations.Add(Register(1));
+        session.Registrations.Add(Register(2));
+
+        // Act
+        var act = () => session.AddFreePlayer(2, 2, "Coach Ramon", null, TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Assert
+        act.Should().Throw<InvalidOperationException>().WithMessage("*full*");
+    }
+
+    [Fact]
+    public void Should_Refuse_A_Free_Player_When_The_Session_Is_Cancelled()
+    {
+        // Arrange
+        var session = NewSession();
+        session.Cancel("Rain", TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Act
+        var act = () => session.AddFreePlayer(2, 4, "Coach Ramon", null, TestIds.For("desk"), TestTimes.UtcNow);
+
+        // Assert
+        act.Should().Throw<InvalidOperationException>();
+    }
+
     private static OpenPlaySession NewSession() =>
         new(TestIds.For("open-play"), OpenPlayBuilder.FirstSaturday, TestTimes.UtcNow);
 

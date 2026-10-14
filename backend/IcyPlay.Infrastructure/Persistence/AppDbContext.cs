@@ -53,6 +53,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<OpenPlay> OpenPlays => Set<OpenPlay>();
     public DbSet<OpenPlaySession> OpenPlaySessions => Set<OpenPlaySession>();
     public DbSet<OpenPlayRegistration> OpenPlayRegistrations => Set<OpenPlayRegistration>();
+    public DbSet<OpenPlayFreePlayer> OpenPlayFreePlayers => Set<OpenPlayFreePlayer>();
     public DbSet<OnlinePayment> OnlinePayments => Set<OnlinePayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<DeskReadMarker> DeskReadMarkers => Set<DeskReadMarker>();
@@ -1151,6 +1152,19 @@ public sealed class AppDbContext : DbContext
                 .WithMany(x => x.Sessions)
                 .HasForeignKey(x => x.OpenPlayId)
                 // A session with money against it is cancelled, never deleted.
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OpenPlayFreePlayer>(entity =>
+        {
+            entity.ToTable("OpenPlayFreePlayers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.FullName).HasMaxLength(OpenPlayFreePlayer.NameLimit).IsRequired();
+            entity.Property(x => x.Mobile).HasMaxLength(OpenPlayFreePlayer.MobileLimit);
+            entity.Ignore(x => x.IsCheckedIn);
+            entity.HasOne(x => x.Session)
+                .WithMany(x => x.FreePlayers)
+                .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

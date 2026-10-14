@@ -291,6 +291,11 @@ public sealed class OpenPlaySeedService(
             .Where(registration => openPlayIds.Contains(registration.Session.OpenPlayId))
             .ExecuteDeleteAsync(ct);
 
+        // Free players a desk put into a sample session go with it.
+        await db.OpenPlayFreePlayers
+            .Where(player => openPlayIds.Contains(player.Session.OpenPlayId))
+            .ExecuteDeleteAsync(ct);
+
         var sessions = await db.OpenPlaySessions
             .Where(session => openPlayIds.Contains(session.OpenPlayId))
             .ExecuteDeleteAsync(ct);

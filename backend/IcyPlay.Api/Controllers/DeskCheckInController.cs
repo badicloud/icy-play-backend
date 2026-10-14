@@ -55,7 +55,49 @@ public sealed class DeskCheckInController(IDeskCheckInService checkIns) : Contro
             : OpenPlayRegistrationErrors.Failure(result);
     }
 
-    /// <summary>Checks a registered player in by hand, with the venue's check-in code.</summary>
+    /// <summary>
+    /// Puts a player into the session for free, to make up a game. Answers with
+    /// the roster as it now stands.
+    /// </summary>
+    [HttpPost("api/v1/desk/open-plays/{openPlayId:guid}/sessions/{date}/free-players")]
+    public async Task<IActionResult> AddFreePlayer(
+        Guid openPlayId,
+        DateOnly date,
+        AddFreePlayerRequest request,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await checkIns.AddFreePlayerAsync(actor, openPlayId, date, request, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CheckInRoster>(result.Value!))
+            : OpenPlayRegistrationErrors.Failure(result);
+    }
+
+    /// <summary>Takes a free player back out. Their spot opens again.</summary>
+    [HttpDelete("api/v1/desk/open-play-free-players/{freePlayerId:guid}")]
+    public async Task<IActionResult> RemoveFreePlayer(Guid freePlayerId, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await checkIns.RemoveFreePlayerAsync(actor, freePlayerId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<CheckInRoster>(result.Value!))
+            : OpenPlayRegistrationErrors.Failure(result);
+    }
+
+    /// <summary>
+    /// Checks a registered player — or a free one, by their own id — in by
+    /// hand, with the venue's check-in code.
+    /// </summary>
     [HttpPost("api/v1/desk/open-play-check-ins/{registrationId:guid}")]
     public async Task<IActionResult> CheckIn(Guid registrationId, CheckInCodeRequest request, CancellationToken ct)
     {

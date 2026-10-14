@@ -92,6 +92,18 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status429TooManyRequests,
                 ErrorCodes.RateLimitExceeded,
                 "Too many wrong codes. Try again in 5 minutes."),
+            OpenPlayRegistrationFailure.FreeSpotsUsed => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Every free spot for this session is used. Raise the number of free spots on the open play to add more."),
+            OpenPlayRegistrationFailure.SessionOver => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This session has finished."),
+            OpenPlayRegistrationFailure.InvalidFreePlayer => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Enter the player's name, up to 100 characters, and a mobile number of up to 30."),
             OpenPlayRegistrationFailure.UnknownTab => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

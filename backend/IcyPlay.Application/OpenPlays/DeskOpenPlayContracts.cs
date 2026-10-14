@@ -15,10 +15,18 @@ public sealed record OpenPlayInput(
     int RegistrationCutoffMinutes,
     OpenPlayEarlyBirdInput? EarlyBird,
     // How long before each session check-in opens. Left out, an hour.
-    int? CheckInOpensMinutes = null);
+    int? CheckInOpensMinutes = null,
+    // How many players the desk may put in for free per session. Left out, unchanged (none on a new one).
+    int? FreeSpots = null);
 
 /// <summary>Moves when check-in opens. Allowed after publishing: it is how the venue runs its door.</summary>
 public sealed record OpenPlayCheckInWindowInput(int MinutesBeforeStart);
+
+/// <summary>
+/// How many players the desk may put into each session for free. Allowed
+/// after publishing: it is how the venue fills a short game.
+/// </summary>
+public sealed record OpenPlayFreeSpotsInput(int FreeSpots);
 
 /// <param name="DiscountKind">"Fixed" or "Percentage".</param>
 /// <param name="LeadMinutes">How long before the start a player must register to get it.</param>
@@ -70,7 +78,9 @@ public sealed record DeskOpenPlay(
     // When check-in for today's session opens, on the venue's clock.
     DateTime? CheckInOpensAt,
     // Whether check-in for today's session is open right now.
-    bool CheckInOpen);
+    bool CheckInOpen,
+    // How many players the desk may put in for free per session, inside MaxPlayers.
+    int FreeSpots);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

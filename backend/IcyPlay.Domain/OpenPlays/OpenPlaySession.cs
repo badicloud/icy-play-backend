@@ -52,11 +52,56 @@ public sealed class OpenPlaySession : Entity
 
     public ICollection<OpenPlayRegistration> Registrations { get; private set; } = [];
 
+    /// <summary>Players the venue put in for free. See <see cref="OpenPlayFreePlayer"/>.</summary>
+    public ICollection<OpenPlayFreePlayer> FreePlayers { get; private set; } = [];
+
     public bool IsCancelled => CancelledAt is not null;
 
-    /// <summary>Players holding a spot at this moment: paid, waiting on the desk, or inside their hold.</summary>
+    /// <summary>
+    /// Players holding a spot at this moment: paid, waiting on the desk, inside
+    /// their hold, or put in for free by the venue. A free player takes a spot
+    /// like anyone else, or the session would sell more spots than it has.
+    /// </summary>
     public int SpotsTakenAt(DateTimeOffset moment) =>
-        Registrations.Count(registration => registration.HoldsSpotAt(moment));
+        Registrations.Count(registration => registration.HoldsSpotAt(moment)) + FreePlayers.Count;
+
+    /// <summary>
+    /// Puts a player in for free. Only while the session has a spot and the
+    /// open play has free spots left for it — they are not held back, so
+    /// paying players can still fill every spot first. Not on a cancelled
+    /// session. The registration cut-off does not apply: a game short of
+    /// players is found on the day.
+    /// </summary>
+    /// <param name="freeSpots">How many the open play allows per session.</param>
+    public OpenPlayFreePlayer AddFreePlayer(
+        int freeSpots,
+        int maxPlayers,
+        string fullName,
+        string? mobile,
+        Guid addedByUserId,
+        DateTimeOffset now)
+    {
+        if (IsCancelled)
+        {
+            throw new InvalidOperationException("A cancelled session takes no players.");
+        }
+
+        if (FreePlayers.Count >= freeSpots)
+        {
+            throw new InvalidOperationException("Every free spot for this session has been used.");
+        }
+
+        if (SpotsLeftAt(now, maxPlayers) == 0)
+        {
+            throw new InvalidOperationException("This session is full.");
+        }
+
+        var player = new OpenPlayFreePlayer(Id, fullName, mobile, addedByUserId, now);
+        FreePlayers.Add(player);
+        UpdatedAt = now;
+
+        return player;
+    }
 
     public int SpotsLeftAt(DateTimeOffset moment, int maxPlayers) =>
         Math.Max(0, maxPlayers - SpotsTakenAt(moment));

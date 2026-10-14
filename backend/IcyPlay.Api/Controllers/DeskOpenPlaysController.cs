@@ -173,6 +173,23 @@ public sealed class DeskOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
     }
 
+    /// <summary>Sets how many free players the desk may add per session. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/free-spots")]
+    public async Task<IActionResult> FreeSpots(
+        Guid openPlayId,
+        OpenPlayFreeSpotsInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetFreeSpotsAsync(actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
     /// <summary>Deletes a draft that was never published.</summary>
     [HttpDelete("{openPlayId:guid}")]
     public async Task<IActionResult> Delete(Guid openPlayId, CancellationToken ct)

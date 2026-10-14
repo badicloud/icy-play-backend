@@ -100,7 +100,13 @@ public enum OpenPlayRegistrationFailure
     // Too many wrong codes: shut for a few minutes.
     CheckInCodeLocked,
     // Paid through the payment gateway, so there is no receipt to send.
-    PaidOnline
+    PaidOnline,
+    // Every free spot the open play allows for this session is taken.
+    FreeSpotsUsed,
+    // The session has finished on the venue's clock.
+    SessionOver,
+    // A free player needs a name, of a sensible length.
+    InvalidFreePlayer
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

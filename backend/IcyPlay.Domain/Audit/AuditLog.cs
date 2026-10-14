@@ -126,6 +126,9 @@ public static class AuditAction
     public const string OpenPlayCheckedIn = "OpenPlayCheckedIn";
     public const string OpenPlayCheckInUndone = "OpenPlayCheckInUndone";
     public const string OpenPlayCheckInWindowChanged = "OpenPlayCheckInWindowChanged";
+    public const string OpenPlayFreeSpotsChanged = "OpenPlayFreeSpotsChanged";
+    public const string OpenPlayFreePlayerAdded = "OpenPlayFreePlayerAdded";
+    public const string OpenPlayFreePlayerRemoved = "OpenPlayFreePlayerRemoved";
     public const string OpenPlayCheckInCodeChanged = "OpenPlayCheckInCodeChanged";
     public const string OpenPlayCheckInCodeLocked = "OpenPlayCheckInCodeLocked";
     public const string FacilityUpdated = "FacilityUpdated";

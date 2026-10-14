@@ -47,4 +47,6 @@ public sealed record CatalogOpenPlaySession(
     bool IsOpenForRegistration,
     // What a player registering right now would pay, early bird included.
     decimal PriceNow,
-    bool EarlyBirdNow);
+    bool EarlyBirdNow,
+    // Spots the venue filled with free players. A count, never names.
+    int AddedByVenue = 0);

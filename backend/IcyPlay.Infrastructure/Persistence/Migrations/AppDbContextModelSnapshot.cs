@@ -2385,6 +2385,9 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("FacilityId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("FreeSpots")
+                        .HasColumnType("int");
+
                     b.Property<string>("Level")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -2431,6 +2434,46 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("CourtId", "StartDate", "EndDate");
 
                     b.ToTable("OpenPlays", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayFreePlayer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("AddedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("CheckedInAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CheckedInByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("Mobile")
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId");
+
+                    b.ToTable("OpenPlayFreePlayers", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayRegistration", b =>
@@ -3157,6 +3200,17 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("Facility");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayFreePlayer", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", "Session")
+                        .WithMany("FreePlayers")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Session");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayRegistration", b =>
                 {
                     b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", "Session")
@@ -3241,6 +3295,8 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlaySession", b =>
                 {
+                    b.Navigation("FreePlayers");
+
                     b.Navigation("Registrations");
                 });
 #pragma warning restore 612, 618

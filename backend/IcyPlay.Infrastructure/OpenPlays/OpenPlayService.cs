@@ -79,6 +79,10 @@ public sealed class OpenPlayService(
         AuditActor actor, Guid openPlayId, OpenPlayCheckInWindowInput input, CancellationToken ct) =>
         SetCheckInWindowCore(DeskVenuesOf(actor), actor, openPlayId, input, ct);
 
+    public Task<OpenPlayResult<DeskOpenPlay>> SetFreeSpotsAsync(
+        AuditActor actor, Guid openPlayId, OpenPlayFreeSpotsInput input, CancellationToken ct) =>
+        SetFreeSpotsCore(DeskVenuesOf(actor), actor, openPlayId, input, ct);
+
     // ------------------------------------------------------------ the admin
     //
     // One facility owner's venues, whoever the admin is. The same cores and so
@@ -196,6 +200,61 @@ public sealed class OpenPlayService(
     public Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayCheckInWindowInput input, CancellationToken ct) =>
         SetCheckInWindowCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetFreeSpotsForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayFreeSpotsInput input, CancellationToken ct) =>
+        SetFreeSpotsCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
+
+    /// <summary>
+    /// Sets how many players the desk may put in for free per session. Allowed
+    /// on a published open play, like the check-in window: it is how the
+    /// venue fills a short game, not what a player paid for.
+    /// </summary>
+    private async Task<OpenPlayResult<DeskOpenPlay>> SetFreeSpotsCore(
+        IQueryable<Guid> venues,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayFreeSpotsInput input,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var openPlay = await ForScopeAsync(venues, openPlayId, ct);
+
+        if (openPlay is null)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.NotFound);
+        }
+
+        if (openPlay.HasEnded)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Ended);
+        }
+
+        var before = openPlay.FreeSpots;
+
+        try
+        {
+            openPlay.SetFreeSpots(input.FreeSpots, timeProvider.GetUtcNow());
+        }
+        catch (ArgumentException problem)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Invalid, Plain(problem));
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.OpenPlayFreeSpotsChanged,
+            AuditEntityType.OpenPlay,
+            openPlay.Id,
+            new Dictionary<string, string?> { ["freeSpots"] = before.ToString(CultureInfo.InvariantCulture) },
+            new Dictionary<string, string?> { ["freeSpots"] = openPlay.FreeSpots.ToString(CultureInfo.InvariantCulture) });
+
+        await db.SaveChangesAsync(ct);
+
+        return OpenPlayResult<DeskOpenPlay>.Success(await ProjectOneAsync(openPlay.Id, ct));
+    }
 
     /// <summary>
     /// Moves when check-in opens. Allowed on a published open play, like the
@@ -346,6 +405,11 @@ public sealed class OpenPlayService(
             {
                 openPlay.SetCheckInWindow(checkInLead, now);
             }
+
+            if (input.FreeSpots is int freeSpots)
+            {
+                openPlay.SetFreeSpots(freeSpots, now);
+            }
         }
         catch (ArgumentException problem)
         {
@@ -440,6 +504,11 @@ public sealed class OpenPlayService(
             if (input.CheckInOpensMinutes is int checkInLead)
             {
                 openPlay.SetCheckInWindow(checkInLead, now);
+            }
+
+            if (input.FreeSpots is int freeSpots)
+            {
+                openPlay.SetFreeSpots(freeSpots, now);
             }
         }
         catch (ArgumentException problem)
@@ -1126,7 +1195,8 @@ public sealed class OpenPlayService(
                         openPlay.CheckInOpensMinutes,
                         sessionToday,
                         sessionToday is DateOnly day ? openPlay.CheckInOpensAt(day) : null,
-                        sessionToday is DateOnly open && openPlay.IsCheckInOpen(open, venueNow));
+                        sessionToday is DateOnly open && openPlay.IsCheckInOpen(open, venueNow),
+                        openPlay.FreeSpots);
                 })
         ];
     }

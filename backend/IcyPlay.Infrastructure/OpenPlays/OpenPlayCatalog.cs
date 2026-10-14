@@ -84,6 +84,7 @@ public sealed class OpenPlayCatalog(AppDbContext db, TimeProvider timeProvider) 
             .AsNoTracking()
             .Where(session => openPlayIds.Contains(session.OpenPlayId) && session.Date >= roughToday)
             .Include(session => session.Registrations)
+            .Include(session => session.FreePlayers)
             .ToListAsync(ct);
 
         var closures = await db.MaintenancePeriods
@@ -153,7 +154,8 @@ public sealed class OpenPlayCatalog(AppDbContext db, TimeProvider timeProvider) 
                     openPlay.RegistrationClosesAt(date),
                     openPlay.IsOpenForRegistration(date, venueNow),
                     price.Total,
-                    price.Discount > 0));
+                    price.Discount > 0,
+                    session?.FreePlayers.Count ?? 0));
             }
 
             if (upcoming.Count == 0)

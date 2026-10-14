@@ -503,4 +503,76 @@ public sealed class OpenPlayTests
         // Assert
         update.Should().Throw<InvalidOperationException>();
     }
+
+    [Fact]
+    public void Should_Take_No_Free_Players_When_Open_Play_Is_New()
+    {
+        // Arrange
+        var builder = new OpenPlayBuilder();
+
+        // Act
+        var openPlay = builder.Build();
+
+        // Assert
+        openPlay.FreeSpots.Should().Be(0);
+    }
+
+    [Fact]
+    public void Should_Change_Free_Spots_When_The_Open_Play_Is_Published()
+    {
+        // Arrange
+        var openPlay = new OpenPlayBuilder().WithMaxPlayers(12).Build();
+        openPlay.Publish(TestIds.FacilityOwnerUserId, TestTimes.UtcNow);
+
+        // Act
+        openPlay.SetFreeSpots(4, TestTimes.UtcNow);
+
+        // Assert
+        openPlay.FreeSpots.Should().Be(4);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(13)]
+    public void Should_Refuse_Free_Spots_When_They_Are_Outside_Zero_To_Most_Players(int freeSpots)
+    {
+        // Arrange
+        var openPlay = new OpenPlayBuilder().WithMaxPlayers(12).Build();
+
+        // Act
+        var act = () => openPlay.SetFreeSpots(freeSpots, TestTimes.UtcNow);
+
+        // Assert
+        act.Should().Throw<ArgumentOutOfRangeException>();
+    }
+
+    [Fact]
+    public void Should_Refuse_Free_Spots_When_The_Open_Play_Has_Ended()
+    {
+        // Arrange
+        var openPlay = new OpenPlayBuilder().Build();
+        openPlay.End(Saturday, TestTimes.UtcNow);
+
+        // Act
+        var act = () => openPlay.SetFreeSpots(2, TestTimes.UtcNow);
+
+        // Assert
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Should_Lower_Free_Spots_When_A_Draft_Takes_Fewer_Players_Than_Them()
+    {
+        // Arrange
+        var openPlay = new OpenPlayBuilder().WithMaxPlayers(12).Build();
+        openPlay.SetFreeSpots(10, TestTimes.UtcNow);
+
+        // Act
+        openPlay.Update(
+            "Saturday Night Dinkers", OpenPlayLevel.AllLevels, 6, 150m, new(18, 0), new(21, 0),
+            OpenPlayDays.Saturday, Saturday, null, 60, null, TestTimes.UtcNow);
+
+        // Assert
+        openPlay.FreeSpots.Should().Be(6);
+    }
 }
