@@ -29,6 +29,10 @@ public static class PaymentFailureResults
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "The hold ran out and the hours went back on sale. Book again to pay."),
+            PaymentFailure.UnknownMethod => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "That way of paying is not offered here. Pick another."),
             PaymentFailure.GatewayNotConfigured or PaymentFailure.GatewayUnavailable => (
                 StatusCodes.Status503ServiceUnavailable,
                 ErrorCodes.UnexpectedError,

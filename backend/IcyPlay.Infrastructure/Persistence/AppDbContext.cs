@@ -85,6 +85,13 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.PaymentMethod).HasMaxLength(40);
             entity.Property(x => x.AttentionReason).HasMaxLength(40);
             entity.Property(x => x.Description).HasMaxLength(300);
+            entity.Property(x => x.PaymentIntentId).HasMaxLength(100);
+            entity.Property(x => x.ChosenMethod).HasMaxLength(40);
+            entity.Property(x => x.QuotedTotal).HasColumnType("decimal(10,2)");
+            // A PNG as Base64: a few kilobytes, kept only while it can be paid.
+            entity.Property(x => x.QrCodeImage).HasColumnType("nvarchar(max)");
+            entity.Property(x => x.NextActionUrl).HasMaxLength(2000);
+            entity.Property(x => x.FailureReason).HasMaxLength(100);
             // Money, so a fixed scale: these are what a split will route to
             // two accounts, and drift between them is a payout that is short.
             entity.Property(x => x.VenueAmount).HasColumnType("decimal(10,2)");
@@ -94,11 +101,16 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.NetAmount).HasColumnType("decimal(10,2)");
             entity.Ignore(x => x.AmountDue);
             entity.Ignore(x => x.IsPending);
+            entity.Ignore(x => x.CanStillBePaid);
             entity.Ignore(x => x.CoversWhatIsDue);
             // What the webhook looks up by.
             entity.HasIndex(x => x.CheckoutSessionId)
                 .IsUnique()
                 .HasFilter("[CheckoutSessionId] IS NOT NULL");
+            // And for a payment started on our own page.
+            entity.HasIndex(x => x.PaymentIntentId)
+                .IsUnique()
+                .HasFilter("[PaymentIntentId] IS NOT NULL");
             // "Is there a checkout open for this already", and later a
             // booking's payments on the desk.
             entity.HasIndex(x => new { x.Purpose, x.SubjectId });

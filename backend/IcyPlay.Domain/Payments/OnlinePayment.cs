@@ -111,6 +111,54 @@ public sealed class OnlinePayment : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// A way of paying started on our own page rather than at a hosted
+    /// checkout: the gateway's intent, which its events name.
+    /// </summary>
+    public string? PaymentIntentId
+    {
+        get; private set;
+    }
+
+    /// <summary>The method the customer picked on our page: qrph, gcash, paymaya.</summary>
+    public string? ChosenMethod
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// What the customer was told they would be charged for <see cref="ChosenMethod"/>,
+    /// the gateway's fee included.
+    /// </summary>
+    public decimal? QuotedTotal
+    {
+        get; private set;
+    }
+
+    /// <summary>The QR Ph code to scan, as a data URL, while it lasts.</summary>
+    public string? QrCodeImage
+    {
+        get; private set;
+    }
+
+    /// <summary>The e-wallet's page, where the customer approves the payment.</summary>
+    public string? NextActionUrl
+    {
+        get; private set;
+    }
+
+    /// <summary>When the QR code stops working.</summary>
+    public DateTimeOffset? ExpiresAt
+    {
+        get; private set;
+    }
+
+    /// <summary>Why an attempt ended with nothing paid, in the gateway's words where it gave any.</summary>
+    public string? FailureReason
+    {
+        get; private set;
+    }
+
     /// <summary>The gateway's payment, once there is one.</summary>
     public string? ProviderPaymentId
     {
@@ -158,10 +206,74 @@ public sealed class OnlinePayment : Entity
 
     public bool IsPending => Status == OnlinePaymentStatus.Pending;
 
-    public void OpenCheckout(string checkoutSessionId, string checkoutUrl, DateTimeOffset now)
+    /// <summary>
+    /// Whether money arriving for this would be news: still waiting, or ended
+    /// as failed. A failed attempt that is paid after all — a bank's late
+    /// word — is money all the same, and is never ignored.
+    /// </summary>
+    public bool CanStillBePaid => Status is OnlinePaymentStatus.Pending or OnlinePaymentStatus.Failed;
+
+    /// <summary>
+    /// Records the gateway's hosted checkout. <paramref name="method"/> is set
+    /// when the customer picked it on our page and the checkout offers only
+    /// that — a card — so it is never handed back as the all-methods page.
+    /// </summary>
+    public void OpenCheckout(string checkoutSessionId, string checkoutUrl, DateTimeOffset now, string? method = null)
     {
         CheckoutSessionId = checkoutSessionId;
         CheckoutUrl = checkoutUrl;
+        ChosenMethod = method;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Records a way of paying started on our own page: one method, one
+    /// amount, and what the customer does next — scan a code or approve at
+    /// their e-wallet.
+    /// </summary>
+    public void OpenIntent(
+        string paymentIntentId,
+        string method,
+        decimal quotedTotal,
+        string? qrCodeImage,
+        string? nextActionUrl,
+        DateTimeOffset? expiresAt,
+        DateTimeOffset now)
+    {
+        if (CheckoutSessionId is not null || PaymentIntentId is not null)
+        {
+            throw new InvalidOperationException("This payment has already been started.");
+        }
+
+        if (quotedTotal < AmountDue)
+        {
+            throw new ArgumentException("The total charged cannot be less than what is owed.", nameof(quotedTotal));
+        }
+
+        PaymentIntentId = paymentIntentId;
+        ChosenMethod = method;
+        QuotedTotal = quotedTotal;
+        QrCodeImage = qrCodeImage;
+        NextActionUrl = nextActionUrl;
+        ExpiresAt = expiresAt;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// The attempt ended with nothing paid. Only a pending one can: a paid one
+    /// stays paid whatever a later event says.
+    /// </summary>
+    public void EndUnpaid(string reason, DateTimeOffset now)
+    {
+        if (!IsPending)
+        {
+            return;
+        }
+
+        Status = OnlinePaymentStatus.Failed;
+        FailureReason = reason;
+        // A code nobody can pay any more is not shown again.
+        QrCodeImage = null;
         UpdatedAt = now;
     }
 
@@ -185,6 +297,7 @@ public sealed class OnlinePayment : Entity
         ProcessingFee = processingFee;
         NetAmount = netAmount;
         PaidAt = paidAt;
+        FailureReason = null;
         UpdatedAt = now;
     }
 

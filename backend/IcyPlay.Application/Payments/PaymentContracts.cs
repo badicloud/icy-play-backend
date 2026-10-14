@@ -14,9 +14,49 @@ public sealed record CheckoutRequest(
     IReadOnlyCollection<CheckoutLineItem> LineItems,
     string SuccessUrl,
     string CancelUrl,
-    IReadOnlyDictionary<string, string> Metadata);
+    IReadOnlyDictionary<string, string> Metadata,
+    /// <summary>
+    /// The methods the page offers, when not every one the gateway is set up
+    /// for: a card alone, when the other methods are paid on our own page.
+    /// </summary>
+    IReadOnlyCollection<string>? PaymentMethodTypes = null);
 
 public sealed record CheckoutSessionCreated(string SessionId, string CheckoutUrl);
+
+/// <summary>
+/// One way to pay, and what it comes to: what is owed, the gateway's fee on
+/// top, VAT included, and the total the customer is charged.
+/// </summary>
+public sealed record PaymentMethodQuote(string Method, decimal AmountDue, decimal ProcessingFee, decimal Total);
+
+/// <summary>
+/// One way of paying, started on our own page rather than the gateway's: a
+/// single method and a single amount, the gateway's fee already in it.
+/// </summary>
+public sealed record PaymentIntentRequest(
+    /// <summary>The gateway's word for the method: qrph, gcash, paymaya.</summary>
+    string Method,
+    /// <summary>What the customer is charged, the fee included.</summary>
+    decimal Amount,
+    string Description,
+    /// <summary>Where an e-wallet sends the customer back to, whether they paid or not.</summary>
+    string ReturnUrl,
+    /// <summary>How long a QR code may be scanned for. Ignored by the other methods.</summary>
+    TimeSpan QrLifetime,
+    IReadOnlyDictionary<string, string> Metadata);
+
+/// <summary>
+/// What the customer does next: scan <see cref="QrCodeImage"/> (a data URL),
+/// or be sent to <see cref="RedirectUrl"/> to approve in their e-wallet. A
+/// QR code in test mode carries the gateway's page that pretends to pay it as
+/// its <see cref="RedirectUrl"/>; a live one has none.
+/// </summary>
+public sealed record PaymentIntentStarted(
+    string PaymentIntentId,
+    string? RedirectUrl,
+    string? QrCodeImage,
+    /// <summary>When a QR code stops working. Null for the others.</summary>
+    DateTimeOffset? ExpiresAt);
 
 /// <summary>A payment the gateway says was made, as read from one of its events.</summary>
 public sealed record GatewayPaidPayment(
@@ -29,14 +69,19 @@ public sealed record GatewayPaidPayment(
 
 /// <summary>
 /// One event from the gateway, already checked to be from the gateway.
-/// <see cref="Payment"/> is null on events that carry no payment.
+/// <see cref="Payment"/> is null on events that carry no paid payment. An
+/// event is about a hosted checkout (<see cref="CheckoutSessionId"/>) or a
+/// payment started on our own page (<see cref="PaymentIntentId"/>).
 /// </summary>
 public sealed record GatewayEvent(
     string EventId,
     string EventType,
     bool LiveMode,
     string? CheckoutSessionId,
-    GatewayPaidPayment? Payment);
+    GatewayPaidPayment? Payment,
+    string? PaymentIntentId = null,
+    /// <summary>The gateway's reason, on an event saying a payment failed.</summary>
+    string? FailureCode = null);
 
 /// <summary>
 /// What is owed for one thing, worked out by the handler that owns it.
@@ -51,9 +96,47 @@ public sealed record Payable(
     string Description,
     IReadOnlyCollection<CheckoutLineItem> LineItems,
     /// <summary>Where the customer comes back to, with the outcome appended by the service.</summary>
-    string ReturnUrl);
+    string ReturnUrl,
+    /// <summary>
+    /// When the hold on it runs out, so a QR code is not offered for longer
+    /// than the court is kept. Null when nothing is held.
+    /// </summary>
+    DateTimeOffset? HoldsUntil = null);
 
 public sealed record CheckoutStarted(Guid PaymentId, string CheckoutUrl);
+
+/// <summary>
+/// What the second step offers when the customer pays on our own page: each
+/// method and its total, and the attempt already under way, if any.
+/// </summary>
+public sealed record PaymentOptions(
+    /// <summary>One of <see cref="CheckoutExperience"/>.</summary>
+    string Experience,
+    decimal AmountDue,
+    /// <summary>The methods paid on our page, cheapest first as the gateway is set up.</summary>
+    IReadOnlyList<PaymentMethodQuote> Methods,
+    /// <summary>The latest attempt on our page, still open or just ended unpaid.</summary>
+    PaymentAttempt? Current);
+
+/// <summary>
+/// One way of paying under way: a QR code to scan, or a page to go to — the
+/// e-wallet's, or the gateway's card page. Its time is counted by the server,
+/// never the browser.
+/// </summary>
+public sealed record PaymentAttempt(
+    Guid PaymentId,
+    string Method,
+    decimal Total,
+    /// <summary><c>Pending</c> while it can be paid; <c>Failed</c> once it cannot.</summary>
+    string Status,
+    string? QrCodeImage,
+    string? RedirectUrl,
+    /// <summary>Seconds until a QR code stops working, by the server's clock. Null for the others.</summary>
+    int? SecondsLeft,
+    string? FailureReason);
+
+/// <summary>The method the customer picked on the second step.</summary>
+public sealed record StartPaymentRequest(string Method);
 
 public enum PaymentFailure
 {
@@ -71,7 +154,9 @@ public enum PaymentFailure
     /// <summary>The gateway is not set up on this server.</summary>
     GatewayNotConfigured,
     /// <summary>The gateway turned the request down or could not be reached.</summary>
-    GatewayUnavailable
+    GatewayUnavailable,
+    /// <summary>A way of paying our page does not offer.</summary>
+    UnknownMethod
 }
 
 public sealed record PaymentResult<T>(T? Value, PaymentFailure Failure = PaymentFailure.None)

@@ -85,7 +85,8 @@ public sealed class BookingPaymentHandler(
             Reference(booking.Id),
             $"{booking.CourtName} at {booking.FacilityName}",
             lines,
-            BookingUrl(booking.Id)));
+            BookingUrl(booking.Id),
+            booking.HoldsUntil));
     }
 
     public async Task<Settlement> SettleAsync(OnlinePayment payment, DateTimeOffset now, CancellationToken ct)

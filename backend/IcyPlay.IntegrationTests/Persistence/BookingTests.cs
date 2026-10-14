@@ -4220,6 +4220,10 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         public bool IsConfigured => true;
 
+        public string CheckoutExperience => Application.Payments.CheckoutExperience.Hosted;
+
+        public IReadOnlyList<Application.Payments.PaymentMethodQuote> QuoteMethods(decimal amountDue) => [];
+
         public static Application.Payments.GatewayEvent Paid(string eventId, string sessionId, DateTimeOffset paidAt, decimal net) =>
             new(
                 eventId,
@@ -4238,6 +4242,14 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         }
 
         public Task<Application.Payments.GatewayPaidPayment?> GetPaidPaymentAsync(string checkoutSessionId, CancellationToken ct) =>
+            Task.FromResult(Next?.Payment);
+
+        public Task<Application.Payments.PaymentIntentStarted> StartPaymentIntentAsync(
+            Application.Payments.PaymentIntentRequest request,
+            CancellationToken ct) =>
+            throw new NotSupportedException("These tests pay at a hosted checkout.");
+
+        public Task<Application.Payments.GatewayPaidPayment?> GetPaidIntentPaymentAsync(string paymentIntentId, CancellationToken ct) =>
             Task.FromResult(Next?.Payment);
 
         public Application.Payments.GatewayEvent? ReadEvent(string rawBody, string? signatureHeader) =>
