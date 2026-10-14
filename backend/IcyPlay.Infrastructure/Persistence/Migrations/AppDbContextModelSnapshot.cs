@@ -2123,6 +2123,10 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<string>("OpenPlayCheckInCodeProtected")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
                     b.Property<int>("PartialBookingExpiryMinutes")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")

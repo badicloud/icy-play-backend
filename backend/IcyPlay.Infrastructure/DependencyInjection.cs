@@ -92,6 +92,7 @@ public static class DependencyInjection
         services.AddScoped<IBookingService, BookingService>();
         // Concrete as well: an upgrade paid online is carried out by the same
         // rule the desk approves one with.
+        services.AddSingleton<IOpenPlayCheckInCodeVault, OpenPlayCheckInCodeVault>();
         services.AddScoped<DeskService>();
         services.AddScoped<IDeskService>(provider => provider.GetRequiredService<DeskService>());
         services.AddScoped<IPlatformReportService, PlatformReportService>();

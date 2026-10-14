@@ -193,12 +193,26 @@ public sealed class FacilityOwner : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// The same code encrypted with a key only the server holds, so the owner
+    /// and the attendants can look it up again. Opaque here: what is checked
+    /// is always the hash. Null for a code made before it was kept this way.
+    /// </summary>
+    public string? OpenPlayCheckInCodeProtected
+    {
+        get; private set;
+    }
+
     public bool HasOpenPlayCheckInCode => OpenPlayCheckInCodeHash is not null;
 
-    /// <summary>Sets a new code. The old one stops working, and any lock is lifted.</summary>
-    public void SetOpenPlayCheckInCode(string code, DateTimeOffset now)
+    /// <summary>
+    /// Sets a new code. The old one stops working, and any lock is lifted.
+    /// <paramref name="protectedCopy"/> is the readable copy, already encrypted.
+    /// </summary>
+    public void SetOpenPlayCheckInCode(string code, DateTimeOffset now, string? protectedCopy = null)
     {
         OpenPlayCheckInCodeHash = OpenPlays.CheckInCode.Hash(code);
+        OpenPlayCheckInCodeProtected = protectedCopy;
         CheckInCodeFailures = 0;
         CheckInCodeLockedUntil = null;
         UpdatedAt = now;

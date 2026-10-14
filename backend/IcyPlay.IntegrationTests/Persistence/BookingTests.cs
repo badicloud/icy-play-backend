@@ -1167,7 +1167,8 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             notifier,
             new AuditLogger(context, new FixedTimeProvider(Now)),
             new FixedTimeProvider(Now),
-            NullLogger<DeskService>.Instance);
+            NullLogger<DeskService>.Instance,
+        new OpenPlayCheckInCodeVault(new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider()));
         var ownerUserId = await OwnerUserIdAsync(context, floor);
         var actor = new AuditActor(ownerUserId, UserRoleName.FacilityOwner);
         var booking = await ConfirmedAsync(context, sut, floor, Wednesday, SevenAm);
@@ -5202,7 +5203,8 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
         new SilentNotifier(),
         new AuditLogger(context, new FixedTimeProvider(now ?? Now)),
         new FixedTimeProvider(now ?? Now),
-        NullLogger<DeskService>.Instance);
+        NullLogger<DeskService>.Instance,
+        new OpenPlayCheckInCodeVault(new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider()));
 
     /// <summary>
     /// Asks for a free move and has the venue agree to it, which is how a move

@@ -13,6 +13,7 @@ using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Email;
 using IcyPlay.Infrastructure.Facilities;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
@@ -813,7 +814,7 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
-    public async Task GenerateOpenPlayCheckInCodeAsync_ShouldLetOnlyTheOwnerMakeOne_AndKeepOnlyItsHash()
+    public async Task GenerateOpenPlayCheckInCodeAsync_ShouldLetOnlyTheOwnerMakeOne_AndNeverKeepItAsItIs()
     {
         // Arrange
         await using var context = database.CreateContext();
@@ -827,8 +828,8 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         var byOwner = await sut.GenerateOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
         var seenByAttendant = await sut.SettingsAsync(attendant, CancellationToken.None);
 
-        // Assert: stored only as a hash, the newest replacing the first, and
-        // the attendant sees that there is one.
+        // Assert: checked by its hash, kept readable only encrypted, the newest
+        // replacing the first, and the attendant sees that there is one.
         var stored = await context.FacilityOwners
             .AsNoTracking()
             .SingleAsync(owner => owner.UserId == venue.OwnerUserId);
@@ -842,8 +843,72 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
             seenByAttendant.Value!.HasOpenPlayCheckInCode.Should().BeTrue();
             seenByAttendant.Value.CanSetOpenPlayCheckInCode.Should().BeFalse();
             stored.OpenPlayCheckInCodeHash.Should().NotContain(byOwner.Value.Code);
+            stored.OpenPlayCheckInCodeProtected.Should().NotBeNullOrEmpty();
+            stored.OpenPlayCheckInCodeProtected.Should().NotContain(byOwner.Value.Code);
             CheckInCode.Matches(byOwner.Value.Code, stored.OpenPlayCheckInCodeHash!).Should().BeTrue();
             CheckInCode.Matches(first.Value!.Code, stored.OpenPlayCheckInCodeHash!).Should().Be(first.Value.Code == byOwner.Value.Code);
+        }
+    }
+
+    [Fact]
+    public async Task ShowOpenPlayCheckInCodeAsync_ShouldShowTheCodeToTheOwnerAndTheAttendants_AndRecordEachLook()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Shown Code Courts");
+        var attendant = await AttendantAsync(context, venue.FacilityId);
+        var stranger = await AttendantAsync(context, (await VenueAsync(context, "Other Code Courts")).FacilityId);
+        var sut = CreateService(context);
+        var made = await sut.GenerateOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
+
+        // Act
+        var toOwner = await sut.ShowOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
+        var toAttendant = await sut.ShowOpenPlayCheckInCodeAsync(attendant, Desk(attendant), CancellationToken.None);
+        var toStranger = await sut.ShowOpenPlayCheckInCodeAsync(stranger, Desk(stranger), CancellationToken.None);
+        var settings = await sut.SettingsAsync(attendant, CancellationToken.None);
+
+        // Assert
+        var ownerId = await context.FacilityOwners
+            .Where(owner => owner.UserId == venue.OwnerUserId)
+            .Select(owner => owner.Id)
+            .SingleAsync();
+        var looks = await context.AuditLogs.CountAsync(entry =>
+            entry.Action == AuditAction.OpenPlayCheckInCodeViewed && entry.EntityId == ownerId);
+
+        using (new AssertionScope())
+        {
+            toOwner.Value!.Code.Should().Be(made.Value!.Code);
+            toAttendant.Value!.Code.Should().Be(made.Value.Code);
+            // Another venue's attendant gets their own venue's, and that has none.
+            toStranger.Value!.Code.Should().BeNull();
+            settings.Value!.CanShowOpenPlayCheckInCode.Should().BeTrue();
+            looks.Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task ShowOpenPlayCheckInCodeAsync_ShouldShowNothing_ForACodeMadeBeforeCodesWereKeptReadable()
+    {
+        // Arrange: a code set the old way, kept only as its hash.
+        await using var context = database.CreateContext();
+        var venue = await VenueAsync(context, "Old Code Courts");
+        var owner = await context.FacilityOwners.SingleAsync(candidate => candidate.UserId == venue.OwnerUserId);
+        owner.SetOpenPlayCheckInCode("482913", DateTimeOffset.UtcNow);
+        await context.SaveChangesAsync();
+        context.ChangeTracker.Clear();
+        var sut = CreateService(context);
+
+        // Act
+        var shown = await sut.ShowOpenPlayCheckInCodeAsync(venue.OwnerUserId, Desk(venue.OwnerUserId), CancellationToken.None);
+        var settings = await sut.SettingsAsync(venue.OwnerUserId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            shown.Succeeded.Should().BeTrue();
+            shown.Value!.Code.Should().BeNull();
+            settings.Value!.HasOpenPlayCheckInCode.Should().BeTrue();
+            settings.Value.CanShowOpenPlayCheckInCode.Should().BeFalse();
         }
     }
 
@@ -1169,7 +1234,8 @@ public sealed class DeskTests(SqlServerDatabaseFixture database)
         notifier ?? new RecordingNotifier(),
         new AuditLogger(context, new FixedTimeProvider(Now)),
         new FixedTimeProvider(Now),
-        NullLogger<DeskService>.Instance);
+        NullLogger<DeskService>.Instance,
+        new OpenPlayCheckInCodeVault(new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider()));
 
     private static BookingService CreateBookingService(
         AppDbContext context,

@@ -258,6 +258,15 @@ public interface IDeskService
         CancellationToken ct);
 
     /// <summary>
+    /// The venue's check-in code again, for the owner or any attendant of the
+    /// venue. Each look is in the audit trail.
+    /// </summary>
+    Task<DeskResult<ShownCheckInCode>> ShowOpenPlayCheckInCodeAsync(
+        Guid userId,
+        AuditActor actor,
+        CancellationToken ct);
+
+    /// <summary>
     /// Turns a payment down, with a reason from the list. The hours go back on
     /// sale, and the reason is what the customer reads on their booking.
     /// </summary>

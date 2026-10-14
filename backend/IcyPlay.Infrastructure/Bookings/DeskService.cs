@@ -1,6 +1,7 @@
 using IcyPlay.Application.Audit;
 using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Common;
+using IcyPlay.Application.OpenPlays;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Infrastructure.OpenPlays;
@@ -23,7 +24,8 @@ public sealed class DeskService(
     IBookingNotifier notifier,
     IAuditLogger audit,
     TimeProvider timeProvider,
-    ILogger<DeskService> logger) : IDeskService
+    ILogger<DeskService> logger,
+    IOpenPlayCheckInCodeVault checkInCodes) : IDeskService
 {
     private const int LargestPage = 50;
 
@@ -1604,7 +1606,7 @@ public sealed class DeskService(
 
         var code = Domain.OpenPlays.CheckInCode.Generate();
         var hadOne = owner.HasOpenPlayCheckInCode;
-        owner.SetOpenPlayCheckInCode(code, timeProvider.GetUtcNow());
+        owner.SetOpenPlayCheckInCode(code, timeProvider.GetUtcNow(), checkInCodes.Protect(code));
 
         // That it changed, never what it is.
         audit.RecordEvent(
@@ -1618,6 +1620,38 @@ public sealed class DeskService(
         await db.SaveChangesAsync(ct);
 
         return DeskResult<GeneratedCheckInCode>.Success(new GeneratedCheckInCode(code, Settings(owner, userId)));
+    }
+
+    public async Task<DeskResult<ShownCheckInCode>> ShowOpenPlayCheckInCodeAsync(
+        Guid userId,
+        AuditActor actor,
+        CancellationToken ct)
+    {
+        // The owner, or an attendant on one of the owner's venues: both use it.
+        var owner = await OwnerForAsync(userId, ct);
+
+        if (owner is null)
+        {
+            return DeskResult<ShownCheckInCode>.Fail(DeskFailure.NotAttended);
+        }
+
+        var code = owner.OpenPlayCheckInCodeProtected is string kept ? checkInCodes.Reveal(kept) : null;
+
+        if (code is not null)
+        {
+            // That somebody looked, never what they saw.
+            audit.RecordEvent(
+                actor,
+                AuditAction.OpenPlayCheckInCodeViewed,
+                AuditEntityType.FacilityOwner,
+                owner.Id,
+                new Dictionary<string, string?>(),
+                "Open play check-in code shown.");
+
+            await db.SaveChangesAsync(ct);
+        }
+
+        return DeskResult<ShownCheckInCode>.Success(new ShownCheckInCode(code));
     }
 
     public async Task<DeskResult<IReadOnlyCollection<DeskSettingsChange>>> SettingsHistoryAsync(
@@ -1813,7 +1847,8 @@ public sealed class DeskService(
         owner.HasOpenPlayCheckInCode,
         owner.UserId == userId,
         term?.PaymentMode ?? Domain.Payments.PaymentMode.Manual,
-        term?.OnlineHoldMinutes ?? Domain.Payments.OnlineHold.DefaultMinutes);
+        term?.OnlineHoldMinutes ?? Domain.Payments.OnlineHold.DefaultMinutes,
+        owner.OpenPlayCheckInCodeProtected is not null);
 
     private static Dictionary<string, string?> SettingsSnapshot(Domain.Identity.FacilityOwner owner) =>
         new()

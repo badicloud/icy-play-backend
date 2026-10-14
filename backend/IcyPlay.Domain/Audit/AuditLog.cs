@@ -130,6 +130,7 @@ public static class AuditAction
     public const string OpenPlayFreePlayerAdded = "OpenPlayFreePlayerAdded";
     public const string OpenPlayFreePlayerRemoved = "OpenPlayFreePlayerRemoved";
     public const string OpenPlayCheckInCodeChanged = "OpenPlayCheckInCodeChanged";
+    public const string OpenPlayCheckInCodeViewed = "OpenPlayCheckInCodeViewed";
     public const string OpenPlayCheckInCodeLocked = "OpenPlayCheckInCodeLocked";
     public const string FacilityUpdated = "FacilityUpdated";
     public const string FacilityAmenitiesUpdated = "FacilityAmenitiesUpdated";

@@ -172,6 +172,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.GcashAccountName).HasMaxLength(150);
             entity.Property(x => x.GcashQrCodeUrl).HasMaxLength(1000);
             entity.Property(x => x.OpenPlayCheckInCodeHash).HasMaxLength(200);
+            // Data Protection's output for six digits: a few hundred characters.
+            entity.Property(x => x.OpenPlayCheckInCodeProtected).HasMaxLength(1000);
             entity.Ignore(x => x.HasOpenPlayCheckInCode);
             entity.Property(x => x.PartialBookingExpiryMinutes)
                 .HasDefaultValue(PaymentHold.DefaultMinutes);

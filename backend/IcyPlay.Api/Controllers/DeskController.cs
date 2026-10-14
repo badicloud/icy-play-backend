@@ -720,6 +720,25 @@ public sealed class DeskController(
     }
 
     /// <summary>
+    /// The venue's check-in code again, for the owner or an attendant. A GET
+    /// that is written down: each look goes into the audit trail.
+    /// </summary>
+    [HttpGet("settings/open-play-check-in-code")]
+    public async Task<IActionResult> ShowOpenPlayCheckInCode(CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId || CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await desk.ShowOpenPlayCheckInCodeAsync(userId, actor, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<ShownCheckInCode>(result.Value!))
+            : Failure(result.Failure);
+    }
+
+    /// <summary>
     /// The booking service answers with its own failures, which are not the
     /// desk's. Only the ones an attendant can actually provoke are spelled out.
     /// </summary>

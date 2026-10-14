@@ -8,6 +8,7 @@ using IcyPlay.Domain.Identity;
 using IcyPlay.Infrastructure.Audit;
 using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Facilities;
+using IcyPlay.Infrastructure.OpenPlays;
 using IcyPlay.Infrastructure.Persistence;
 using IcyPlay.Infrastructure.Storage;
 using Microsoft.EntityFrameworkCore;
@@ -1188,7 +1189,8 @@ public sealed class UtilizationTests(SqlServerDatabaseFixture database)
         new SilentNotifier(),
         new AuditLogger(context, new FixedTimeProvider(at ?? Now)),
         new FixedTimeProvider(at ?? Now),
-        NullLogger<DeskService>.Instance);
+        NullLogger<DeskService>.Instance,
+        new OpenPlayCheckInCodeVault(new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider()));
 
     private static CourtService CreateCourtService(AppDbContext context) => new(
         context,
