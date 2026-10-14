@@ -47,7 +47,9 @@ public sealed record PaymentIntentRequest(
 
 /// <summary>
 /// What the customer does next: scan <see cref="QrCodeImage"/> (a data URL),
-/// or be sent to <see cref="RedirectUrl"/> to approve in their e-wallet.
+/// or be sent to <see cref="RedirectUrl"/> to approve in their e-wallet. A
+/// QR code in test mode carries the gateway's page that pretends to pay it as
+/// its <see cref="RedirectUrl"/>; a live one has none.
 /// </summary>
 public sealed record PaymentIntentStarted(
     string PaymentIntentId,

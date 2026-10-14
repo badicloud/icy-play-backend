@@ -304,6 +304,65 @@ public sealed class PayMongoGatewayTests
     }
 
     [Fact]
+    public async Task Should_Return_Test_Page_As_The_Page_To_Go_To_When_Test_Qr_Code_Comes_With_One()
+    {
+        // Arrange
+        var paymongo = new FakePayMongo()
+            .Answer("/v1/payment_intents", """{"data":{"id":"pi_4","attributes":{}}}""")
+            .Answer("/v1/payment_methods", """{"data":{"id":"pm_4","attributes":{}}}""")
+            .Answer("/v1/payment_intents/pi_4/attach", """{"data":{"id":"pi_4","attributes":{"status":"awaiting_next_action","next_action":{"type":"consume_qr","code":{"id":"code_4","image_url":"data:image/png;base64,iVBORw0KGgo=","test_url":"https://test.paymongo.test/qr/code_4"}}}}}""");
+        var gateway = Gateway(new HttpClient(paymongo));
+
+        // Act
+        var started = await gateway.StartPaymentIntentAsync(IntentRequest("qrph", 639.61m), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            started.QrCodeImage.Should().Be("data:image/png;base64,iVBORw0KGgo=");
+            started.RedirectUrl.Should().Be("https://test.paymongo.test/qr/code_4");
+        }
+    }
+
+    [Fact]
+    public async Task Should_Leave_Out_Test_Page_When_Qr_Code_Is_Live()
+    {
+        // Arrange
+        var paymongo = new FakePayMongo()
+            .Answer("/v1/payment_intents", """{"data":{"id":"pi_5","attributes":{}}}""")
+            .Answer("/v1/payment_methods", """{"data":{"id":"pm_5","attributes":{}}}""")
+            .Answer("/v1/payment_intents/pi_5/attach", """{"data":{"id":"pi_5","attributes":{"livemode":true,"status":"awaiting_next_action","next_action":{"type":"consume_qr","code":{"id":"code_5","image_url":"iVBORw0KGgo=","test_url":"https://test.paymongo.test/qr/code_5"}}}}}""");
+        var gateway = Gateway(new HttpClient(paymongo));
+
+        // Act
+        var started = await gateway.StartPaymentIntentAsync(IntentRequest("qrph", 639.61m), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            started.QrCodeImage.Should().NotBeNull();
+            started.RedirectUrl.Should().BeNull();
+        }
+    }
+
+    [Fact]
+    public async Task Should_Leave_Out_Test_Page_When_Key_Is_Live_And_Intent_Does_Not_Say()
+    {
+        // Arrange
+        var paymongo = new FakePayMongo()
+            .Answer("/v1/payment_intents", """{"data":{"id":"pi_6","attributes":{}}}""")
+            .Answer("/v1/payment_methods", """{"data":{"id":"pm_6","attributes":{}}}""")
+            .Answer("/v1/payment_intents/pi_6/attach", """{"data":{"id":"pi_6","attributes":{"status":"awaiting_next_action","next_action":{"type":"consume_qr","code":{"id":"code_6","image_url":"iVBORw0KGgo=","test_url":"https://test.paymongo.test/qr/code_6"}}}}}""");
+        var gateway = Gateway(new HttpClient(paymongo), new PayMongoOptions { SecretKey = "sk_live_key" });
+
+        // Act
+        var started = await gateway.StartPaymentIntentAsync(IntentRequest("qrph", 639.61m), CancellationToken.None);
+
+        // Assert
+        started.RedirectUrl.Should().BeNull();
+    }
+
+    [Fact]
     public async Task Should_Return_E_Wallet_Page_When_GCash_Intent_Is_Started()
     {
         // Arrange

@@ -246,16 +246,32 @@ public sealed class PayMongoGateway(
                 ? url.GetString()
                 : null;
 
-        var qrImage = nextAction.ValueKind == JsonValueKind.Object
-            && nextAction.TryGetProperty("code", out var code)
-            && code.ValueKind == JsonValueKind.Object
-            && code.TryGetProperty("image_url", out var image)
-                ? image.GetString()
-                : null;
+        var code = nextAction.ValueKind == JsonValueKind.Object
+            && nextAction.TryGetProperty("code", out var found)
+            && found.ValueKind == JsonValueKind.Object
+                ? found
+                : default;
+
+        var qrImage = StringOf(code, "image_url");
 
         if (string.IsNullOrWhiteSpace(redirectUrl) && string.IsNullOrWhiteSpace(qrImage))
         {
             throw new HttpRequestException($"PayMongo gave no next step for {request.Method} on {intentId}.");
+        }
+
+        // In test mode a QR Ph code is a real one — scanning it pays for real —
+        // so PayMongo adds a page that pretends to pay it instead. It is the
+        // only page a QR code has to go to. Taken only when this is plainly
+        // test mode — the intent says so, or says nothing and the key is a
+        // test key — so a customer paying for real is never shown a fake page.
+        var attributes = attached.RootElement.GetProperty("data").GetProperty("attributes");
+        var testMode = attributes.TryGetProperty("livemode", out var live)
+            ? live.ValueKind == JsonValueKind.False
+            : Settings.SecretKey.StartsWith("sk_test_", StringComparison.Ordinal);
+
+        if (isQr && testMode && string.IsNullOrWhiteSpace(redirectUrl))
+        {
+            redirectUrl = StringOf(code, "test_url") ?? StringOf(nextAction, "test_url");
         }
 
         return new PaymentIntentStarted(
