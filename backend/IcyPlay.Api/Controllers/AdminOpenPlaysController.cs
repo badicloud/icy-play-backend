@@ -197,6 +197,53 @@ public sealed class AdminOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
     }
 
+    [HttpPut("{openPlayId:guid}/background")]
+    public async Task<IActionResult> SetBackground(
+        Guid facilityOwnerId,
+        Guid openPlayId,
+        OpenPlayPhotoInput photo,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetBackgroundPhotoForOwnerAsync(facilityOwnerId, actor, openPlayId, photo, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
+    [HttpDelete("{openPlayId:guid}/background")]
+    public async Task<IActionResult> RemoveBackground(Guid facilityOwnerId, Guid openPlayId, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.RemoveBackgroundPhotoForOwnerAsync(facilityOwnerId, actor, openPlayId, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
+    [HttpPut("{openPlayId:guid}/team-size")]
+    public async Task<IActionResult> TeamSize(
+        Guid facilityOwnerId,
+        Guid openPlayId,
+        OpenPlayTeamSizeInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetTeamSizeForOwnerAsync(facilityOwnerId, actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
     private AuditActor? CurrentActor()
     {
         if (!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var userId))

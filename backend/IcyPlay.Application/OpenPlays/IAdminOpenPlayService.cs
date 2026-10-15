@@ -68,6 +68,26 @@ public interface IAdminOpenPlayService
         Guid openPlayId,
         CancellationToken cancellationToken);
 
+    Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeForOwnerAsync(
+        Guid facilityOwnerId,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayTeamSizeInput input,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlayResult<DeskOpenPlay>> SetBackgroundPhotoForOwnerAsync(
+        Guid facilityOwnerId,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayPhotoInput photo,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlayResult<DeskOpenPlay>> RemoveBackgroundPhotoForOwnerAsync(
+        Guid facilityOwnerId,
+        AuditActor actor,
+        Guid openPlayId,
+        CancellationToken cancellationToken);
+
     Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowForOwnerAsync(
         Guid facilityOwnerId,
         AuditActor actor,

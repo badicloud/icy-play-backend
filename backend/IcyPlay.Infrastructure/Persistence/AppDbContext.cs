@@ -54,6 +54,9 @@ public sealed class AppDbContext : DbContext
     public DbSet<OpenPlaySession> OpenPlaySessions => Set<OpenPlaySession>();
     public DbSet<OpenPlayRegistration> OpenPlayRegistrations => Set<OpenPlayRegistration>();
     public DbSet<OpenPlayFreePlayer> OpenPlayFreePlayers => Set<OpenPlayFreePlayer>();
+    public DbSet<OpenPlayParticipant> OpenPlayParticipants => Set<OpenPlayParticipant>();
+    public DbSet<OpenPlayMatch> OpenPlayMatches => Set<OpenPlayMatch>();
+    public DbSet<OpenPlayMatchSlot> OpenPlayMatchSlots => Set<OpenPlayMatchSlot>();
     public DbSet<OnlinePayment> OnlinePayments => Set<OnlinePayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<DeskReadMarker> DeskReadMarkers => Set<DeskReadMarker>();
@@ -1104,6 +1107,8 @@ public sealed class AppDbContext : DbContext
             entity.Property(x => x.RegistrationFee).HasColumnType("decimal(10,2)");
             entity.Property(x => x.CoverPhotoPublicId).HasMaxLength(300);
             entity.Property(x => x.CoverPhotoUrl).HasMaxLength(1000);
+            entity.Property(x => x.BackgroundPhotoPublicId).HasMaxLength(300);
+            entity.Property(x => x.BackgroundPhotoUrl).HasMaxLength(1000);
             // Stored as its names ("Monday, Saturday") so a row read straight
             // out of the database says which days it runs.
             entity.Property(x => x.Days)
@@ -1168,6 +1173,75 @@ public sealed class AppDbContext : DbContext
                 .WithMany(x => x.FreePlayers)
                 .HasForeignKey(x => x.SessionId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<OpenPlayParticipant>(entity =>
+        {
+            entity.ToTable("OpenPlayParticipants");
+            entity.HasKey(x => x.Id);
+            // Made in the domain, Id and all, and found by EF through the
+            // session's collections: told it is new, not one to update.
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Ignore(x => x.IsWaiting);
+            entity.Ignore(x => x.IsDone);
+            // Dropped from the session when the line moves: deleted by EF,
+            // never by the database, so nothing cascades from a session.
+            entity.HasOne<OpenPlaySession>()
+                .WithMany(x => x.Participants)
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.ClientCascade);
+            // In line once per session, whichever kind of player they are.
+            entity.HasIndex(x => new { x.SessionId, x.RegistrationId })
+                .IsUnique()
+                .HasFilter("[RegistrationId] IS NOT NULL");
+            entity.HasIndex(x => new { x.SessionId, x.FreePlayerId })
+                .IsUnique()
+                .HasFilter("[FreePlayerId] IS NOT NULL");
+        });
+
+        modelBuilder.Entity<OpenPlayMatch>(entity =>
+        {
+            entity.ToTable("OpenPlayMatches");
+            entity.HasKey(x => x.Id);
+            // Made in the domain, Id and all, and found by EF through the
+            // session's collections: told it is new, not one to update.
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Ignore(x => x.HasStarted);
+            entity.Ignore(x => x.IsPlaying);
+            entity.Ignore(x => x.Seated);
+            // Dropped from the session when the line moves: deleted by EF,
+            // never by the database, so nothing cascades from a session.
+            entity.HasOne<OpenPlaySession>()
+                .WithMany(x => x.Matches)
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.ClientCascade);
+            // Match 1, Match 2: one of each per session, even with two desks
+            // pressing at once.
+            entity.HasIndex(x => new { x.SessionId, x.Number }).IsUnique();
+        });
+
+        modelBuilder.Entity<OpenPlayMatchSlot>(entity =>
+        {
+            entity.ToTable("OpenPlayMatchSlots");
+            entity.HasKey(x => x.Id);
+            // Made in the domain, Id and all, and found by EF through the
+            // session's collections: told it is new, not one to update.
+            entity.Property(x => x.Id).ValueGeneratedNever();
+            entity.Property(x => x.Team).HasMaxLength(1).IsRequired();
+            // Seats of a match still to play are taken and given back as the
+            // line moves; they go with the match.
+            entity.HasOne(x => x.Match)
+                .WithMany(x => x.Slots)
+                .HasForeignKey(x => x.MatchId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // A participant is only ever dropped before they have played, so
+            // the seats that go with them are seats of matches still to come.
+            entity.HasOne<OpenPlayParticipant>()
+                .WithMany()
+                .HasForeignKey(x => x.ParticipantId)
+                .OnDelete(DeleteBehavior.ClientCascade);
         });
 
         modelBuilder.Entity<OpenPlayRegistration>(entity =>

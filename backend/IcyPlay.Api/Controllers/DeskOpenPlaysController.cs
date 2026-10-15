@@ -156,6 +156,47 @@ public sealed class DeskOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
     }
 
+    /// <summary>The picture behind the winning team and the best players. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/background")]
+    public async Task<IActionResult> SetBackground(Guid openPlayId, OpenPlayPhotoInput photo, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetBackgroundPhotoAsync(actor, openPlayId, photo, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
+    [HttpDelete("{openPlayId:guid}/background")]
+    public async Task<IActionResult> RemoveBackground(Guid openPlayId, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.RemoveBackgroundPhotoAsync(actor, openPlayId, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
+    /// <summary>Players per team for matches, or null for the sport's. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/team-size")]
+    public async Task<IActionResult> TeamSize(Guid openPlayId, OpenPlayTeamSizeInput input, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetTeamSizeAsync(actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
     /// <summary>Moves when check-in opens. Allowed after publishing.</summary>
     [HttpPut("{openPlayId:guid}/check-in-window")]
     public async Task<IActionResult> CheckInWindow(

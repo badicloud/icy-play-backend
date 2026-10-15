@@ -55,6 +55,12 @@ public sealed class OpenPlaySession : Entity
     /// <summary>Players the venue put in for free. See <see cref="OpenPlayFreePlayer"/>.</summary>
     public ICollection<OpenPlayFreePlayer> FreePlayers { get; private set; } = [];
 
+    /// <summary>The checked-in players' line for matches. See <see cref="OpenPlayLineup"/>.</summary>
+    public ICollection<OpenPlayParticipant> Participants { get; private set; } = [];
+
+    /// <summary>The session's matches, formed from the line. See <see cref="OpenPlayLineup"/>.</summary>
+    public ICollection<OpenPlayMatch> Matches { get; private set; } = [];
+
     public bool IsCancelled => CancelledAt is not null;
 
     /// <summary>

@@ -59,6 +59,25 @@ public interface IDeskOpenPlayService
         Guid openPlayId,
         CancellationToken cancellationToken);
 
+    /// <summary>Players per team for matches, or null for the sport's. Allowed after publishing.</summary>
+    Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayTeamSizeInput input,
+        CancellationToken cancellationToken);
+
+    /// <summary>Sets or replaces the celebration background. Allowed after publishing, like the cover photo.</summary>
+    Task<OpenPlayResult<DeskOpenPlay>> SetBackgroundPhotoAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayPhotoInput photo,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlayResult<DeskOpenPlay>> RemoveBackgroundPhotoAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        CancellationToken cancellationToken);
+
     /// <summary>Moves when check-in opens. Allowed after publishing, like the photo.</summary>
     Task<OpenPlayResult<DeskOpenPlay>> SetCheckInWindowAsync(
         AuditActor actor,

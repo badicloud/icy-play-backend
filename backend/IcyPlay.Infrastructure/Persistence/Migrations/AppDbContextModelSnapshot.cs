@@ -2349,6 +2349,14 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("BackgroundPhotoPublicId")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("BackgroundPhotoUrl")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
                     b.Property<Guid>("BookableCourtId")
                         .HasColumnType("uniqueidentifier");
 
@@ -2398,6 +2406,9 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(30)");
 
                     b.Property<int>("MaxPlayers")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("PlayersPerTeam")
                         .HasColumnType("int");
 
                     b.Property<DateTimeOffset?>("PublishedAt")
@@ -2478,6 +2489,129 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("SessionId");
 
                     b.ToTable("OpenPlayFreePlayers", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayMatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("FinishedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("FinishedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("StartedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "Number")
+                        .IsUnique();
+
+                    b.ToTable("OpenPlayMatches", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayMatchSlot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("LeftAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("MatchId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ParticipantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Team")
+                        .IsRequired()
+                        .HasMaxLength(1)
+                        .HasColumnType("nvarchar(1)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatchId");
+
+                    b.HasIndex("ParticipantId");
+
+                    b.ToTable("OpenPlayMatchSlots", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayParticipant", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("DoneAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("FreePlayerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("QueuedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("RegistrationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "FreePlayerId")
+                        .IsUnique()
+                        .HasFilter("[FreePlayerId] IS NOT NULL");
+
+                    b.HasIndex("SessionId", "RegistrationId")
+                        .IsUnique()
+                        .HasFilter("[RegistrationId] IS NOT NULL");
+
+                    b.ToTable("OpenPlayParticipants", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayRegistration", b =>
@@ -3215,6 +3349,41 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("Session");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayMatch", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", null)
+                        .WithMany("Matches")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.ClientCascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayMatchSlot", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlayMatch", "Match")
+                        .WithMany("Slots")
+                        .HasForeignKey("MatchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlayParticipant", null)
+                        .WithMany()
+                        .HasForeignKey("ParticipantId")
+                        .OnDelete(DeleteBehavior.ClientCascade)
+                        .IsRequired();
+
+                    b.Navigation("Match");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayParticipant", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", null)
+                        .WithMany("Participants")
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.ClientCascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayRegistration", b =>
                 {
                     b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", "Session")
@@ -3297,9 +3466,18 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Navigation("Sessions");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayMatch", b =>
+                {
+                    b.Navigation("Slots");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlaySession", b =>
                 {
                     b.Navigation("FreePlayers");
+
+                    b.Navigation("Matches");
+
+                    b.Navigation("Participants");
 
                     b.Navigation("Registrations");
                 });

@@ -291,6 +291,22 @@ public sealed class OpenPlaySeedService(
             .Where(registration => openPlayIds.Contains(registration.Session.OpenPlayId))
             .ExecuteDeleteAsync(ct);
 
+        // So do the matches played in one, and the line they were made from.
+        await db.OpenPlayMatchSlots
+            .Where(slot => db.OpenPlayMatches.Any(match =>
+                match.Id == slot.MatchId
+                && db.OpenPlaySessions.Any(session => session.Id == match.SessionId && openPlayIds.Contains(session.OpenPlayId))))
+            .ExecuteDeleteAsync(ct);
+
+        await db.OpenPlayMatches
+            .Where(match => db.OpenPlaySessions.Any(session => session.Id == match.SessionId && openPlayIds.Contains(session.OpenPlayId)))
+            .ExecuteDeleteAsync(ct);
+
+        await db.OpenPlayParticipants
+            .Where(participant => db.OpenPlaySessions.Any(session =>
+                session.Id == participant.SessionId && openPlayIds.Contains(session.OpenPlayId)))
+            .ExecuteDeleteAsync(ct);
+
         // Free players a desk put into a sample session go with it.
         await db.OpenPlayFreePlayers
             .Where(player => openPlayIds.Contains(player.Session.OpenPlayId))

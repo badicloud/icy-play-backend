@@ -129,6 +129,12 @@ public static class AuditAction
     public const string OpenPlayFreeSpotsChanged = "OpenPlayFreeSpotsChanged";
     public const string OpenPlayFreePlayerAdded = "OpenPlayFreePlayerAdded";
     public const string OpenPlayFreePlayerRemoved = "OpenPlayFreePlayerRemoved";
+    public const string OpenPlayTeamSizeChanged = "OpenPlayTeamSizeChanged";
+    public const string OpenPlayBackgroundChanged = "OpenPlayBackgroundChanged";
+    public const string OpenPlayMatchStarted = "OpenPlayMatchStarted";
+    public const string OpenPlayMatchFinished = "OpenPlayMatchFinished";
+    public const string OpenPlayPlayerDone = "OpenPlayPlayerDone";
+    public const string OpenPlayPlayerBackIn = "OpenPlayPlayerBackIn";
     public const string OpenPlayCheckInCodeChanged = "OpenPlayCheckInCodeChanged";
     public const string OpenPlayCheckInCodeViewed = "OpenPlayCheckInCodeViewed";
     public const string OpenPlayCheckInCodeLocked = "OpenPlayCheckInCodeLocked";

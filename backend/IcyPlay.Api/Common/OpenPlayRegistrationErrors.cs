@@ -104,6 +104,34 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "Enter the player's name, up to 100 characters, and a mobile number of up to 30."),
+            OpenPlayRegistrationFailure.FreePlayerHasPlayed => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This player has been on court, so they stay on record. Mark them done on the matches page instead."),
+            OpenPlayRegistrationFailure.MatchAlreadyStarted => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That match has already started."),
+            OpenPlayRegistrationFailure.CourtBusy => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Another match is on the court. Finish it first."),
+            OpenPlayRegistrationFailure.NotNextMatch => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Matches are played in order. Start the earlier one first."),
+            OpenPlayRegistrationFailure.TeamEmpty => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "A team has nobody on it yet."),
+            OpenPlayRegistrationFailure.MatchShort => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The teams are not full. Start it anyway, or wait for more players."),
+            OpenPlayRegistrationFailure.MatchNotPlaying => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Only the match on the court can be finished."),
             OpenPlayRegistrationFailure.UnknownTab => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,

@@ -17,7 +17,9 @@ public sealed record OpenPlayInput(
     // How long before each session check-in opens. Left out, an hour.
     int? CheckInOpensMinutes = null,
     // How many players the desk may put in for free per session. Left out, unchanged (none on a new one).
-    int? FreeSpots = null);
+    int? FreeSpots = null,
+    // Players per team for matches. Null: the sport's own.
+    int? PlayersPerTeam = null);
 
 /// <summary>Moves when check-in opens. Allowed after publishing: it is how the venue runs its door.</summary>
 public sealed record OpenPlayCheckInWindowInput(int MinutesBeforeStart);
@@ -27,6 +29,12 @@ public sealed record OpenPlayCheckInWindowInput(int MinutesBeforeStart);
 /// after publishing: it is how the venue fills a short game.
 /// </summary>
 public sealed record OpenPlayFreeSpotsInput(int FreeSpots);
+
+/// <summary>
+/// Players per team for the matches, or null for the sport's own. Allowed after
+/// publishing: it is how the venue runs its games.
+/// </summary>
+public sealed record OpenPlayTeamSizeInput(int? PlayersPerTeam);
 
 /// <param name="DiscountKind">"Fixed" or "Percentage".</param>
 /// <param name="LeadMinutes">How long before the start a player must register to get it.</param>
@@ -80,7 +88,13 @@ public sealed record DeskOpenPlay(
     // Whether check-in for today's session is open right now.
     bool CheckInOpen,
     // How many players the desk may put in for free per session, inside MaxPlayers.
-    int FreeSpots);
+    int FreeSpots,
+    // Players per team as set on the open play; null when it uses the sport's.
+    int? PlayersPerTeam,
+    // Players per team in force: the open play's own, else the sport's.
+    int TeamSize,
+    // Behind the winning team and the best players on the wide screen.
+    string? BackgroundPhotoUrl);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

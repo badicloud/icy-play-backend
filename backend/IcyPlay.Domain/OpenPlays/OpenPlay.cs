@@ -144,6 +144,34 @@ public sealed class OpenPlay : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// How many players make one team when the desk runs matches. Null means
+    /// the sport's own, as <see cref="OpenPlayTeams.DefaultFor"/> has it — five
+    /// for basketball, two for pickleball — so most open plays never set it.
+    /// </summary>
+    public int? PlayersPerTeam
+    {
+        get; private set;
+    }
+
+    /// <summary>
+    /// The picture behind the winning team and the best players on the wide
+    /// screen. Its own, apart from the cover photo the public card shows.
+    /// </summary>
+    public string? BackgroundPhotoPublicId
+    {
+        get; private set;
+    }
+
+    /// <summary>Cloudinary's <c>secure_url</c>, never the http one.</summary>
+    public string? BackgroundPhotoUrl
+    {
+        get; private set;
+    }
+
+    /// <summary>The players per team in force: the open play's own, else the sport's.</summary>
+    public int TeamSizeFor(string sportKey) => PlayersPerTeam ?? OpenPlayTeams.DefaultFor(sportKey);
+
     public int RegistrationCutoffMinutes
     {
         get; private set;
@@ -351,6 +379,60 @@ public sealed class OpenPlay : Entity
         }
 
         FreeSpots = freeSpots;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Sets how many players make a team, or null to go back to the sport's.
+    /// Allowed after publishing, like the check-in window: it is how the venue
+    /// runs its games. Matches already formed keep the teams they have; the
+    /// new size applies to the ones formed after.
+    /// </summary>
+    public void SetPlayersPerTeam(int? playersPerTeam, DateTimeOffset now)
+    {
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        if (playersPerTeam is int size && (size < OpenPlayTeams.Smallest || size > OpenPlayTeams.Largest))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(playersPerTeam),
+                $"A team has {OpenPlayTeams.Smallest} to {OpenPlayTeams.Largest} players.");
+        }
+
+        PlayersPerTeam = playersPerTeam;
+        UpdatedAt = now;
+    }
+
+    /// <summary>Sets or replaces the celebration background. Allowed after publishing, like the cover photo.</summary>
+    public void SetBackgroundPhoto(string publicId, string secureUrl, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(publicId) || string.IsNullOrWhiteSpace(secureUrl))
+        {
+            throw new ArgumentException("A background needs its public id and its URL.");
+        }
+
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        BackgroundPhotoPublicId = publicId.Trim();
+        BackgroundPhotoUrl = secureUrl.Trim();
+        UpdatedAt = now;
+    }
+
+    public void RemoveBackgroundPhoto(DateTimeOffset now)
+    {
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        BackgroundPhotoPublicId = null;
+        BackgroundPhotoUrl = null;
         UpdatedAt = now;
     }
 
@@ -591,6 +673,32 @@ public static class OpenPlayStatus
     public const string Draft = "Draft";
     public const string Published = "Published";
     public const string Ended = "Ended";
+}
+
+/// <summary>How many players make a team, by sport.</summary>
+public static class OpenPlayTeams
+{
+    public const int Smallest = 1;
+    public const int Largest = 11;
+
+    /// <summary>When a sport is not one the platform knows teams for: doubles.</summary>
+    public const int Fallback = 2;
+
+    private static readonly Dictionary<string, int> BySport = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["basketball"] = 5,
+        ["futsal"] = 5,
+        ["volleyball"] = 6,
+        ["sepak-takraw"] = 3,
+        ["pickleball"] = 2,
+        ["badminton"] = 2,
+        ["tennis"] = 2,
+        ["table-tennis"] = 2,
+        ["squash"] = 1
+    };
+
+    public static int DefaultFor(string? sportKey) =>
+        sportKey is not null && BySport.TryGetValue(sportKey, out var size) ? size : Fallback;
 }
 
 public static class OpenPlayLimits

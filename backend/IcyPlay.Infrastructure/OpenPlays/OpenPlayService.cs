@@ -66,11 +66,23 @@ public sealed class OpenPlayService(
 
     public Task<OpenPlayResult<DeskOpenPlay>> SetCoverPhotoAsync(
         AuditActor actor, Guid openPlayId, OpenPlayPhotoInput photo, CancellationToken ct) =>
-        SetCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, photo, ct);
+        SetCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, photo, background: false, ct);
 
     public Task<OpenPlayResult<DeskOpenPlay>> RemoveCoverPhotoAsync(
         AuditActor actor, Guid openPlayId, CancellationToken ct) =>
-        RemoveCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, ct);
+        RemoveCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, background: false, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeAsync(
+        AuditActor actor, Guid openPlayId, OpenPlayTeamSizeInput input, CancellationToken ct) =>
+        SetTeamSizeCore(DeskVenuesOf(actor), actor, openPlayId, input, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetBackgroundPhotoAsync(
+        AuditActor actor, Guid openPlayId, OpenPlayPhotoInput photo, CancellationToken ct) =>
+        SetCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, photo, background: true, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> RemoveBackgroundPhotoAsync(
+        AuditActor actor, Guid openPlayId, CancellationToken ct) =>
+        RemoveCoverPhotoCore(DeskVenuesOf(actor), actor, openPlayId, background: true, ct);
 
     public Task<OpenPlayResult<bool>> DeleteDraftAsync(AuditActor actor, Guid openPlayId, CancellationToken ct) =>
         DeleteDraftCore(DeskVenuesOf(actor), actor, openPlayId, ct);
@@ -187,11 +199,73 @@ public sealed class OpenPlayService(
 
     public Task<OpenPlayResult<DeskOpenPlay>> SetCoverPhotoForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayPhotoInput photo, CancellationToken ct) =>
-        SetCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, photo, ct);
+        SetCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, photo, background: false, ct);
 
     public Task<OpenPlayResult<DeskOpenPlay>> RemoveCoverPhotoForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
-        RemoveCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, ct);
+        RemoveCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, background: false, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayTeamSizeInput input, CancellationToken ct) =>
+        SetTeamSizeCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetBackgroundPhotoForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayPhotoInput photo, CancellationToken ct) =>
+        SetCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, photo, background: true, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> RemoveBackgroundPhotoForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
+        RemoveCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, background: true, ct);
+
+    /// <summary>
+    /// Players per team for the matches. Allowed on a published open play, like
+    /// the check-in window: it is how the venue runs its games.
+    /// </summary>
+    private async Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeCore(
+        IQueryable<Guid> venues,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayTeamSizeInput input,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var openPlay = await ForScopeAsync(venues, openPlayId, ct);
+
+        if (openPlay is null)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.NotFound);
+        }
+
+        if (openPlay.HasEnded)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Ended);
+        }
+
+        var before = openPlay.PlayersPerTeam;
+
+        try
+        {
+            openPlay.SetPlayersPerTeam(input.PlayersPerTeam, timeProvider.GetUtcNow());
+        }
+        catch (ArgumentException problem)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Invalid, Plain(problem));
+        }
+
+        audit.RecordChange(
+            actor,
+            AuditAction.OpenPlayTeamSizeChanged,
+            AuditEntityType.OpenPlay,
+            openPlay.Id,
+            new Dictionary<string, string?> { ["playersPerTeam"] = before?.ToString(CultureInfo.InvariantCulture) },
+            new Dictionary<string, string?> { ["playersPerTeam"] = openPlay.PlayersPerTeam?.ToString(CultureInfo.InvariantCulture) });
+
+        await db.SaveChangesAsync(ct);
+
+        return OpenPlayResult<DeskOpenPlay>.Success(await ProjectOneAsync(openPlay.Id, ct));
+    }
 
     public Task<OpenPlayResult<bool>> DeleteDraftForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
@@ -410,6 +484,8 @@ public sealed class OpenPlayService(
             {
                 openPlay.SetFreeSpots(freeSpots, now);
             }
+
+            openPlay.SetPlayersPerTeam(input.PlayersPerTeam, now);
         }
         catch (ArgumentException problem)
         {
@@ -510,6 +586,8 @@ public sealed class OpenPlayService(
             {
                 openPlay.SetFreeSpots(freeSpots, now);
             }
+
+            openPlay.SetPlayersPerTeam(input.PlayersPerTeam, now);
         }
         catch (ArgumentException problem)
         {
@@ -708,6 +786,7 @@ public sealed class OpenPlayService(
         AuditActor actor,
         Guid openPlayId,
         OpenPlayPhotoInput photo,
+        bool background,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(actor);
@@ -741,16 +820,29 @@ public sealed class OpenPlayService(
             return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.UntrustedPhoto);
         }
 
-        var before = openPlay.CoverPhotoPublicId;
-        openPlay.SetCoverPhoto(photo.PublicId, photo.SecureUrl, timeProvider.GetUtcNow());
+        var before = background ? openPlay.BackgroundPhotoPublicId : openPlay.CoverPhotoPublicId;
+
+        if (background)
+        {
+            openPlay.SetBackgroundPhoto(photo.PublicId, photo.SecureUrl, timeProvider.GetUtcNow());
+        }
+        else
+        {
+            openPlay.SetCoverPhoto(photo.PublicId, photo.SecureUrl, timeProvider.GetUtcNow());
+        }
+
+        var field = background ? "backgroundPhoto" : "coverPhoto";
 
         audit.RecordChange(
             actor,
-            AuditAction.OpenPlayPhotoChanged,
+            background ? AuditAction.OpenPlayBackgroundChanged : AuditAction.OpenPlayPhotoChanged,
             AuditEntityType.OpenPlay,
             openPlay.Id,
-            new Dictionary<string, string?> { ["coverPhoto"] = before },
-            new Dictionary<string, string?> { ["coverPhoto"] = openPlay.CoverPhotoPublicId });
+            new Dictionary<string, string?> { [field] = before },
+            new Dictionary<string, string?>
+            {
+                [field] = background ? openPlay.BackgroundPhotoPublicId : openPlay.CoverPhotoPublicId
+            });
 
         await db.SaveChangesAsync(ct);
 
@@ -761,6 +853,7 @@ public sealed class OpenPlayService(
         IQueryable<Guid> venues,
         AuditActor actor,
         Guid openPlayId,
+        bool background,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(actor);
@@ -782,17 +875,26 @@ public sealed class OpenPlayService(
             return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Ended);
         }
 
-        if (openPlay.CoverPhotoPublicId is { } before)
+        if ((background ? openPlay.BackgroundPhotoPublicId : openPlay.CoverPhotoPublicId) is { } before)
         {
-            openPlay.RemoveCoverPhoto(timeProvider.GetUtcNow());
+            if (background)
+            {
+                openPlay.RemoveBackgroundPhoto(timeProvider.GetUtcNow());
+            }
+            else
+            {
+                openPlay.RemoveCoverPhoto(timeProvider.GetUtcNow());
+            }
+
+            var field = background ? "backgroundPhoto" : "coverPhoto";
 
             audit.RecordChange(
                 actor,
-                AuditAction.OpenPlayPhotoChanged,
+                background ? AuditAction.OpenPlayBackgroundChanged : AuditAction.OpenPlayPhotoChanged,
                 AuditEntityType.OpenPlay,
                 openPlay.Id,
-                new Dictionary<string, string?> { ["coverPhoto"] = before },
-                new Dictionary<string, string?> { ["coverPhoto"] = null });
+                new Dictionary<string, string?> { [field] = before },
+                new Dictionary<string, string?> { [field] = null });
 
             await db.SaveChangesAsync(ct);
         }
@@ -1196,7 +1298,10 @@ public sealed class OpenPlayService(
                         sessionToday,
                         sessionToday is DateOnly day ? openPlay.CheckInOpensAt(day) : null,
                         sessionToday is DateOnly open && openPlay.IsCheckInOpen(open, venueNow),
-                        openPlay.FreeSpots);
+                        openPlay.FreeSpots,
+                        openPlay.PlayersPerTeam,
+                        openPlay.TeamSizeFor(row.SportKey),
+                        openPlay.BackgroundPhotoUrl);
                 })
         ];
     }

@@ -106,7 +106,21 @@ public enum OpenPlayRegistrationFailure
     // The session has finished on the venue's clock.
     SessionOver,
     // A free player needs a name, of a sensible length.
-    InvalidFreePlayer
+    InvalidFreePlayer,
+    // A free player who has been on court stays on record: mark them done instead.
+    FreePlayerHasPlayed,
+    // Matches: the one pressed has started already.
+    MatchAlreadyStarted,
+    // Another match is on the court.
+    CourtBusy,
+    // Matches are played in order: an earlier one is still to start.
+    NotNextMatch,
+    // A team has nobody on it.
+    TeamEmpty,
+    // Short of players: the desk has to say to start anyway.
+    MatchShort,
+    // Only the match on court can be finished.
+    MatchNotPlaying
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

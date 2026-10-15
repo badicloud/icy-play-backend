@@ -8,6 +8,7 @@ using IcyPlay.Domain.OpenPlays;
 using IcyPlay.Infrastructure.Bookings;
 using IcyPlay.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Door = IcyPlay.Infrastructure.OpenPlays.SessionDoor;
 
 namespace IcyPlay.Infrastructure.OpenPlays;
 
@@ -113,6 +114,7 @@ public sealed class DeskCheckInService(
         registration.CheckIn(actor.UserId!.Value, timeProvider.GetUtcNow());
         Record(actor, AuditAction.OpenPlayCheckedIn, registration, "Checked in by scanning the player's QR.");
         await db.SaveChangesAsync(ct);
+        await JoinLineAsync(door, registration.SessionId, registration.Id, null, ct);
 
         return await Answer(CheckInOutcome.CheckedIn, $"{name} is checked in.", Player(registration, name));
     }
@@ -159,6 +161,7 @@ public sealed class DeskCheckInService(
             registration.CheckIn(actor.UserId!.Value, timeProvider.GetUtcNow());
             Record(actor, AuditAction.OpenPlayCheckedIn, registration, "Checked in by hand from the roster.");
             await db.SaveChangesAsync(ct);
+            await JoinLineAsync(door, registration.SessionId, registration.Id, null, ct);
         }
 
         return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
@@ -195,6 +198,7 @@ public sealed class DeskCheckInService(
             registration.UndoCheckIn(timeProvider.GetUtcNow());
             Record(actor, AuditAction.OpenPlayCheckInUndone, registration, "Check-in taken back.");
             await db.SaveChangesAsync(ct);
+            await LeaveLineAsync(door, registration.SessionId, registration.Id, null, ct);
         }
 
         return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
@@ -233,6 +237,9 @@ public sealed class DeskCheckInService(
         }
 
         var now = timeProvider.GetUtcNow();
+        Guid addedId;
+        Guid addedTo;
+        bool checkedIn;
 
         // Counting the spots and taking one happen together, as they do when a
         // player registers: a player joining online at the same moment must
@@ -279,6 +286,15 @@ public sealed class DeskCheckInService(
 
             await db.SaveChangesAsync(ct);
             await transaction.CommitAsync(ct);
+            addedId = player.Id;
+            addedTo = player.SessionId;
+            checkedIn = player.IsCheckedIn;
+        }
+
+        // Checked in as they were added: into the line for matches.
+        if (checkedIn)
+        {
+            await JoinLineAsync(door, addedTo, null, addedId, ct);
         }
 
         return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
@@ -303,8 +319,26 @@ public sealed class DeskCheckInService(
             return Fail<CheckInRoster>(OpenPlayRegistrationFailure.SessionOver);
         }
 
-        RecordFree(actor, AuditAction.OpenPlayFreePlayerRemoved, door, player, "Taken back out by the desk.");
-        db.OpenPlayFreePlayers.Remove(player);
+        // Somebody who has been on court stays on record with their matches:
+        // the desk marks them done instead.
+        var played = await db.OpenPlayParticipants
+            .AnyAsync(participant => participant.FreePlayerId == player.Id
+                && db.OpenPlayMatchSlots.Any(slot => slot.ParticipantId == participant.Id
+                    && db.OpenPlayMatches.Any(match => match.Id == slot.MatchId
+                        && (match.Status == OpenPlayMatchStatus.Playing || match.Status == OpenPlayMatchStatus.Finished))), ct);
+
+        if (played)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.FreePlayerHasPlayed);
+        }
+
+        var sessionId = player.SessionId;
+        var playerId = player.Id;
+        await LeaveLineAsync(door, sessionId, null, playerId, ct);
+
+        var gone = await db.OpenPlayFreePlayers.SingleAsync(candidate => candidate.Id == playerId, ct);
+        RecordFree(actor, AuditAction.OpenPlayFreePlayerRemoved, door, gone, "Taken back out by the desk.");
+        db.OpenPlayFreePlayers.Remove(gone);
         await db.SaveChangesAsync(ct);
 
         return OpenPlayRegistrationResult<CheckInRoster>.Success(await RosterOfAsync(door, ct));
@@ -342,6 +376,7 @@ public sealed class DeskCheckInService(
                 player.UndoCheckIn(now);
                 RecordFree(actor, AuditAction.OpenPlayCheckInUndone, door, player, "Check-in taken back.");
                 await db.SaveChangesAsync(ct);
+                await LeaveLineAsync(door, player.SessionId, null, player.Id, ct);
             }
         }
         else
@@ -356,6 +391,7 @@ public sealed class DeskCheckInService(
                 player.CheckIn(actor.UserId!.Value, now);
                 RecordFree(actor, AuditAction.OpenPlayCheckedIn, door, player, "Checked in by hand from the roster.");
                 await db.SaveChangesAsync(ct);
+                await JoinLineAsync(door, player.SessionId, null, player.Id, ct);
             }
         }
 
@@ -364,17 +400,6 @@ public sealed class DeskCheckInService(
 
     // ------------------------------------------------------------ the reads
 
-    private sealed record Door(
-        OpenPlay OpenPlay,
-        DateOnly Date,
-        string FacilityName,
-        string CourtName,
-        string UnitLabel,
-        string TimeZone,
-        bool IsOpen,
-        // The session has finished on the venue's clock.
-        bool IsOver);
-
     private static OpenPlayRegistrationResult<T> Fail<T>(OpenPlayRegistrationFailure failure) =>
         OpenPlayRegistrationResult<T>.Fail(failure);
 
@@ -382,49 +407,32 @@ public sealed class DeskCheckInService(
     /// The session, only if it is a published open play at a venue this person
     /// works, on a date it runs and that has not been cancelled.
     /// </summary>
-    private async Task<Door?> DoorAsync(Guid userId, Guid openPlayId, DateOnly date, CancellationToken ct)
-    {
-        var venueIds = db.Facilities
-            .Where(facility => facility.FacilityOwner.UserId == userId
-                || facility.Attendants.Any(attendant => attendant.UserId == userId && attendant.IsActive))
-            .Select(facility => facility.Id);
+    /// <summary>Somebody has checked in: into the line for matches, and the first open seat.</summary>
+    private Task JoinLineAsync(Door door, Guid sessionId, Guid? registrationId, Guid? freePlayerId, CancellationToken ct) =>
+        SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session => OpenPlayLineup.Join(session, registrationId, freePlayerId, door.TeamSize, timeProvider.GetUtcNow()),
+            ct);
 
-        var row = await db.OpenPlays
-            .AsNoTracking()
-            .Where(openPlay => openPlay.Id == openPlayId
-                && openPlay.PublishedAt != null
-                && venueIds.Contains(openPlay.FacilityId))
-            .Select(openPlay => new
+    /// <summary>A check-in taken back: out of the line, and the line closes up.</summary>
+    private Task LeaveLineAsync(Door door, Guid sessionId, Guid? registrationId, Guid? freePlayerId, CancellationToken ct) =>
+        SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session =>
             {
-                OpenPlay = openPlay,
-                FacilityName = openPlay.Facility.Name,
-                openPlay.Facility.TimeZone,
-                CourtName = openPlay.BookableCourt.Court.Name,
-                SportName = openPlay.BookableCourt.CourtSport.Sport.Name,
-                openPlay.BookableCourt.DivisionNumber,
-                openPlay.BookableCourt.CourtSport.Divisions,
-                Cancelled = db.OpenPlaySessions.Any(session =>
-                    session.OpenPlayId == openPlay.Id && session.Date == date && session.CancelledAt != null)
-            })
-            .SingleOrDefaultAsync(ct);
+                var participant = session.Participants.FirstOrDefault(candidate =>
+                    (registrationId is not null && candidate.RegistrationId == registrationId)
+                    || (freePlayerId is not null && candidate.FreePlayerId == freePlayerId));
 
-        if (row is null || row.Cancelled || !row.OpenPlay.RunsOn(date))
-        {
-            return null;
-        }
+                return participant is null
+                    || OpenPlayLineup.Withdraw(session, participant, door.TeamSize, timeProvider.GetUtcNow());
+            },
+            ct);
 
-        var venueNow = VenueClock.LocalNowIn(row.TimeZone, timeProvider.GetUtcNow()).DateTime;
-
-        return new Door(
-            row.OpenPlay,
-            date,
-            row.FacilityName,
-            row.CourtName,
-            DeskService.UnitLabel(row.SportName, row.DivisionNumber, row.Divisions),
-            row.TimeZone,
-            row.OpenPlay.IsCheckInOpen(date, venueNow),
-            venueNow >= date.ToDateTime(row.OpenPlay.EndsAt));
-    }
+    private Task<Door?> DoorAsync(Guid userId, Guid openPlayId, DateOnly date, CancellationToken ct) =>
+        SessionDoor.FindAsync(db, timeProvider, userId, openPlayId, date, ct);
 
     private async Task<(OpenPlayRegistration? Registration, Door? Door)> RegistrationAtDoorAsync(
         AuditActor actor,

@@ -83,7 +83,8 @@ public static class DependencyInjection
         services.AddScoped<ICustomerOpenPlayService>(provider => provider.GetRequiredService<OpenPlayRegistrationService>());
         services.AddScoped<IDeskOpenPlayRequestService>(provider => provider.GetRequiredService<OpenPlayRegistrationService>());
         services.AddScoped<IOpenPlayNotifier, OpenPlayNotifier>();
-        services.AddScoped<IDeskCheckInService, DeskCheckInService>();
+        services.AddScoped<IDeskCheckInService, DeskCheckInService>();
+        services.AddScoped<IDeskMatchService, DeskMatchService>();
         services.AddScoped<IHolidayService, HolidayService>();
         services.AddMemoryCache();
         // One signal outlives the requests that clear it.
