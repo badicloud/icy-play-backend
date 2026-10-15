@@ -24,6 +24,9 @@
     </PackageReference>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="QuestPDF" Version="2026.9.1" />
+    <!-- Pinned above what Microsoft.Data.SqlClient brings (9.0.11), which has
+         CVE-2026-84008 and CVE-2026-70162. Drop once SqlClient brings 10.0.13 or later. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
 
   <PropertyGroup>
