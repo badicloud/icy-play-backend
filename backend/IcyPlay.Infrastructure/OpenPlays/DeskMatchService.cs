@@ -92,8 +92,9 @@ public sealed class DeskMatchService(
             return Fail(OpenPlayRegistrationFailure.NotFound);
         }
 
-        // Over on the venue's clock: what was played stands as it was.
-        if (door.IsOver)
+        // The last game often runs past the session's time, so it can still be
+        // finished then; not once the desk has ended the session.
+        if (door.IsEnded)
         {
             return Fail(OpenPlayRegistrationFailure.SessionOver);
         }
@@ -407,6 +408,101 @@ public sealed class DeskMatchService(
             : OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
     }
 
+    public async Task<OpenPlayRegistrationResult<MatchBoard>> EndSessionAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+
+        var door = await SessionDoor.FindAsync(db, timeProvider, actor.UserId ?? Guid.Empty, openPlayId, date, ct);
+
+        if (door is null)
+        {
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        var sessionId = await db.OpenPlaySessions
+            .Where(session => session.OpenPlayId == openPlayId && session.Date == date)
+            .Select(session => (Guid?)session.Id)
+            .SingleOrDefaultAsync(ct);
+
+        if (sessionId is not Guid id)
+        {
+            // Nobody has registered, so there is nothing to end.
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        var refusal = await SessionLineups.ApplyAsync(
+            db,
+            id,
+            session =>
+            {
+                var wasEnded = session.IsEnded;
+                var refused = OpenPlayLineup.EndSession(session, actor.UserId!.Value, timeProvider.GetUtcNow());
+
+                if (refused is null && !wasEnded)
+                {
+                    Record(actor, AuditAction.OpenPlaySessionEnded, door, null, null, "Session ended by the desk.");
+                }
+
+                return refused;
+            },
+            ct);
+
+        if (refusal is LineupRefusal.CourtBusy)
+        {
+            return Fail(OpenPlayRegistrationFailure.MatchStillPlaying);
+        }
+
+        return OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(await DoorAgainAsync(door, actor, ct), ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<MatchBoard>> ReopenSessionAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+
+        var door = await SessionDoor.FindAsync(db, timeProvider, actor.UserId ?? Guid.Empty, openPlayId, date, ct);
+
+        if (door is null)
+        {
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (!door.IsEnded || door.TimeIsUp)
+        {
+            return Fail(OpenPlayRegistrationFailure.CannotReopenSession);
+        }
+
+        var sessionId = await db.OpenPlaySessions
+            .Where(session => session.OpenPlayId == openPlayId && session.Date == date)
+            .Select(session => session.Id)
+            .SingleAsync(ct);
+
+        await SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session =>
+            {
+                OpenPlayLineup.ReopenSession(session, door.TeamSize, timeProvider.GetUtcNow());
+                Record(actor, AuditAction.OpenPlaySessionReopened, door, null, null, "Session reopened by the desk.");
+
+                return true;
+            },
+            ct);
+
+        return OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(await DoorAgainAsync(door, actor, ct), ct));
+    }
+
+    /// <summary>The door read again, after ending or reopening changed it.</summary>
+    private async Task<SessionDoor> DoorAgainAsync(SessionDoor door, AuditActor actor, CancellationToken ct) =>
+        await SessionDoor.FindAsync(db, timeProvider, actor.UserId ?? Guid.Empty, door.OpenPlay.Id, door.Date, ct) ?? door;
+
     public async Task<OpenPlayRegistrationResult<MatchBoard>> BackInAsync(
         AuditActor actor,
         Guid participantId,
@@ -515,6 +611,32 @@ public sealed class DeskMatchService(
         var best = OpenPlayStandings.Best(tally).Select(standing => standing.ParticipantId).ToHashSet();
         var wins = tally.Select(standing => standing.Won).ToList();
 
+        var endedAt = sessionId is Guid endedSession
+            ? await db.OpenPlaySessions.Where(session => session.Id == endedSession).Select(session => session.EndedAt).SingleAsync(ct)
+            : null;
+
+        MatchWinningTeam? winningTeam = null;
+
+        if (OpenPlayLineup.WinningTeam(matches) is var (wonMatch, wonTeam))
+        {
+            winningTeam = new MatchWinningTeam(
+                wonMatch.Number,
+                wonTeam,
+                [.. wonMatch.Seated
+                    .Where(slot => slot.Team == wonTeam)
+                    .OrderBy(slot => slot.Position)
+                    .Select(slot => players[slot.ParticipantId])]);
+        }
+
+        var group = participants
+            .OrderBy(participant => participant.CreatedAt)
+            .Select(participant => players[participant.Id])
+            .ToList();
+
+        var photos = sessionId is Guid photoSession
+            ? await DeskResultPhotoService.PhotosAsync(db, photoSession, timeProvider.GetUtcNow(), ct)
+            : [];
+
         return new MatchBoard(
             door.OpenPlay.Id,
             door.OpenPlay.Title,
@@ -549,7 +671,12 @@ public sealed class DeskMatchService(
                 standing.Won,
                 standing.Drawn,
                 standing.Lost,
-                best.Contains(standing.ParticipantId)))]);
+                best.Contains(standing.ParticipantId)))],
+            endedAt,
+            door.IsEnded && !door.TimeIsUp,
+            winningTeam,
+            group,
+            photos);
     }
 
     /// <summary>Everyone in the line by name: registered players from their account, free ones as the desk typed them.</summary>

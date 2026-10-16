@@ -116,6 +116,9 @@ public sealed record OpenPlayPhotoInput(string PublicId, string SecureUrl);
 public static class OpenPlayPhotos
 {
     public const string Folder = "icyplay/open-plays";
+
+    /// <summary>The desk's photos of a session's results, kept for two days.</summary>
+    public const string ResultsFolder = "icyplay/open-play-results";
 }
 
 /// <summary>

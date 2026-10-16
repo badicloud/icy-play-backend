@@ -128,6 +128,22 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "The teams are not full. Start it anyway, or wait for more players."),
+            OpenPlayRegistrationFailure.MatchStillPlaying => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "A match is still on the court. Finish it first, then end the session."),
+            OpenPlayRegistrationFailure.CannotReopenSession => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "This session can no longer be reopened: its time is up."),
+            OpenPlayRegistrationFailure.SessionNotOver => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Take the result photos once the session has ended."),
+            OpenPlayRegistrationFailure.InvalidResultPhoto => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "That photo could not be saved. Take it again."),
             OpenPlayRegistrationFailure.TeamsUneven => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,

@@ -126,6 +126,11 @@ public sealed class OpenPlayRegistrationService(
         {
             return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.SessionCancelled);
         }
+        else if (session.IsEnded)
+        {
+            // The desk ended it early: the games are over.
+            return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.RegistrationClosed);
+        }
 
         // Already holding a spot: back to the same registration rather than a
         // second one. Pressing Join twice is ordinary; paying twice is not.

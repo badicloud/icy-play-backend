@@ -8,6 +8,7 @@ using IcyPlay.Api.Middleware;
 using IcyPlay.Application;
 using IcyPlay.Application.Identity;
 using IcyPlay.Infrastructure;
+using IcyPlay.Infrastructure.OpenPlays;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
@@ -179,6 +180,16 @@ builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 
 var app = builder.Build();
+
+if (!string.IsNullOrWhiteSpace(defaultConnectionString))
+{
+    // Result photos are kept two days; every hour the ones past that are
+    // deleted. Runs where the Hangfire server does (Hangfire:ServerEnabled).
+    app.Services.GetRequiredService<IRecurringJobManager>().AddOrUpdate<OpenPlayResultPhotoCleanup>(
+        OpenPlayResultPhotoCleanup.JobId,
+        cleanup => cleanup.RunAsync(CancellationToken.None),
+        Cron.Hourly());
+}
 
 if (app.Environment.IsDevelopment())
 {

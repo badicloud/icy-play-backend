@@ -57,6 +57,7 @@ public sealed class AppDbContext : DbContext
     public DbSet<OpenPlayParticipant> OpenPlayParticipants => Set<OpenPlayParticipant>();
     public DbSet<OpenPlayMatch> OpenPlayMatches => Set<OpenPlayMatch>();
     public DbSet<OpenPlayMatchSlot> OpenPlayMatchSlots => Set<OpenPlayMatchSlot>();
+    public DbSet<OpenPlaySessionPhoto> OpenPlaySessionPhotos => Set<OpenPlaySessionPhoto>();
     public DbSet<OnlinePayment> OnlinePayments => Set<OnlinePayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<DeskReadMarker> DeskReadMarkers => Set<DeskReadMarker>();
@@ -1152,6 +1153,7 @@ public sealed class AppDbContext : DbContext
             entity.HasKey(x => x.Id);
             entity.Property(x => x.CancellationReason).HasMaxLength(500);
             entity.Ignore(x => x.IsCancelled);
+            entity.Ignore(x => x.IsEnded);
             // One row per date. Two players registering for the first time at
             // once must end up on the same session.
             entity.HasIndex(x => new { x.OpenPlayId, x.Date }).IsUnique();
@@ -1222,6 +1224,23 @@ public sealed class AppDbContext : DbContext
             // Match 1, Match 2: one of each per session, even with two desks
             // pressing at once.
             entity.HasIndex(x => new { x.SessionId, x.Number }).IsUnique();
+        });
+
+        modelBuilder.Entity<OpenPlaySessionPhoto>(entity =>
+        {
+            entity.ToTable("OpenPlaySessionPhotos");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Kind).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.PublicId).HasMaxLength(300).IsRequired();
+            entity.Property(x => x.SecureUrl).HasMaxLength(1000).IsRequired();
+            // Kept only for a while: they go with their session.
+            entity.HasOne<OpenPlaySession>()
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.SessionId, x.Kind });
+            // What the hourly clean-up looks for.
+            entity.HasIndex(x => x.ExpiresAt);
         });
 
         modelBuilder.Entity<OpenPlayMatchSlot>(entity =>

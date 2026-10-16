@@ -140,8 +140,9 @@ public sealed class OpenPlayCatalog(AppDbContext db, TimeProvider timeProvider) 
                 var session = sessions.FirstOrDefault(candidate =>
                     candidate.OpenPlayId == openPlay.Id && candidate.Date == date);
 
-                // A cancelled date is released, and a closed court is closed.
-                if (session is { IsCancelled: true } || IsClosed(closures, openPlay, row.TimeZone, date))
+                // A cancelled date is released, a closed court is closed, and a
+                // session the desk has ended is over.
+                if (session is { IsCancelled: true } or { IsEnded: true } || IsClosed(closures, openPlay, row.TimeZone, date))
                 {
                     continue;
                 }

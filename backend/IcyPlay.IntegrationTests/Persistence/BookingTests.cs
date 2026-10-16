@@ -4,6 +4,7 @@ using IcyPlay.Application.Bookings;
 using IcyPlay.Application.Email;
 using IcyPlay.Application.Facilities;
 using IcyPlay.Application.OpenPlays;
+using IcyPlay.Application.Storage;
 using IcyPlay.Domain.Audit;
 using IcyPlay.Domain.Bookings;
 using IcyPlay.Domain.Email;
@@ -5342,6 +5343,219 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task EndSession_ShouldStopTheGamesAndTheDoor_AndNameTheWinners()
+    {
+        // Arrange: six in; Match 1 played and won by Team A; Match 2 formed.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "End Session Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 6);
+        var sut = CreateMatchService(context);
+        var first = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, first.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, first.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, 11, 7), CancellationToken.None);
+        var late = await ConfirmedPlayerAsync(context, floor, openPlayId, Today);
+
+        // Act
+        var ended = await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var scanned = await CreateCheckInService(context)
+            .ScanAsync(desk, openPlayId, Today, new CheckInScanRequest(await QrOfAsync(context, late)), CancellationToken.None);
+
+        // Assert
+        var board = ended.Value!;
+
+        using (new AssertionScope())
+        {
+            board.EndedAt.Should().NotBeNull();
+            board.IsOver.Should().BeTrue();
+            board.CanReopen.Should().BeTrue();
+            board.Matches.Should().ContainSingle();
+            board.WinningTeam!.MatchNumber.Should().Be(1);
+            board.WinningTeam.Team.Should().Be(OpenPlayTeam.A);
+            board.WinningTeam.Players.Select(player => player.ParticipantId)
+                .Should().Equal(first.TeamA.Select(seat => seat!.ParticipantId));
+            board.Group.Should().HaveCount(6);
+            board.Standings.Where(standing => standing.IsBest).Should().HaveCount(2);
+            scanned.Value!.Outcome.Should().Be(CheckInOutcome.WindowClosed);
+            (await context.AuditLogs.AnyAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlaySessionEnded)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task EndSession_WhileAMatchIsOnCourt_ShouldBeRefused_AndReopenShouldFormMatchesAgain()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Reopen Session Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+
+        // Act
+        var whilePlaying = await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.Draw, null, null), CancellationToken.None);
+        var ended = await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var reopened = await sut.ReopenSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            whilePlaying.Failure.Should().Be(OpenPlayRegistrationFailure.MatchStillPlaying);
+            ended.Value!.Matches.Should().ContainSingle();
+            ended.Value.WinningTeam.Should().BeNull();
+            reopened.Value!.EndedAt.Should().BeNull();
+            reopened.Value.IsOver.Should().BeFalse();
+            reopened.Value.Matches.Should().HaveCount(2);
+            reopened.Value.Matches[1].Status.Should().Be(OpenPlayMatchStatus.Ready);
+        }
+    }
+
+    [Fact]
+    public async Task ReopenSession_AfterItsTimeIsUp_ShouldBeRefused()
+    {
+        // Arrange: ended tonight, and it is now the next day.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Late Reopen Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
+        await CreateMatchService(context).EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var tomorrow = new FixedTimeProvider(Now.AddDays(1));
+        var later = new DeskMatchService(context, new AuditLogger(context, tomorrow), tomorrow);
+
+        // Act
+        var reopened = await later.ReopenSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        reopened.Failure.Should().Be(OpenPlayRegistrationFailure.CannotReopenSession);
+    }
+
+    [Fact]
+    public async Task ResultPhotos_ShouldBeTakenOnlyOnceTheSessionIsOver_AndReplaceTheOneBefore()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Result Photo Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateResultPhotoService(context);
+        var first = ResultPhoto("best-1");
+        var second = ResultPhoto("best-2");
+
+        // Act
+        var tooSoon = await sut.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.BestPlayers, first, CancellationToken.None);
+        await CreateMatchService(context).EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var saved = await sut.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.BestPlayers, first, CancellationToken.None);
+        var replaced = await sut.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.BestPlayers, second, CancellationToken.None);
+        var group = await sut.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.Group, ResultPhoto("group"), CancellationToken.None);
+        var board = await CreateMatchService(context).BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            tooSoon.Failure.Should().Be(OpenPlayRegistrationFailure.SessionNotOver);
+            saved.Value!.Should().ContainSingle(photo => photo.Url == first.SecureUrl);
+            replaced.Value!.Should().ContainSingle().Which.Url.Should().Be(second.SecureUrl);
+            group.Value!.Select(photo => photo.Kind).Should().BeEquivalentTo([OpenPlayResultPhotoKind.BestPlayers, OpenPlayResultPhotoKind.Group]);
+            board.Value!.Photos.Should().HaveCount(2);
+            board.Value.Photos.Should().OnlyContain(photo => photo.ExpiresAt == Now.AddDays(2));
+            (await context.OpenPlaySessionPhotos.SingleAsync(photo => photo.PublicId == first.PublicId))
+                .RetiredAt.Should().NotBeNull();
+        }
+    }
+
+    [Fact]
+    public async Task ResultPhotos_ShouldRefuseALinkOutsideTheResultsFolder()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Foreign Photo Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
+        await CreateMatchService(context).EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var sut = CreateResultPhotoService(context);
+
+        // Act
+        var elsewhere = await sut.SaveAsync(
+            desk, openPlayId, Today, OpenPlayResultPhotoKind.Group,
+            new OpenPlayPhotoInput("icyplay/open-plays/cover", "https://res.cloudinary.com/icyplay-test/image/upload/v1/icyplay/open-plays/cover.jpg"),
+            CancellationToken.None);
+        var offSite = await sut.SaveAsync(
+            desk, openPlayId, Today, OpenPlayResultPhotoKind.Group,
+            new OpenPlayPhotoInput("icyplay/open-play-results/x", "https://example.com/icyplay/open-play-results/x.jpg"),
+            CancellationToken.None);
+        var unknownKind = await sut.SaveAsync(desk, openPlayId, Today, "Mascot", ResultPhoto("mascot"), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            elsewhere.Failure.Should().Be(OpenPlayRegistrationFailure.InvalidResultPhoto);
+            offSite.Failure.Should().Be(OpenPlayRegistrationFailure.InvalidResultPhoto);
+            unknownKind.Failure.Should().Be(OpenPlayRegistrationFailure.InvalidResultPhoto);
+        }
+    }
+
+    [Fact]
+    public async Task ResultPhotoCleanup_ShouldDeleteThePhotosPastTheirTwoDays_AndKeepTheRest()
+    {
+        // Arrange: one photo taken tonight, one removed by the desk.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Photo Cleanup Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
+        await CreateMatchService(context).EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var photos = CreateResultPhotoService(context);
+        var kept = ResultPhoto("kept");
+        var removed = ResultPhoto("removed");
+        await photos.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.Group, kept, CancellationToken.None);
+        await photos.SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.BestPlayers, removed, CancellationToken.None);
+        await photos.RemoveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.BestPlayers, CancellationToken.None);
+        var cloudinary = new RecordingAssetRemover();
+
+        // Act: an hour later, then three days later.
+        var anHourOn = await new OpenPlayResultPhotoCleanup(
+            context, cloudinary, new FixedTimeProvider(Now.AddHours(1)), NullLogger<OpenPlayResultPhotoCleanup>.Instance)
+            .RunAsync(CancellationToken.None);
+        var keptAfterAnHour = await context.OpenPlaySessionPhotos.AnyAsync(photo => photo.PublicId == kept.PublicId);
+        await new OpenPlayResultPhotoCleanup(
+            context, cloudinary, new FixedTimeProvider(Now.AddDays(3)), NullLogger<OpenPlayResultPhotoCleanup>.Instance)
+            .RunAsync(CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            anHourOn.Should().BeGreaterThanOrEqualTo(1);
+            keptAfterAnHour.Should().BeTrue();
+            cloudinary.Destroyed.Should().Contain([removed.PublicId, kept.PublicId]);
+            (await context.OpenPlaySessionPhotos.AnyAsync(photo => photo.PublicId == kept.PublicId || photo.PublicId == removed.PublicId))
+                .Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task ResultPhotoCleanup_ShouldKeepAPhotoCloudinaryWouldNotDelete()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Stubborn Photo Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
+        await CreateMatchService(context).EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var stubborn = ResultPhoto("stubborn");
+        await CreateResultPhotoService(context).SaveAsync(desk, openPlayId, Today, OpenPlayResultPhotoKind.Group, stubborn, CancellationToken.None);
+
+        // Act
+        await new OpenPlayResultPhotoCleanup(
+            context, new RecordingAssetRemover(succeeds: false), new FixedTimeProvider(Now.AddDays(3)), NullLogger<OpenPlayResultPhotoCleanup>.Instance)
+            .RunAsync(CancellationToken.None);
+
+        // Assert: tried again next time.
+        (await context.OpenPlaySessionPhotos.AnyAsync(photo => photo.PublicId == stubborn.PublicId)).Should().BeTrue();
+    }
+
+    [Fact]
     public async Task Matches_PlayerDoneMidGame_ShouldPutTheNextInLineOn_AndBeAbleToComeBack()
     {
         // Arrange: five in, the first four on court, the fifth waiting in Match 2.
@@ -5565,6 +5779,18 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
                 .Select(registration => registration.CustomerUserId)
                 .Single())
             .ToListAsync();
+
+    private static DeskResultPhotoService CreateResultPhotoService(AppDbContext context) => new(
+        context,
+        new AuditLogger(context, new FixedTimeProvider(Now)),
+        Assets(),
+        new FixedTimeProvider(Now));
+
+    /// <summary>A photo as the browser reports it after uploading into the results folder.</summary>
+    private static OpenPlayPhotoInput ResultPhoto(string name) =>
+        new(
+            $"{OpenPlayPhotos.ResultsFolder}/{name}-{Guid.NewGuid():N}",
+            $"https://res.cloudinary.com/icyplay-test/image/upload/v1/{OpenPlayPhotos.ResultsFolder}/{name}.jpg");
 
     private static DeskMatchService CreateMatchService(AppDbContext context) => new(
         context,
@@ -5995,5 +6221,21 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    /// <summary>Cloudinary's delete, kept here: every id it was asked to destroy, and whether it obliges.</summary>
+    private sealed class RecordingAssetRemover(bool succeeds = true) : ICloudinaryAssetRemover
+    {
+        public List<string> Destroyed { get; } = [];
+
+        public Task<bool> DestroyAsync(string publicId, CancellationToken cancellationToken)
+        {
+            if (succeeds)
+            {
+                Destroyed.Add(publicId);
+            }
+
+            return Task.FromResult(succeeds);
+        }
     }
 }

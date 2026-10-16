@@ -482,6 +482,91 @@ public sealed class OpenPlayLineupTests
         }
     }
 
+    [Fact]
+    public void Should_Refuse_To_End_The_Session_When_A_Match_Is_On_Court()
+    {
+        // Arrange
+        var session = NewSession();
+        CheckIn(session, 1, 10);
+        OpenPlayLineup.Start(session, Match(session, 1), Desk, Five, evenIfShort: false, TestTimes.UtcNow);
+
+        // Act
+        var refusal = OpenPlayLineup.EndSession(session, Desk, TestTimes.UtcNow.AddMinutes(5));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            refusal.Should().Be(LineupRefusal.CourtBusy);
+            session.IsEnded.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public void Should_Drop_The_Matches_Never_Started_When_The_Session_Ends()
+    {
+        // Arrange: Match 1 played; Matches 2 and 3 formed but not started.
+        var session = NewSession();
+        CheckIn(session, 1, 15);
+        OpenPlayLineup.Start(session, Match(session, 1), Desk, Five, evenIfShort: false, TestTimes.UtcNow);
+        OpenPlayLineup.Finish(session, Match(session, 1), Desk, Five, OpenPlayMatchResult.TeamA, null, null, TestTimes.UtcNow.AddMinutes(10));
+
+        // Act
+        var refusal = OpenPlayLineup.EndSession(session, Desk, TestTimes.UtcNow.AddMinutes(11));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            refusal.Should().BeNull();
+            session.IsEnded.Should().BeTrue();
+            session.Matches.Select(match => match.Number).Should().Equal(1);
+            Match(session, 1).Result.Should().Be(OpenPlayMatchResult.TeamA);
+            session.Participants.Should().NotContain(participant => participant.Status == OpenPlayParticipantStatus.InMatch);
+        }
+    }
+
+    [Fact]
+    public void Should_Form_The_Next_Matches_Again_When_An_Ended_Session_Is_Reopened()
+    {
+        // Arrange
+        var session = NewSession();
+        CheckIn(session, 1, 10);
+        OpenPlayLineup.EndSession(session, Desk, TestTimes.UtcNow.AddMinutes(1));
+
+        // Act
+        OpenPlayLineup.ReopenSession(session, Five, TestTimes.UtcNow.AddMinutes(2));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            session.IsEnded.Should().BeFalse();
+            Team(session, Match(session, 1), OpenPlayTeam.A).Should().Equal(1, 2, 3, 4, 5);
+            Match(session, 1).Status.Should().Be(OpenPlayMatchStatus.Ready);
+        }
+    }
+
+    [Fact]
+    public void Should_Name_The_Winners_Of_The_Last_Match_Won_When_The_Last_One_Was_A_Draw()
+    {
+        // Arrange: Match 1 won by Team B, Match 2 a draw.
+        var session = NewSession();
+        CheckIn(session, 1, 20);
+        OpenPlayLineup.Start(session, Match(session, 1), Desk, Five, evenIfShort: false, TestTimes.UtcNow);
+        OpenPlayLineup.Finish(session, Match(session, 1), Desk, Five, OpenPlayMatchResult.TeamB, null, null, TestTimes.UtcNow.AddMinutes(10));
+        OpenPlayLineup.Start(session, Match(session, 2), Desk, Five, evenIfShort: false, TestTimes.UtcNow.AddMinutes(11));
+        OpenPlayLineup.Finish(session, Match(session, 2), Desk, Five, OpenPlayMatchResult.Draw, null, null, TestTimes.UtcNow.AddMinutes(20));
+
+        // Act
+        var winners = OpenPlayLineup.WinningTeam(session.Matches);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            winners.Should().NotBeNull();
+            winners!.Value.Match.Number.Should().Be(1);
+            winners.Value.Team.Should().Be(OpenPlayTeam.B);
+        }
+    }
+
     private static OpenPlaySession NewSession() =>
         new(TestIds.For("open-play"), OpenPlayBuilder.FirstSaturday, TestTimes.UtcNow);
 

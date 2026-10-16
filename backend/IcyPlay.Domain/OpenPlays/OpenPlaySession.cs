@@ -50,6 +50,20 @@ public sealed class OpenPlaySession : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// When the desk ended the session, which can be before its time is up:
+    /// the games are over and the results stand.
+    /// </summary>
+    public DateTimeOffset? EndedAt
+    {
+        get; private set;
+    }
+
+    public Guid? EndedByUserId
+    {
+        get; private set;
+    }
+
     public ICollection<OpenPlayRegistration> Registrations { get; private set; } = [];
 
     /// <summary>Players the venue put in for free. See <see cref="OpenPlayFreePlayer"/>.</summary>
@@ -62,6 +76,22 @@ public sealed class OpenPlaySession : Entity
     public ICollection<OpenPlayMatch> Matches { get; private set; } = [];
 
     public bool IsCancelled => CancelledAt is not null;
+
+    public bool IsEnded => EndedAt is not null;
+
+    internal void End(Guid endedByUserId, DateTimeOffset now)
+    {
+        EndedAt = now;
+        EndedByUserId = endedByUserId;
+        UpdatedAt = now;
+    }
+
+    internal void Reopen(DateTimeOffset now)
+    {
+        EndedAt = null;
+        EndedByUserId = null;
+        UpdatedAt = now;
+    }
 
     /// <summary>
     /// Players holding a spot at this moment: paid, waiting on the desk, inside

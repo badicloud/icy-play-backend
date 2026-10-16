@@ -64,6 +64,7 @@ public static class DependencyInjection
         services.Configure<CloudinaryOptions>(
             configuration.GetSection(CloudinaryOptions.SectionName));
         services.AddScoped<ICloudinaryAssetService, CloudinaryAssetService>();
+        services.AddHttpClient<ICloudinaryAssetRemover, CloudinaryAssetRemover>();
         services.Configure<PlatformAdminSeedOptions>(
             configuration.GetSection(PlatformAdminSeedOptions.SectionName));
         services.AddScoped<IPlatformAdminSeeder, PlatformAdminSeeder>();
@@ -85,6 +86,8 @@ public static class DependencyInjection
         services.AddScoped<IOpenPlayNotifier, OpenPlayNotifier>();
         services.AddScoped<IDeskCheckInService, DeskCheckInService>();
         services.AddScoped<IDeskMatchService, DeskMatchService>();
+        services.AddScoped<IDeskResultPhotoService, DeskResultPhotoService>();
+        services.AddScoped<OpenPlayResultPhotoCleanup>();
         services.AddScoped<IHolidayService, HolidayService>();
         services.AddMemoryCache();
         // One signal outlives the requests that clear it.

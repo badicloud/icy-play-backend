@@ -19,8 +19,12 @@ internal sealed record SessionDoor(
     string SportName,
     string TimeZone,
     bool IsOpen,
-    // The session has finished on the venue's clock.
-    bool IsOver)
+    // The session is over: its time is up on the venue's clock, or the desk ended it.
+    bool IsOver,
+    // The desk ended it, whatever the clock says.
+    bool IsEnded,
+    // Its time is up on the venue's clock.
+    bool TimeIsUp)
 {
     /// <summary>Players per team in force: the open play's own, else the sport's.</summary>
     public int TeamSize => OpenPlay.TeamSizeFor(SportKey);
@@ -58,7 +62,9 @@ internal sealed record SessionDoor(
                 openPlay.BookableCourt.DivisionNumber,
                 openPlay.BookableCourt.CourtSport.Divisions,
                 Cancelled = db.OpenPlaySessions.Any(session =>
-                    session.OpenPlayId == openPlay.Id && session.Date == date && session.CancelledAt != null)
+                    session.OpenPlayId == openPlay.Id && session.Date == date && session.CancelledAt != null),
+                Ended = db.OpenPlaySessions.Any(session =>
+                    session.OpenPlayId == openPlay.Id && session.Date == date && session.EndedAt != null)
             })
             .SingleOrDefaultAsync(ct);
 
@@ -68,6 +74,7 @@ internal sealed record SessionDoor(
         }
 
         var venueNow = VenueClock.LocalNowIn(row.TimeZone, timeProvider.GetUtcNow()).DateTime;
+        var timeIsUp = venueNow >= date.ToDateTime(row.OpenPlay.EndsAt);
 
         return new SessionDoor(
             row.OpenPlay,
@@ -78,7 +85,9 @@ internal sealed record SessionDoor(
             row.SportKey,
             row.SportName,
             row.TimeZone,
-            row.OpenPlay.IsCheckInOpen(date, venueNow),
-            venueNow >= date.ToDateTime(row.OpenPlay.EndsAt));
+            row.OpenPlay.IsCheckInOpen(date, venueNow) && !row.Ended,
+            timeIsUp || row.Ended,
+            row.Ended,
+            timeIsUp);
     }
 }

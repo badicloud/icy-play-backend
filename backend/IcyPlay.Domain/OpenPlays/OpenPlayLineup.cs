@@ -194,6 +194,71 @@ public static class OpenPlayLineup
         return null;
     }
 
+    /// <summary>
+    /// The desk ends the session: no more games. The matches never started go;
+    /// the ones played, and their results, stand. Not while a match is on court.
+    /// </summary>
+    public static LineupRefusal? EndSession(OpenPlaySession session, Guid endedByUserId, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (session.IsEnded)
+        {
+            return null;
+        }
+
+        if (session.Matches.Any(match => match.IsPlaying))
+        {
+            return LineupRefusal.CourtBusy;
+        }
+
+        foreach (var match in session.Matches.Where(match => !match.HasStarted).ToList())
+        {
+            foreach (var slot in match.Slots.ToList())
+            {
+                session.Participants.Single(participant => participant.Id == slot.ParticipantId).Unseated(now);
+                match.Unseat(slot, now);
+            }
+
+            session.Matches.Remove(match);
+        }
+
+        session.End(endedByUserId, now);
+
+        return null;
+    }
+
+    /// <summary>Opens an ended session again: the line forms the next matches as before.</summary>
+    public static void ReopenSession(OpenPlaySession session, int teamSize, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        if (!session.IsEnded)
+        {
+            return;
+        }
+
+        session.Reopen(now);
+        Fill(session, teamSize, now);
+    }
+
+    /// <summary>
+    /// The session's winning team: the winners of the last match won, so a
+    /// draw at the end leaves it with the match before. Null until somebody
+    /// has won a match.
+    /// </summary>
+    public static (OpenPlayMatch Match, string Team)? WinningTeam(IEnumerable<OpenPlayMatch> matches)
+    {
+        ArgumentNullException.ThrowIfNull(matches);
+
+        var won = matches
+            .Where(match => match.Status == OpenPlayMatchStatus.Finished
+                && match.Result is OpenPlayMatchResult.TeamA or OpenPlayMatchResult.TeamB)
+            .MaxBy(match => match.Number);
+
+        return won is null ? null : (won, won.Result!);
+    }
+
     /// <summary>The next match to be played: the first not yet started.</summary>
     public static OpenPlayMatch? NextMatch(OpenPlaySession session)
     {

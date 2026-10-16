@@ -67,7 +67,25 @@ public sealed record MatchBoard(
     IReadOnlyList<MatchBoardPlayer> Waiting,
     IReadOnlyList<MatchBoardPlayer> Done,
     // Most wins first. Only matches with a result count.
-    IReadOnlyList<MatchStanding> Standings);
+    IReadOnlyList<MatchStanding> Standings,
+    // When the desk ended the session; null while it runs.
+    DateTimeOffset? EndedAt,
+    // Ended by the desk before its time was up: it can be opened again until then.
+    bool CanReopen,
+    // The winners of the last match won; null until somebody has won one.
+    MatchWinningTeam? WinningTeam,
+    // Everybody who checked in, for the group photo: in the order they arrived.
+    IReadOnlyList<MatchBoardPlayer> Group,
+    // The photos taken of the results, one of each kind at most.
+    IReadOnlyList<MatchResultPhoto> Photos);
+
+/// <summary>A photo of a session's results.</summary>
+/// <param name="Kind">"BestPlayers", "WinningTeam" or "Group".</param>
+/// <param name="ExpiresAt">When it is deleted: two days after it was taken.</param>
+public sealed record MatchResultPhoto(string Kind, string Url, DateTimeOffset TakenAt, DateTimeOffset ExpiresAt);
+
+/// <summary>The session's winning team: the winners of the last match won.</summary>
+public sealed record MatchWinningTeam(int MatchNumber, string Team, IReadOnlyList<MatchBoardPlayer> Players);
 
 /// <summary>
 /// How a match ended: <paramref name="Result"/> is "A", "B" or "Draw". The

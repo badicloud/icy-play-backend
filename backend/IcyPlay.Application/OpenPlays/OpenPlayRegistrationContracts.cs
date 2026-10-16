@@ -131,7 +131,15 @@ public enum OpenPlayRegistrationFailure
     // for somebody further back in the line.
     CannotPlayNextMatch,
     // Move to team: only a player in the next match, to the team they are not on.
-    CannotMoveTeam
+    CannotMoveTeam,
+    // End session: a match is still on court.
+    MatchStillPlaying,
+    // Reopen: only a session the desk ended, before its time is up.
+    CannotReopenSession,
+    // Result photos are taken once the session is over.
+    SessionNotOver,
+    // A result photo: a known kind, and a link in the platform's own results folder.
+    InvalidResultPhoto
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

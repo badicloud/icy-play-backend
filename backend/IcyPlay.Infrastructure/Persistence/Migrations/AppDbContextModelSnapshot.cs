@@ -2753,6 +2753,12 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<DateOnly>("Date")
                         .HasColumnType("date");
 
+                    b.Property<DateTimeOffset?>("EndedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("EndedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<Guid>("OpenPlayId")
                         .HasColumnType("uniqueidentifier");
 
@@ -2765,6 +2771,54 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("OpenPlaySessions", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlaySessionPhoto", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("PublicId")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<DateTimeOffset?>("RetiredAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("SecureUrl")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("TakenByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresAt");
+
+                    b.HasIndex("SessionId", "Kind");
+
+                    b.ToTable("OpenPlaySessionPhotos", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Payments.DeskReadMarker", b =>
@@ -3421,6 +3475,15 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("OpenPlay");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlaySessionPhoto", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Bookings.Booking", b =>

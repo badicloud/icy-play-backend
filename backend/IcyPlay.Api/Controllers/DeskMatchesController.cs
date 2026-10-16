@@ -40,6 +40,30 @@ public sealed class DeskMatchesController(IDeskMatchService matches) : Controlle
         return Answer(await matches.StartAsync(actor, matchId, request, ct));
     }
 
+    /// <summary>Ends the session: no more games, and the results stand.</summary>
+    [HttpPost("api/v1/desk/open-plays/{openPlayId:guid}/sessions/{date}/end")]
+    public async Task<IActionResult> EndSession(Guid openPlayId, DateOnly date, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        return Answer(await matches.EndSessionAsync(actor, openPlayId, date, ct));
+    }
+
+    /// <summary>Opens an ended session again, while its time is not up.</summary>
+    [HttpPost("api/v1/desk/open-plays/{openPlayId:guid}/sessions/{date}/reopen")]
+    public async Task<IActionResult> ReopenSession(Guid openPlayId, DateOnly date, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        return Answer(await matches.ReopenSessionAsync(actor, openPlayId, date, ct));
+    }
+
     /// <summary>The open play's leaderboard over all its sessions so far.</summary>
     [HttpGet("api/v1/desk/open-plays/{openPlayId:guid}/leaderboard")]
     public async Task<IActionResult> Leaderboard(Guid openPlayId, CancellationToken ct)

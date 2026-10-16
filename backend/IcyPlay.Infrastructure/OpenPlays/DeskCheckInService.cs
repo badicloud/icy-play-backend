@@ -107,7 +107,9 @@ public sealed class DeskCheckInService(
         {
             return await Answer(
                 CheckInOutcome.WindowClosed,
-                $"Check-in for this session opens at {door.OpenPlay.CheckInOpensAt(date):h:mm tt} and closes when it ends.",
+                door.IsEnded
+                    ? "This session has been ended, so check-in is closed."
+                    : $"Check-in for this session opens at {door.OpenPlay.CheckInOpensAt(date):h:mm tt} and closes when it ends.",
                 player);
         }
 

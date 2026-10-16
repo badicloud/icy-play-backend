@@ -69,6 +69,23 @@ public interface IDeskMatchService
         MoveToTeamRequest request,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Ends the session: no more games, and the results stand. The matches not
+    /// started go. Not while a match is on court.
+    /// </summary>
+    Task<OpenPlayRegistrationResult<MatchBoard>> EndSessionAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        CancellationToken cancellationToken);
+
+    /// <summary>Opens an ended session again, while its time is not up.</summary>
+    Task<OpenPlayRegistrationResult<MatchBoard>> ReopenSessionAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        DateOnly date,
+        CancellationToken cancellationToken);
+
     /// <summary>A player done for the day comes back, at the end of the line.</summary>
     Task<OpenPlayRegistrationResult<MatchBoard>> BackInAsync(
         AuditActor actor,
