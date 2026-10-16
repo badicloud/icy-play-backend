@@ -2508,6 +2508,16 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<int>("Number")
                         .HasColumnType("int");
 
+                    b.Property<string>("Result")
+                        .HasMaxLength(4)
+                        .HasColumnType("nvarchar(4)");
+
+                    b.Property<int?>("ScoreA")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("ScoreB")
+                        .HasColumnType("int");
+
                     b.Property<Guid>("SessionId")
                         .HasColumnType("uniqueidentifier");
 
@@ -2583,6 +2593,10 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("FreePlayerId")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PinnedTeam")
+                        .HasMaxLength(1)
+                        .HasColumnType("nvarchar(1)");
 
                     b.Property<DateTimeOffset>("QueuedAt")
                         .HasColumnType("datetimeoffset");

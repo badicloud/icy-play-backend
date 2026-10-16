@@ -116,6 +116,92 @@ public static class OpenPlayLineup
         Fill(session, teamSize, now);
     }
 
+    /// <summary>
+    /// "Play next match": a player in the next match goes to the end of the
+    /// line, and the player the desk picks from further back — usually one who
+    /// has had fewer games — takes their seat. Nobody else moves.
+    /// </summary>
+    public static LineupRefusal? PlayNextMatch(
+        OpenPlaySession session,
+        OpenPlayParticipant makingWay,
+        OpenPlayParticipant replacement,
+        int teamSize,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(makingWay);
+        ArgumentNullException.ThrowIfNull(replacement);
+
+        var next = NextMatch(session);
+
+        if (next is null || !next.Seated.Any(slot => slot.ParticipantId == makingWay.Id))
+        {
+            return LineupRefusal.NotInNextMatch;
+        }
+
+        if (!Line(session).Contains(replacement) || next.Seated.Any(slot => slot.ParticipantId == replacement.Id))
+        {
+            return LineupRefusal.ReplacementNotFurtherBack;
+        }
+
+        // The newcomer takes the seat, on whichever team it was moved to.
+        var endOfLine = EndOfLine(session, now);
+        replacement.MoveInLine(makingWay.QueuedAt, now);
+        replacement.PinTo(makingWay.PinnedTeam, now);
+        makingWay.MoveInLine(endOfLine, now);
+        makingWay.PinTo(null, now);
+        Fill(session, teamSize, now);
+
+        return null;
+    }
+
+    /// <summary>
+    /// The desk moves a player in the next match to the other team, to even
+    /// the sides out — heights, skills. Nobody comes back the other way: the
+    /// teams may stand 6 against 4 until the desk moves somebody across too,
+    /// and the match shows short until then.
+    /// </summary>
+    public static LineupRefusal? MoveToTeam(
+        OpenPlaySession session,
+        OpenPlayParticipant player,
+        string team,
+        int teamSize,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(player);
+
+        if (!OpenPlayTeam.Both.Contains(team))
+        {
+            return LineupRefusal.SameTeam;
+        }
+
+        var seat = NextMatch(session)?.Seated.FirstOrDefault(slot => slot.ParticipantId == player.Id);
+
+        if (seat is null)
+        {
+            return LineupRefusal.NotInNextMatch;
+        }
+
+        if (seat.Team == team)
+        {
+            return LineupRefusal.SameTeam;
+        }
+
+        player.PinTo(team, now);
+        Fill(session, teamSize, now);
+
+        return null;
+    }
+
+    /// <summary>The next match to be played: the first not yet started.</summary>
+    public static OpenPlayMatch? NextMatch(OpenPlaySession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+
+        return session.Matches.Where(match => !match.HasStarted).MinBy(match => match.Number);
+    }
+
     /// <summary>Whether this player has been on court in a match that started.</summary>
     public static bool HasPlayed(OpenPlaySession session, OpenPlayParticipant participant) =>
         session.Matches.Any(match =>
@@ -123,8 +209,9 @@ public static class OpenPlayLineup
 
     /// <summary>
     /// Starts a match. The court has to be free and it has to be the next
-    /// match in order. A match short of players starts only when the desk
-    /// says so, and never with an empty team.
+    /// match in order. The teams have to be the same size — never 5 against 4
+    /// — and neither empty. A match short of players, 4 against 4 say, starts
+    /// only when the desk says so.
     /// </summary>
     public static LineupRefusal? Start(
         OpenPlaySession session,
@@ -159,6 +246,11 @@ public static class OpenPlayLineup
             return LineupRefusal.TeamEmpty;
         }
 
+        if (match.SeatedOn(OpenPlayTeam.A) != match.SeatedOn(OpenPlayTeam.B))
+        {
+            return LineupRefusal.Uneven;
+        }
+
         if (!match.IsFull(teamSize) && !evenIfShort)
         {
             return LineupRefusal.Short;
@@ -170,14 +262,18 @@ public static class OpenPlayLineup
     }
 
     /// <summary>
-    /// Ends a match. Its players go to the back of the line in the order they
-    /// sat — Team A's first — and the line fills what comes next.
+    /// Ends a match with who won — Team A, Team B or a draw — and, if the desk
+    /// gives one, the score. Its players go to the back of the line in the
+    /// order they sat, Team A's first, and the line fills what comes next.
     /// </summary>
     public static LineupRefusal? Finish(
         OpenPlaySession session,
         OpenPlayMatch match,
         Guid finishedByUserId,
         int teamSize,
+        string result,
+        int? scoreA,
+        int? scoreB,
         DateTimeOffset now)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -188,7 +284,12 @@ public static class OpenPlayLineup
             return LineupRefusal.NotPlaying;
         }
 
-        match.Finish(finishedByUserId, now);
+        if (!OpenPlayMatchResult.Holds(result, scoreA, scoreB))
+        {
+            return LineupRefusal.ResultDoesNotHold;
+        }
+
+        match.Finish(finishedByUserId, result, scoreA, scoreB, now);
 
         var offCourt = match.Seated
             .OrderBy(slot => slot.Team)
@@ -205,6 +306,34 @@ public static class OpenPlayLineup
         }
 
         Fill(session, teamSize, now);
+
+        return null;
+    }
+
+    /// <summary>
+    /// Puts a finished match's result right, when the desk pressed the wrong
+    /// team. Nothing else moves: its players are already back in line.
+    /// </summary>
+    public static LineupRefusal? CorrectResult(
+        OpenPlayMatch match,
+        string result,
+        int? scoreA,
+        int? scoreB,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(match);
+
+        if (match.Status != OpenPlayMatchStatus.Finished)
+        {
+            return LineupRefusal.NotFinished;
+        }
+
+        if (!OpenPlayMatchResult.Holds(result, scoreA, scoreB))
+        {
+            return LineupRefusal.ResultDoesNotHold;
+        }
+
+        match.Record(result, scoreA, scoreB, now);
 
         return null;
     }
@@ -289,14 +418,19 @@ public static class OpenPlayLineup
         return last is DateTimeOffset latest && latest >= now ? latest.AddTicks(1) : now;
     }
 
+    /// <summary>
+    /// The next two teams' worth from the line into a match: the first half to
+    /// Team A, the rest to Team B — save for anybody the desk moved across.
+    /// </summary>
     private static void SeatFrom(Queue<OpenPlayParticipant> line, OpenPlayMatch match, int teamSize, DateTimeOffset now)
     {
-        foreach (var team in OpenPlayTeam.Both)
+        var positions = OpenPlayTeam.Both.ToDictionary(team => team, _ => 0);
+
+        for (var index = 0; index < teamSize * 2 && line.Count > 0; index++)
         {
-            for (var position = 1; position <= teamSize && line.Count > 0; position++)
-            {
-                match.Seat(line.Dequeue(), team, position, now);
-            }
+            var player = line.Dequeue();
+            var team = player.PinnedTeam ?? (index < teamSize ? OpenPlayTeam.A : OpenPlayTeam.B);
+            match.Seat(player, team, ++positions[team], now);
         }
 
         match.Settle(teamSize, now);
@@ -354,5 +488,11 @@ public enum LineupRefusal
     NotNext,
     TeamEmpty,
     Short,
-    NotPlaying
+    NotPlaying,
+    NotFinished,
+    ResultDoesNotHold,
+    NotInNextMatch,
+    ReplacementNotFurtherBack,
+    SameTeam,
+    Uneven
 }

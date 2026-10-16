@@ -1183,6 +1183,7 @@ public sealed class AppDbContext : DbContext
             // session's collections: told it is new, not one to update.
             entity.Property(x => x.Id).ValueGeneratedNever();
             entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.PinnedTeam).HasMaxLength(1);
             entity.Ignore(x => x.IsWaiting);
             entity.Ignore(x => x.IsDone);
             // Dropped from the session when the line moves: deleted by EF,
@@ -1208,6 +1209,7 @@ public sealed class AppDbContext : DbContext
             // session's collections: told it is new, not one to update.
             entity.Property(x => x.Id).ValueGeneratedNever();
             entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.Result).HasMaxLength(4);
             entity.Ignore(x => x.HasStarted);
             entity.Ignore(x => x.IsPlaying);
             entity.Ignore(x => x.Seated);

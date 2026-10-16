@@ -119,8 +119,19 @@ public enum OpenPlayRegistrationFailure
     TeamEmpty,
     // Short of players: the desk has to say to start anyway.
     MatchShort,
+    // One team has more players than the other: never started like that.
+    TeamsUneven,
     // Only the match on court can be finished.
-    MatchNotPlaying
+    MatchNotPlaying,
+    // Who won is Team A, Team B or a draw, and a score has to agree with it.
+    InvalidMatchResult,
+    // A result can be put right only once the match has finished.
+    MatchNotFinished,
+    // Play next match: only a player in the next match can make way, and only
+    // for somebody further back in the line.
+    CannotPlayNextMatch,
+    // Move to team: only a player in the next match, to the team they are not on.
+    CannotMoveTeam
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)

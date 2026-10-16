@@ -40,15 +40,44 @@ public sealed class DeskMatchesController(IDeskMatchService matches) : Controlle
         return Answer(await matches.StartAsync(actor, matchId, request, ct));
     }
 
+    /// <summary>The open play's leaderboard over all its sessions so far.</summary>
+    [HttpGet("api/v1/desk/open-plays/{openPlayId:guid}/leaderboard")]
+    public async Task<IActionResult> Leaderboard(Guid openPlayId, CancellationToken ct)
+    {
+        if (CurrentUserId() is not Guid userId)
+        {
+            return Unauthorized();
+        }
+
+        var result = await matches.SeriesLeaderboardAsync(userId, openPlayId, ct);
+
+        return result.Succeeded
+            ? Ok(new ApiEnvelope<SeriesLeaderboard>(result.Value!))
+            : OpenPlayRegistrationErrors.Failure(result);
+    }
+
+    /// <summary>Ends the match on court with who won: <c>A</c>, <c>B</c> or <c>Draw</c>, and an optional score.</summary>
     [HttpPost("api/v1/desk/open-play-matches/{matchId:guid}/finish")]
-    public async Task<IActionResult> Finish(Guid matchId, CancellationToken ct)
+    public async Task<IActionResult> Finish(Guid matchId, MatchResultRequest request, CancellationToken ct)
     {
         if (CurrentActor() is not AuditActor actor)
         {
             return Unauthorized();
         }
 
-        return Answer(await matches.FinishAsync(actor, matchId, ct));
+        return Answer(await matches.FinishAsync(actor, matchId, request, ct));
+    }
+
+    /// <summary>Puts a finished match's result right.</summary>
+    [HttpPut("api/v1/desk/open-play-matches/{matchId:guid}/result")]
+    public async Task<IActionResult> CorrectResult(Guid matchId, MatchResultRequest request, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        return Answer(await matches.CorrectResultAsync(actor, matchId, request, ct));
     }
 
     /// <summary>A player is done for the day. The line adjusts around them.</summary>
@@ -61,6 +90,30 @@ public sealed class DeskMatchesController(IDeskMatchService matches) : Controlle
         }
 
         return Answer(await matches.DoneAsync(actor, participantId, ct));
+    }
+
+    /// <summary>"Play next match": to the end of the line, the desk's pick from further back taking the seat.</summary>
+    [HttpPost("api/v1/desk/open-play-participants/{participantId:guid}/play-next-match")]
+    public async Task<IActionResult> PlayNextMatch(Guid participantId, PlayNextMatchRequest request, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        return Answer(await matches.PlayNextMatchAsync(actor, participantId, request, ct));
+    }
+
+    /// <summary>Moves a player in the next match to the other team: <c>A</c> or <c>B</c>.</summary>
+    [HttpPost("api/v1/desk/open-play-participants/{participantId:guid}/move-to-team")]
+    public async Task<IActionResult> MoveToTeam(Guid participantId, MoveToTeamRequest request, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        return Answer(await matches.MoveToTeamAsync(actor, participantId, request, ct));
     }
 
     [HttpPost("api/v1/desk/open-play-participants/{participantId:guid}/back-in")]

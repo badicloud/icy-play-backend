@@ -59,6 +59,16 @@ public sealed class OpenPlayParticipant : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// The team the desk moved them to in the next match, to even the sides
+    /// out; null for the team their place in line gives them. Forgotten once
+    /// they have played, are done, or go to the end of the line.
+    /// </summary>
+    public string? PinnedTeam
+    {
+        get; private set;
+    }
+
     public bool IsWaiting => Status == OpenPlayParticipantStatus.Waiting;
 
     public bool IsDone => Status == OpenPlayParticipantStatus.Done;
@@ -82,6 +92,21 @@ public sealed class OpenPlayParticipant : Entity
         Status = OpenPlayParticipantStatus.Waiting;
         QueuedAt = queuedAt;
         DoneAt = null;
+        PinnedTeam = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>Onto a team in their next match, or back to the one their place gives them with null.</summary>
+    internal void PinTo(string? team, DateTimeOffset now)
+    {
+        PinnedTeam = team;
+        UpdatedAt = now;
+    }
+
+    /// <summary>To another place in the line, staying as they are otherwise.</summary>
+    internal void MoveInLine(DateTimeOffset queuedAt, DateTimeOffset now)
+    {
+        QueuedAt = queuedAt;
         UpdatedAt = now;
     }
 
@@ -89,6 +114,7 @@ public sealed class OpenPlayParticipant : Entity
     {
         Status = OpenPlayParticipantStatus.Done;
         DoneAt = now;
+        PinnedTeam = null;
         UpdatedAt = now;
     }
 }

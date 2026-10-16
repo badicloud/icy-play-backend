@@ -4978,7 +4978,7 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
 
         // Act
         var started = await sut.StartAsync(desk, first.MatchId, new StartMatchRequest(false), CancellationToken.None);
-        var finished = await sut.FinishAsync(desk, first.MatchId, CancellationToken.None);
+        var finished = await sut.FinishAsync(desk, first.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
 
         // Assert
         using (new AssertionScope())
@@ -4989,9 +4989,221 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             finished.Value.Matches[1].Status.Should().Be(OpenPlayMatchStatus.Ready);
             finished.Value.Matches[1].TeamA.Select(seat => seat!.ParticipantId)
                 .Should().Equal(first.TeamA.Select(seat => seat!.ParticipantId));
+            finished.Value.Matches[1].TeamA.Should().OnlyContain(seat => seat!.Played == 1);
+            started.Value.Matches[0].TeamA.Should().OnlyContain(seat => seat!.Played == 0);
             (await context.AuditLogs.CountAsync(entry => entry.EntityId == openPlayId
                 && (entry.Action == AuditAction.OpenPlayMatchStarted || entry.Action == AuditAction.OpenPlayMatchFinished)))
                 .Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task Matches_FinishedWithAWinner_ShouldPutTheWinnersTopOfTheLeaderboard()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Winner Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+
+        // Act
+        var finished = await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamB, 7, 11), CancellationToken.None);
+
+        // Assert
+        var board = finished.Value!;
+        var teamB = match.TeamB.Select(seat => seat!.ParticipantId).ToList();
+
+        using (new AssertionScope())
+        {
+            board.Matches[0].Result.Should().Be(OpenPlayMatchResult.TeamB);
+            board.Matches[0].ScoreA.Should().Be(7);
+            board.Matches[0].ScoreB.Should().Be(11);
+            board.Standings.Should().HaveCount(4);
+            board.Standings.Take(2).Select(standing => standing.Player.ParticipantId).Should().BeEquivalentTo(teamB);
+            board.Standings.Take(2).Should().OnlyContain(standing => standing.Rank == 1 && standing.Won == 1 && standing.IsBest);
+            board.Standings.Skip(2).Should().OnlyContain(standing => standing.Rank == 3 && standing.Lost == 1 && !standing.IsBest);
+            (await context.AuditLogs.AnyAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlayMatchFinished
+                && entry.Reason == "Match finished: Team B won 7–11.")).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Matches_FinishedWithAScoreThatDisagrees_ShouldBeRefusedAndStayOnCourt()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Score Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+
+        // Act: Team A "won" on a score that says Team B did.
+        var refused = await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, 7, 11), CancellationToken.None);
+        var board = await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            refused.Failure.Should().Be(OpenPlayRegistrationFailure.InvalidMatchResult);
+            board.Value!.Matches[0].Status.Should().Be(OpenPlayMatchStatus.Playing);
+            board.Value.Standings.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task Matches_ResultPutRight_ShouldMoveTheWinsToTheOtherTeam()
+    {
+        // Arrange: Team A pressed by mistake.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Correct Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+
+        // Act
+        var corrected = await sut.CorrectResultAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamB, null, null), CancellationToken.None);
+        var stillToPlay = await sut.CorrectResultAsync(desk, corrected.Value!.Matches[1].MatchId, new MatchResultRequest(OpenPlayMatchResult.Draw, null, null), CancellationToken.None);
+
+        // Assert
+        var teamB = match.TeamB.Select(seat => seat!.ParticipantId).ToList();
+
+        using (new AssertionScope())
+        {
+            corrected.Value.Matches[0].Result.Should().Be(OpenPlayMatchResult.TeamB);
+            corrected.Value.Standings.Where(standing => standing.IsBest).Select(standing => standing.Player.ParticipantId)
+                .Should().BeEquivalentTo(teamB);
+            stillToPlay.Failure.Should().Be(OpenPlayRegistrationFailure.MatchNotFinished);
+            (await context.AuditLogs.AnyAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlayMatchResultChanged
+                && entry.Reason == "Result changed from Team A won to Team B won.")).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task SeriesLeaderboard_ShouldCountRegisteredPlayers_AndLeaveFreePlayersOut()
+    {
+        // Arrange: a free player and three registered, one match, Team A wins.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Series Board Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetFreeSpotsAsync(desk, openPlayId, new OpenPlayFreeSpotsInput(1), CancellationToken.None);
+        await CreateCheckInService(context).AddFreePlayerAsync(
+            desk, openPlayId, Today, new AddFreePlayerRequest("Coach Ramon", null), CancellationToken.None);
+        var players = await ScannedInAsync(context, floor, openPlayId, desk, 3);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        var session = await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, 11, 4), CancellationToken.None);
+
+        // Act
+        var series = await sut.SeriesLeaderboardAsync(desk.UserId!.Value, openPlayId, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            session.Value!.Standings.Should().HaveCount(4);
+            session.Value.Standings.Should().Contain(standing => standing.Player.IsFree && standing.Won == 1);
+            series.Value!.Sessions.Should().Be(1);
+            series.Value.Standings.Should().HaveCount(3);
+            series.Value.Standings.Select(standing => standing.FullName).Should().NotContain("Coach Ramon");
+            series.Value.Standings[0].FullName.Should().Be(players[0].FullName);
+            series.Value.Standings[0].Rank.Should().Be(1);
+            series.Value.Standings[0].Won.Should().Be(1);
+            series.Value.Standings.Skip(1).Should().OnlyContain(standing => standing.Rank == 2 && standing.Lost == 1);
+        }
+    }
+
+    [Fact]
+    public async Task SeriesLeaderboard_FromAnotherVenuesDesk_ShouldNotBeFound()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (_, openPlayId) = await TonightsOpenPlayAsync(context, "Series Own Courts");
+        var (otherFloor, _) = await TonightsOpenPlayAsync(context, "Series Other Courts");
+        var otherDesk = await OwnerActorAsync(context, otherFloor);
+
+        // Act
+        var series = await CreateMatchService(context).SeriesLeaderboardAsync(otherDesk.UserId!.Value, openPlayId, CancellationToken.None);
+
+        // Assert
+        series.Failure.Should().Be(OpenPlayRegistrationFailure.NotFound);
+    }
+
+    [Fact]
+    public async Task Matches_PlayNextMatch_ShouldSeatThePickAndSendThePlayerToTheEnd()
+    {
+        // Arrange: four play Match 1 while three more arrive. After it, Match 2
+        // is two of the three v the third and a player from Match 1; Match 3 is
+        // the other three from Match 1. Then an eighth arrives, at its back.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Play Next Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var first = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, first.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 3);
+        await sut.FinishAsync(desk, first.MatchId, new MatchResultRequest(OpenPlayMatchResult.Draw, null, null), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 1);
+        var board = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!;
+        var arrivedDuring = board.Matches[1].TeamB[0]!.ParticipantId;
+        var makingWay = board.Matches[1].TeamB[1]!.ParticipantId;
+        var eighth = board.Matches[2].TeamB[1]!.ParticipantId;
+
+        // Act
+        var moved = await sut.PlayNextMatchAsync(desk, makingWay, new PlayNextMatchRequest(eighth), CancellationToken.None);
+        var notInNext = await sut.PlayNextMatchAsync(desk, makingWay, new PlayNextMatchRequest(eighth), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            board.Matches[2].TeamB[1]!.Played.Should().Be(0);
+            moved.Value!.Matches[1].TeamB.Select(seat => seat!.ParticipantId).Should().Equal(arrivedDuring, eighth);
+            moved.Value.Matches[2].TeamB[^1]!.ParticipantId.Should().Be(makingWay);
+            notInNext.Failure.Should().Be(OpenPlayRegistrationFailure.CannotPlayNextMatch);
+            (await context.AuditLogs.AnyAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlayPlayerPlaysNextMatch)).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Matches_MoveToTeam_ShouldKeepThePlayerOnTheTeamTheDeskChose()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Move Team Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        var fromA = match.TeamA[0]!.ParticipantId;
+        var fromB = match.TeamB[1]!.ParticipantId;
+
+        // Act
+        var uneven = await sut.MoveToTeamAsync(desk, fromA, new MoveToTeamRequest(OpenPlayTeam.B), CancellationToken.None);
+        var even = await sut.MoveToTeamAsync(desk, fromB, new MoveToTeamRequest(OpenPlayTeam.A), CancellationToken.None);
+        var again = await sut.MoveToTeamAsync(desk, fromB, new MoveToTeamRequest(OpenPlayTeam.A), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            uneven.Value!.Matches[0].Status.Should().Be(OpenPlayMatchStatus.Forming);
+            uneven.Value.Matches[0].TeamB.Where(seat => seat != null).Should().HaveCount(3);
+            even.Value!.Matches[0].Status.Should().Be(OpenPlayMatchStatus.Ready);
+            even.Value.Matches[0].TeamA.Select(seat => seat!.ParticipantId).Should().BeEquivalentTo([match.TeamA[1]!.ParticipantId, fromB]);
+            even.Value.Matches[0].TeamB.Select(seat => seat!.ParticipantId).Should().BeEquivalentTo([fromA, match.TeamB[0]!.ParticipantId]);
+            again.Failure.Should().Be(OpenPlayRegistrationFailure.CannotMoveTeam);
+            (await context.AuditLogs.CountAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlayPlayerMovedTeam)).Should().Be(2);
         }
     }
 
@@ -5027,13 +5239,14 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     [Fact]
     public async Task Matches_ShortOfPlayers_ShouldStartOnlyWhenTheDeskSaysSo()
     {
-        // Arrange: three in, one short of two pairs.
+        // Arrange: two in, moved to one a side.
         await using var context = database.CreateContext();
         var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Short Courts");
         var desk = await OwnerActorAsync(context, floor);
-        await ScannedInAsync(context, floor, openPlayId, desk, 3);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
         var sut = CreateMatchService(context);
         var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.MoveToTeamAsync(desk, match.TeamA[1]!.ParticipantId, new MoveToTeamRequest(OpenPlayTeam.B), CancellationToken.None);
 
         // Act
         var refused = await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
@@ -5045,6 +5258,24 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             refused.Failure.Should().Be(OpenPlayRegistrationFailure.MatchShort);
             anyway.Value!.Matches[0].Status.Should().Be(OpenPlayMatchStatus.Playing);
         }
+    }
+
+    [Fact]
+    public async Task Matches_UnevenTeams_ShouldNotStartEvenWhenTheDeskSaysSo()
+    {
+        // Arrange: three in, two against one.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Uneven Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await ScannedInAsync(context, floor, openPlayId, desk, 3);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+
+        // Act
+        var anyway = await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(true), CancellationToken.None);
+
+        // Assert
+        anyway.Failure.Should().Be(OpenPlayRegistrationFailure.TeamsUneven);
     }
 
     [Fact]

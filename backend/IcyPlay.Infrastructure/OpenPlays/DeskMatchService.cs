@@ -79,9 +79,11 @@ public sealed class DeskMatchService(
     public async Task<OpenPlayRegistrationResult<MatchBoard>> FinishAsync(
         AuditActor actor,
         Guid matchId,
+        MatchResultRequest request,
         CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(request);
 
         var (sessionId, door) = await MatchAtDoorAsync(actor, matchId, ct);
 
@@ -96,11 +98,14 @@ public sealed class DeskMatchService(
             session =>
             {
                 var match = session.Matches.Single(candidate => candidate.Id == matchId);
-                var refused = OpenPlayLineup.Finish(session, match, actor.UserId!.Value, door.TeamSize, timeProvider.GetUtcNow());
+                var refused = OpenPlayLineup.Finish(
+                    session, match, actor.UserId!.Value, door.TeamSize,
+                    request.Result, request.ScoreA, request.ScoreB, timeProvider.GetUtcNow());
 
                 if (refused is null)
                 {
-                    Record(actor, AuditAction.OpenPlayMatchFinished, door, match.Number, null, "Match finished.");
+                    Record(actor, AuditAction.OpenPlayMatchFinished, door, match.Number, null,
+                        "Match finished: " + Outcome(request) + ".");
                 }
 
                 return refused;
@@ -110,6 +115,137 @@ public sealed class DeskMatchService(
         return refusal is LineupRefusal refused
             ? Fail(Failure(refused))
             : OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<MatchBoard>> CorrectResultAsync(
+        AuditActor actor,
+        Guid matchId,
+        MatchResultRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (sessionId, door) = await MatchAtDoorAsync(actor, matchId, ct);
+
+        if (door is null)
+        {
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        var refusal = await SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session =>
+            {
+                var match = session.Matches.Single(candidate => candidate.Id == matchId);
+                var was = match.Result is null
+                    ? "no result"
+                    : Outcome(new MatchResultRequest(match.Result, match.ScoreA, match.ScoreB));
+                var refused = OpenPlayLineup.CorrectResult(
+                    match, request.Result, request.ScoreA, request.ScoreB, timeProvider.GetUtcNow());
+
+                if (refused is null)
+                {
+                    Record(actor, AuditAction.OpenPlayMatchResultChanged, door, match.Number, null,
+                        "Result changed from " + was + " to " + Outcome(request) + ".");
+                }
+
+                return refused;
+            },
+            ct);
+
+        return refusal is LineupRefusal refused
+            ? Fail(Failure(refused))
+            : OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<SeriesLeaderboard>> SeriesLeaderboardAsync(
+        Guid userId,
+        Guid openPlayId,
+        CancellationToken ct)
+    {
+        var venueIds = db.Facilities
+            .Where(facility => facility.FacilityOwner.UserId == userId
+                || facility.Attendants.Any(attendant => attendant.UserId == userId && attendant.IsActive))
+            .Select(facility => facility.Id);
+
+        var openPlay = await db.OpenPlays
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == openPlayId && venueIds.Contains(candidate.FacilityId))
+            .Select(candidate => new
+            {
+                candidate.Title,
+                SportName = candidate.BookableCourt.CourtSport.Sport.Name
+            })
+            .SingleOrDefaultAsync(ct);
+
+        if (openPlay is null)
+        {
+            return OpenPlayRegistrationResult<SeriesLeaderboard>.Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        var sessionIds = db.OpenPlaySessions
+            .Where(session => session.OpenPlayId == openPlayId)
+            .Select(session => session.Id);
+
+        var matches = await db.OpenPlayMatches
+            .AsNoTracking()
+            .Include(match => match.Slots)
+            .Where(match => sessionIds.Contains(match.SessionId)
+                && match.Status == OpenPlayMatchStatus.Finished
+                && match.Result != null)
+            .ToListAsync(ct);
+
+        // Registered players only, by their account: the same person from one
+        // session to the next. Free players are left out.
+        var players = await db.OpenPlayParticipants
+            .AsNoTracking()
+            .Where(participant => sessionIds.Contains(participant.SessionId) && participant.RegistrationId != null)
+            .Join(db.OpenPlayRegistrations, participant => participant.RegistrationId, registration => registration.Id,
+                (participant, registration) => new
+                {
+                    participant.Id,
+                    participant.SessionId,
+                    registration.CustomerUserId,
+                    Name = db.Users.Where(user => user.Id == registration.CustomerUserId).Select(user => user.FullName).FirstOrDefault()
+                })
+            .ToDictionaryAsync(row => row.Id, ct);
+
+        var standings = OpenPlayStandings.Tally(matches)
+            .Where(standing => players.ContainsKey(standing.ParticipantId))
+            .GroupBy(standing => players[standing.ParticipantId].CustomerUserId)
+            .Select(person => new
+            {
+                Name = person.Select(standing => players[standing.ParticipantId].Name).FirstOrDefault(name => name is not null),
+                Sessions = person.Select(standing => players[standing.ParticipantId].SessionId).Distinct().Count(),
+                Played = person.Sum(standing => standing.Played),
+                Won = person.Sum(standing => standing.Won),
+                Drawn = person.Sum(standing => standing.Drawn),
+                Lost = person.Sum(standing => standing.Lost)
+            })
+            .OrderByDescending(person => person.Won)
+            .ThenBy(person => person.Lost)
+            .ThenByDescending(person => person.Drawn)
+            .ThenBy(person => person.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var wins = standings.Select(person => person.Won).ToList();
+
+        return OpenPlayRegistrationResult<SeriesLeaderboard>.Success(new SeriesLeaderboard(
+            openPlayId,
+            openPlay.Title,
+            openPlay.SportName,
+            matches.Select(match => match.SessionId).Distinct().Count(),
+            [.. standings.Select(person => new SeriesStanding(
+                person.Name ?? "A player",
+                DeskCheckInService.ShortName(person.Name),
+                OpenPlayStandings.RankOf(wins, person.Won),
+                person.Sessions,
+                person.Played,
+                person.Won,
+                person.Drawn,
+                person.Lost))]));
     }
 
     public async Task<OpenPlayRegistrationResult<MatchBoard>> DoneAsync(
@@ -146,6 +282,111 @@ public sealed class DeskMatchService(
             ct);
 
         return OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<MatchBoard>> PlayNextMatchAsync(
+        AuditActor actor,
+        Guid participantId,
+        PlayNextMatchRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (sessionId, door) = await ParticipantAtDoorAsync(actor, participantId, ct);
+
+        if (door is null)
+        {
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (door.IsOver)
+        {
+            return Fail(OpenPlayRegistrationFailure.SessionOver);
+        }
+
+        var replacementSession = await db.OpenPlayParticipants
+            .Where(participant => participant.Id == request.ReplacementParticipantId)
+            .Select(participant => (Guid?)participant.SessionId)
+            .SingleOrDefaultAsync(ct);
+
+        if (replacementSession != sessionId)
+        {
+            return Fail(OpenPlayRegistrationFailure.CannotPlayNextMatch);
+        }
+
+        var makingWay = await NameOfAsync(participantId, ct);
+        var replacement = await NameOfAsync(request.ReplacementParticipantId, ct);
+
+        var refusal = await SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session =>
+            {
+                var participant = session.Participants.Single(candidate => candidate.Id == participantId);
+                var taking = session.Participants.Single(candidate => candidate.Id == request.ReplacementParticipantId);
+                var matchNumber = OpenPlayLineup.NextMatch(session)?.Number;
+                var refused = OpenPlayLineup.PlayNextMatch(session, participant, taking, door.TeamSize, timeProvider.GetUtcNow());
+
+                if (refused is null)
+                {
+                    Record(actor, AuditAction.OpenPlayPlayerPlaysNextMatch, door, matchNumber, makingWay,
+                        $"To the end of the line; {replacement} took their seat.");
+                }
+
+                return refused;
+            },
+            ct);
+
+        return refusal is LineupRefusal refused
+            ? Fail(Failure(refused))
+            : OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
+    }
+
+    public async Task<OpenPlayRegistrationResult<MatchBoard>> MoveToTeamAsync(
+        AuditActor actor,
+        Guid participantId,
+        MoveToTeamRequest request,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var (sessionId, door) = await ParticipantAtDoorAsync(actor, participantId, ct);
+
+        if (door is null)
+        {
+            return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        if (door.IsOver)
+        {
+            return Fail(OpenPlayRegistrationFailure.SessionOver);
+        }
+
+        var name = await NameOfAsync(participantId, ct);
+
+        var refusal = await SessionLineups.ApplyAsync(
+            db,
+            sessionId,
+            session =>
+            {
+                var player = session.Participants.Single(candidate => candidate.Id == participantId);
+                var matchNumber = OpenPlayLineup.NextMatch(session)?.Number;
+                var refused = OpenPlayLineup.MoveToTeam(session, player, request.Team, door.TeamSize, timeProvider.GetUtcNow());
+
+                if (refused is null)
+                {
+                    Record(actor, AuditAction.OpenPlayPlayerMovedTeam, door, matchNumber, name, $"Moved to Team {request.Team}.");
+                }
+
+                return refused;
+            },
+            ct);
+
+        return refusal is LineupRefusal refused
+            ? Fail(Failure(refused))
+            : OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(door, ct));
     }
 
     public async Task<OpenPlayRegistrationResult<MatchBoard>> BackInAsync(
@@ -211,7 +452,15 @@ public sealed class DeskMatchService(
                 .ToListAsync(ct)
             : [];
 
-        var players = await PlayersAsync(participants, ct);
+        var played = matches
+            .Where(match => match.Status == OpenPlayMatchStatus.Finished)
+            .SelectMany(match => match.Slots.Select(slot => slot.ParticipantId).Distinct())
+            .GroupBy(participantId => participantId)
+            .ToDictionary(games => games.Key, games => games.Count());
+
+        var players = (await PlayersAsync(participants, ct)).ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value with { Played = played.GetValueOrDefault(pair.Key) });
 
         MatchBoardPlayer? At(OpenPlayMatch match, string team, int position)
         {
@@ -244,6 +493,10 @@ public sealed class DeskMatchService(
             .Select(participant => players[participant.Id])
             .ToList();
 
+        var tally = OpenPlayStandings.Tally(matches);
+        var best = OpenPlayStandings.Best(tally).Select(standing => standing.ParticipantId).ToHashSet();
+        var wins = tally.Select(standing => standing.Won).ToList();
+
         return new MatchBoard(
             door.OpenPlay.Id,
             door.OpenPlay.Title,
@@ -265,9 +518,20 @@ public sealed class DeskMatchService(
                 match.StartedAt,
                 match.FinishedAt,
                 Team(match, OpenPlayTeam.A),
-                Team(match, OpenPlayTeam.B)))],
+                Team(match, OpenPlayTeam.B),
+                match.Result,
+                match.ScoreA,
+                match.ScoreB))],
             waiting,
-            done);
+            done,
+            [.. tally.Select(standing => new MatchStanding(
+                players[standing.ParticipantId],
+                OpenPlayStandings.RankOf(wins, standing.Won),
+                standing.Played,
+                standing.Won,
+                standing.Drawn,
+                standing.Lost,
+                best.Contains(standing.ParticipantId)))]);
     }
 
     /// <summary>Everyone in the line by name: registered players from their account, free ones as the desk typed them.</summary>
@@ -358,8 +622,28 @@ public sealed class DeskMatchService(
         LineupRefusal.NotNext => OpenPlayRegistrationFailure.NotNextMatch,
         LineupRefusal.TeamEmpty => OpenPlayRegistrationFailure.TeamEmpty,
         LineupRefusal.Short => OpenPlayRegistrationFailure.MatchShort,
+        LineupRefusal.Uneven => OpenPlayRegistrationFailure.TeamsUneven,
+        LineupRefusal.ResultDoesNotHold => OpenPlayRegistrationFailure.InvalidMatchResult,
+        LineupRefusal.NotFinished => OpenPlayRegistrationFailure.MatchNotFinished,
+        LineupRefusal.NotInNextMatch or LineupRefusal.ReplacementNotFurtherBack => OpenPlayRegistrationFailure.CannotPlayNextMatch,
+        LineupRefusal.SameTeam => OpenPlayRegistrationFailure.CannotMoveTeam,
         _ => OpenPlayRegistrationFailure.MatchNotPlaying
     };
+
+    /// <summary>"Team A won 21–17", "a draw": for the activity log.</summary>
+    private static string Outcome(MatchResultRequest request)
+    {
+        var who = request.Result switch
+        {
+            OpenPlayMatchResult.TeamA => "Team A won",
+            OpenPlayMatchResult.TeamB => "Team B won",
+            _ => "a draw"
+        };
+
+        return request.ScoreA is int a && request.ScoreB is int b
+            ? string.Create(CultureInfo.InvariantCulture, $"{who} {a}–{b}")
+            : who;
+    }
 
     /// <summary>Against the open play, so it shows in the owner's activity.</summary>
     private void Record(AuditActor actor, string action, SessionDoor door, int? matchNumber, string? player, string reason) =>

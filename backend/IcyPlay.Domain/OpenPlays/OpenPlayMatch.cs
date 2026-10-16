@@ -55,6 +55,23 @@ public sealed class OpenPlayMatch : Entity
         get; private set;
     }
 
+    /// <summary>Who won: one of <see cref="OpenPlayMatchResult"/>. Set when it finishes.</summary>
+    public string? Result
+    {
+        get; private set;
+    }
+
+    /// <summary>The score, when the desk gave one. Both or neither.</summary>
+    public int? ScoreA
+    {
+        get; private set;
+    }
+
+    public int? ScoreB
+    {
+        get; private set;
+    }
+
     /// <summary>
     /// Every seat ever taken, including those left mid-game — so a finished
     /// match still says who played. The ones still on court have no
@@ -115,11 +132,20 @@ public sealed class OpenPlayMatch : Entity
         UpdatedAt = now;
     }
 
-    internal void Finish(Guid finishedByUserId, DateTimeOffset now)
+    internal void Finish(Guid finishedByUserId, string result, int? scoreA, int? scoreB, DateTimeOffset now)
     {
         Status = OpenPlayMatchStatus.Finished;
         FinishedAt = now;
         FinishedByUserId = finishedByUserId;
+        Record(result, scoreA, scoreB, now);
+    }
+
+    /// <summary>Puts a mistaken result right, after the match.</summary>
+    internal void Record(string result, int? scoreA, int? scoreB, DateTimeOffset now)
+    {
+        Result = result;
+        ScoreA = scoreA;
+        ScoreB = scoreB;
         UpdatedAt = now;
     }
 }
@@ -183,6 +209,50 @@ public static class OpenPlayMatchStatus
 
     public const string Playing = "Playing";
     public const string Finished = "Finished";
+}
+
+/// <summary>How a match ended.</summary>
+public static class OpenPlayMatchResult
+{
+    public const string TeamA = "A";
+    public const string TeamB = "B";
+
+    /// <summary>Level when it ended — time ran out on a tie, as often as not.</summary>
+    public const string Draw = "Draw";
+
+    public const int HighestScore = 999;
+
+    public static readonly IReadOnlyCollection<string> All = [TeamA, TeamB, Draw];
+
+    /// <summary>
+    /// Whether a result and its score hold together: a known result, a score
+    /// given for both teams or neither, and a score that says the same as the
+    /// result — the winner ahead, a draw level.
+    /// </summary>
+    public static bool Holds(string? result, int? scoreA, int? scoreB)
+    {
+        if (result is null || !All.Contains(result))
+        {
+            return false;
+        }
+
+        if (scoreA is null && scoreB is null)
+        {
+            return true;
+        }
+
+        if (scoreA is not int a || scoreB is not int b || a < 0 || b < 0 || a > HighestScore || b > HighestScore)
+        {
+            return false;
+        }
+
+        return result switch
+        {
+            TeamA => a > b,
+            TeamB => b > a,
+            _ => a == b
+        };
+    }
 }
 
 public static class OpenPlayTeam

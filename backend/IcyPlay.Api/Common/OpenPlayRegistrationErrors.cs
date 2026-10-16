@@ -128,10 +128,30 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "The teams are not full. Start it anyway, or wait for more players."),
+            OpenPlayRegistrationFailure.TeamsUneven => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The teams are uneven. Move a player across so both teams have the same number."),
             OpenPlayRegistrationFailure.MatchNotPlaying => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,
                 "Only the match on the court can be finished."),
+            OpenPlayRegistrationFailure.InvalidMatchResult => (
+                StatusCodes.Status400BadRequest,
+                ErrorCodes.BadRequest,
+                "Choose Team A, Team B or a draw. A score is for both teams, from 0 to 999, and has to agree with who won."),
+            OpenPlayRegistrationFailure.MatchNotFinished => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "Only a finished match's result can be changed."),
+            OpenPlayRegistrationFailure.CannotPlayNextMatch => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The lineup has changed. Pick again: a player in the next match, and somebody from a later one."),
+            OpenPlayRegistrationFailure.CannotMoveTeam => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "The lineup has changed. Only a player in the next match can move, to the other team."),
             OpenPlayRegistrationFailure.UnknownTab => (
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
