@@ -20,13 +20,22 @@ public sealed record CheckInScanRequest(string Scanned);
 /// <param name="RegistrationId">The registration, or the free player's own id when <paramref name="IsFree"/>.</param>
 /// <param name="IsFree">Put in for free by the venue, not registered and paid.</param>
 /// <param name="Mobile">A free player's number, for the desk. Never a registered player's.</param>
+/// <param name="Lineup">Where they are in the matches; null until they have checked in.</param>
 public sealed record CheckInPlayer(
     Guid RegistrationId,
     string FullName,
     string DisplayName,
     DateTimeOffset? CheckedInAt,
     bool IsFree = false,
-    string? Mobile = null);
+    string? Mobile = null,
+    CheckInLineup? Lineup = null);
+
+/// <summary>A checked-in player's place in the session's matches, as the matches page has it.</summary>
+/// <param name="State">"Playing", "InMatch" (in a match still to come), "Waiting" or "Done".</param>
+/// <param name="MatchNumber">The match they are in, when playing or in one to come.</param>
+/// <param name="Played">Finished matches they were on court in.</param>
+/// <param name="HasPlayed">On court in a match that started: they stay on record, so cannot be removed.</param>
+public sealed record CheckInLineup(string State, int? MatchNumber, int Played, bool HasPlayed);
 
 /// <summary>A player the desk puts into a session for free. The mobile number is optional.</summary>
 public sealed record AddFreePlayerRequest(string? FullName, string? Mobile);

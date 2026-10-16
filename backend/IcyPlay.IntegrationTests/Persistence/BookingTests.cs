@@ -4345,6 +4345,64 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task OpenPlayRegistration_WhileUnderWay_ShouldBeTakenWhenItStaysOpenUntilTheEnd()
+    {
+        // Arrange: four to eight tonight, open until the end; Now is five at the venue.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(
+            context,
+            "Late Join Courts",
+            input: floor => TuesdayMornings(floor.Pickleball1) with
+            {
+                Days = [DayOfWeek.Monday],
+                StartDate = Today,
+                StartsAt = new TimeOnly(16, 0),
+                EndsAt = new TimeOnly(20, 0),
+                RegistrationCutoffMinutes = 0,
+                RegistrationOpenUntilEnd = true
+            });
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Today, true), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            registered.Succeeded.Should().BeTrue();
+            (await context.OpenPlays.SingleAsync(openPlay => openPlay.Id == openPlayId))
+                .RegistrationOpenUntilEnd.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_WhileUnderWay_ShouldBeRefusedWhenItClosesAtTheStart()
+    {
+        // Arrange: four to eight tonight, closing at the start; Now is five at the venue.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await PublishedOpenPlayAsync(
+            context,
+            "No Late Join Courts",
+            input: floor => TuesdayMornings(floor.Pickleball1) with
+            {
+                Days = [DayOfWeek.Monday],
+                StartDate = Today,
+                StartsAt = new TimeOnly(16, 0),
+                EndsAt = new TimeOnly(20, 0),
+                RegistrationCutoffMinutes = 0
+            });
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+
+        // Act
+        var registered = await sut.RegisterAsync(
+            floor.Customer, openPlayId, new RegisterForOpenPlayRequest(Today, true), CancellationToken.None);
+
+        // Assert
+        registered.Failure.Should().Be(OpenPlayRegistrationFailure.RegistrationClosed);
+    }
+
+    [Fact]
     public async Task OpenPlayRegistration_AfterTheCutOff_ShouldBeRefused()
     {
         // Arrange: tonight at six, closing an hour before; Now is five at the venue.
@@ -5245,6 +5303,41 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
             board.Value.Matches[0].Result.Should().Be(OpenPlayMatchResult.TeamA);
             (await context.OpenPlayRegistrations.SingleAsync(registration => registration.Id == firstRegistration))
                 .IsCheckedIn.Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task CheckInRoster_ShouldShowWhereEachPlayerIsInTheMatches()
+    {
+        // Arrange: five in; the first four on court, the fifth in Match 2.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Roster Lineup Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var players = await ScannedInAsync(context, floor, openPlayId, desk, 5);
+        var matches = CreateMatchService(context);
+        var match = (await matches.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await matches.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+
+        var fifthId = players[4].Id;
+        var fifthRegistration = await context.OpenPlayRegistrations
+            .Where(registration => registration.CustomerUserId == fifthId)
+            .Select(registration => registration.Id)
+            .SingleAsync();
+
+        // Act
+        var roster = (await CreateCheckInService(context).RosterAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!;
+
+        // Assert
+
+        using (new AssertionScope())
+        {
+            roster.Players.Count(player => player.Lineup?.State == "Playing").Should().Be(4);
+            roster.Players.Where(player => player.Lineup?.State == "Playing")
+                .Should().OnlyContain(player => player.Lineup!.MatchNumber == 1 && player.Lineup.HasPlayed && player.Lineup.Played == 0);
+            var fifth = roster.Players.Single(player => player.RegistrationId == fifthRegistration);
+            fifth.Lineup!.State.Should().Be("InMatch");
+            fifth.Lineup.MatchNumber.Should().Be(2);
+            fifth.Lineup.HasPlayed.Should().BeFalse();
         }
     }
 

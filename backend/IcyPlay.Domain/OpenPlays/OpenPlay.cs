@@ -177,6 +177,15 @@ public sealed class OpenPlay : Entity
         get; private set;
     }
 
+    /// <summary>
+    /// Players can still register while a session is being played, up to its
+    /// end: the cut-off before the start does not apply.
+    /// </summary>
+    public bool RegistrationOpenUntilEnd
+    {
+        get; private set;
+    }
+
     /// <summary>Null when there is no early-bird price.</summary>
     public OpenPlayEarlyBird? EarlyBird
     {
@@ -406,6 +415,33 @@ public sealed class OpenPlay : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Whether registration stays open until each session ends, so players can
+    /// join one already under way. Part of what players sign up under, like
+    /// the cut-off: fixed once published.
+    /// </summary>
+    public void SetRegistrationOpenUntilEnd(bool openUntilEnd, DateTimeOffset now)
+    {
+        if (openUntilEnd == RegistrationOpenUntilEnd)
+        {
+            return;
+        }
+
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        if (IsPublished)
+        {
+            throw new InvalidOperationException(
+                "A published open play is open for registration and cannot be changed.");
+        }
+
+        RegistrationOpenUntilEnd = openUntilEnd;
+        UpdatedAt = now;
+    }
+
     /// <summary>Sets or replaces the celebration background. Allowed after publishing, like the cover photo.</summary>
     public void SetBackgroundPhoto(string publicId, string secureUrl, DateTimeOffset now)
     {
@@ -436,8 +472,15 @@ public sealed class OpenPlay : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// When registration for this date closes, on the venue's clock: the end
+    /// of the session when it stays open until then, else the cut-off before
+    /// the start.
+    /// </summary>
     public DateTime RegistrationClosesAt(DateOnly date) =>
-        date.ToDateTime(StartsAt).AddMinutes(-RegistrationCutoffMinutes);
+        RegistrationOpenUntilEnd
+            ? date.ToDateTime(EndsAt)
+            : date.ToDateTime(StartsAt).AddMinutes(-RegistrationCutoffMinutes);
 
     /// <summary>
     /// Whether a player can still register for this date. <paramref name="venueNow"/>

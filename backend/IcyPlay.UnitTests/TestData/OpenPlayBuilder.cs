@@ -21,6 +21,7 @@ public sealed class OpenPlayBuilder
     private DateOnly _startDate = FirstSaturday;
     private DateOnly? _endDate;
     private int _cutoffMinutes = 60;
+    private bool _openUntilEnd;
     private OpenPlayEarlyBird? _earlyBird;
 
     public OpenPlayBuilder WithTitle(string title)
@@ -73,14 +74,21 @@ public sealed class OpenPlayBuilder
         return this;
     }
 
+    public OpenPlayBuilder OpenUntilEnd()
+    {
+        _openUntilEnd = true;
+        return this;
+    }
+
     public OpenPlayBuilder WithEarlyBird(string kind, decimal value, int leadMinutes)
     {
         _earlyBird = new OpenPlayEarlyBird(kind, value, leadMinutes);
         return this;
     }
 
-    public OpenPlay Build() =>
-        new(
+    public OpenPlay Build()
+    {
+        var openPlay = new OpenPlay(
             TestIds.FacilityId,
             TestIds.For("bookable-court"),
             TestIds.CourtId,
@@ -97,4 +105,9 @@ public sealed class OpenPlayBuilder
             _earlyBird,
             TestIds.FacilityOwnerUserId,
             TestTimes.UtcNow);
+
+        openPlay.SetRegistrationOpenUntilEnd(_openUntilEnd, TestTimes.UtcNow);
+
+        return openPlay;
+    }
 }

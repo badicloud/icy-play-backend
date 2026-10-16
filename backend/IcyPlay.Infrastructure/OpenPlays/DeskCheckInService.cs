@@ -521,16 +521,23 @@ public sealed class DeskCheckInService(
                 && registration.Session.Date == door.Date)
             .ToListAsync(ct);
         var spotsTaken = registrations.Count(registration => registration.HoldsSpotAt(now)) + free.Count;
+        var (byRegistration, byFreePlayer) = await LineupsAsync(door, ct);
 
         var players = rows
-            .Select(row => new CheckInPlayer(row.Id, row.Name ?? "A player", ShortName(row.Name), row.CheckedInAt))
+            .Select(row => new CheckInPlayer(
+                row.Id,
+                row.Name ?? "A player",
+                ShortName(row.Name),
+                row.CheckedInAt,
+                Lineup: byRegistration.GetValueOrDefault(row.Id)))
             .Concat(free.Select(player => new CheckInPlayer(
                 player.Id,
                 player.FullName,
                 ShortName(player.FullName),
                 player.CheckedInAt,
                 IsFree: true,
-                player.Mobile)))
+                player.Mobile,
+                byFreePlayer.GetValueOrDefault(player.Id))))
             .OrderBy(player => player.CheckedInAt is null ? 1 : 0)
             .ThenByDescending(player => player.CheckedInAt)
             .ThenBy(player => player.FullName)
@@ -554,6 +561,59 @@ public sealed class DeskCheckInService(
             door.OpenPlay.FreeSpots,
             free.Count,
             !door.IsOver && free.Count < door.OpenPlay.FreeSpots && spotsTaken < door.OpenPlay.MaxPlayers);
+    }
+
+    /// <summary>
+    /// Where each checked-in player is in the session's matches, by their
+    /// registration or free player id: on court, in a match to come, waiting
+    /// or done, and how many games they have had.
+    /// </summary>
+    private async Task<(Dictionary<Guid, CheckInLineup> ByRegistration, Dictionary<Guid, CheckInLineup> ByFreePlayer)> LineupsAsync(
+        Door door,
+        CancellationToken ct)
+    {
+        var sessionId = await db.OpenPlaySessions
+            .Where(session => session.OpenPlayId == door.OpenPlay.Id && session.Date == door.Date)
+            .Select(session => (Guid?)session.Id)
+            .SingleOrDefaultAsync(ct);
+
+        if (sessionId is not Guid id)
+        {
+            return ([], []);
+        }
+
+        var participants = await db.OpenPlayParticipants.AsNoTracking().Where(participant => participant.SessionId == id).ToListAsync(ct);
+        var matches = await db.OpenPlayMatches
+            .AsNoTracking()
+            .Include(match => match.Slots)
+            .Where(match => match.SessionId == id)
+            .ToListAsync(ct);
+
+        CheckInLineup LineupOf(OpenPlayParticipant participant)
+        {
+            var seatedIn = matches
+                .Where(match => match.Status != OpenPlayMatchStatus.Finished
+                    && match.Slots.Any(slot => slot.ParticipantId == participant.Id && slot.LeftAt is null))
+                .MinBy(match => match.Number);
+            var played = matches.Count(match => match.Status == OpenPlayMatchStatus.Finished
+                && match.Slots.Any(slot => slot.ParticipantId == participant.Id));
+            var hasPlayed = matches.Any(match => match.HasStarted
+                && match.Slots.Any(slot => slot.ParticipantId == participant.Id));
+
+            var state = participant.IsDone
+                ? "Done"
+                : seatedIn?.IsPlaying == true
+                    ? "Playing"
+                    : seatedIn is not null ? "InMatch" : "Waiting";
+
+            return new CheckInLineup(state, participant.IsDone ? null : seatedIn?.Number, played, hasPlayed);
+        }
+
+        return (
+            participants.Where(participant => participant.RegistrationId is not null)
+                .ToDictionary(participant => participant.RegistrationId!.Value, LineupOf),
+            participants.Where(participant => participant.FreePlayerId is not null)
+                .ToDictionary(participant => participant.FreePlayerId!.Value, LineupOf));
     }
 
     /// <summary>

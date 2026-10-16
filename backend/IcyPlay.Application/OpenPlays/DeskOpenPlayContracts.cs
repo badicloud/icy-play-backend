@@ -19,7 +19,9 @@ public sealed record OpenPlayInput(
     // How many players the desk may put in for free per session. Left out, unchanged (none on a new one).
     int? FreeSpots = null,
     // Players per team for matches. Null: the sport's own.
-    int? PlayersPerTeam = null);
+    int? PlayersPerTeam = null,
+    // Registration stays open until each session ends; the cut-off is then not used.
+    bool RegistrationOpenUntilEnd = false);
 
 /// <summary>Moves when check-in opens. Allowed after publishing: it is how the venue runs its door.</summary>
 public sealed record OpenPlayCheckInWindowInput(int MinutesBeforeStart);
@@ -94,7 +96,9 @@ public sealed record DeskOpenPlay(
     // Players per team in force: the open play's own, else the sport's.
     int TeamSize,
     // Behind the winning team and the best players on the wide screen.
-    string? BackgroundPhotoUrl);
+    string? BackgroundPhotoUrl,
+    // Registration stays open until each session ends; the cut-off is then not used.
+    bool RegistrationOpenUntilEnd);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

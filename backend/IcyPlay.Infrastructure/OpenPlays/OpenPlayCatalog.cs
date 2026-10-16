@@ -187,7 +187,8 @@ public sealed class OpenPlayCatalog(AppDbContext db, TimeProvider timeProvider) 
                     ? new CatalogEarlyBird(earlyBird.DiscountKind, earlyBird.DiscountValue, earlyBird.LeadMinutes)
                     : null,
                 upcoming,
-                openPlay.CoverPhotoUrl ?? FallbackPhoto(openPlay.FacilityId, openPlay.CourtId, row.SportId)));
+                openPlay.CoverPhotoUrl ?? FallbackPhoto(openPlay.FacilityId, openPlay.CourtId, row.SportId),
+                openPlay.RegistrationOpenUntilEnd));
         }
 
         return [.. listed

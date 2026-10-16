@@ -119,6 +119,43 @@ public sealed class OpenPlayTests
     }
 
     [Fact]
+    public void Should_Keep_Registration_Open_Until_The_Session_Ends_When_It_Stays_Open_Until_Then()
+    {
+        // Arrange: 6 to 9 PM, registration open until the end.
+        var openPlay = new OpenPlayBuilder()
+            .WithHours(new(18, 0), new(21, 0))
+            .WithCutoffMinutes(0)
+            .OpenUntilEnd()
+            .Build();
+
+        // Act
+        var underWay = openPlay.IsOpenForRegistration(Saturday, Saturday.ToDateTime(new(20, 59)));
+        var atTheEnd = openPlay.IsOpenForRegistration(Saturday, Saturday.ToDateTime(new(21, 0)));
+
+        // Assert
+        using (new AssertionScope())
+        {
+            openPlay.RegistrationClosesAt(Saturday).Should().Be(Saturday.ToDateTime(new(21, 0)));
+            underWay.Should().BeTrue();
+            atTheEnd.Should().BeFalse();
+        }
+    }
+
+    [Fact]
+    public void Should_Refuse_To_Change_Registration_Until_The_End_When_The_Open_Play_Is_Published()
+    {
+        // Arrange
+        var openPlay = new OpenPlayBuilder().Build();
+        openPlay.Publish(TestIds.FacilityOwnerUserId, TestTimes.UtcNow);
+
+        // Act
+        var change = () => openPlay.SetRegistrationOpenUntilEnd(true, TestTimes.UtcNow);
+
+        // Assert
+        change.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
     public void Should_Not_Open_Registration_When_The_Date_Is_Not_A_Session()
     {
         // Arrange

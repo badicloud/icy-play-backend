@@ -32,7 +32,9 @@ public sealed record CatalogOpenPlay(
     // The open play's own cover photo, else the court set up for this sport,
     // else the court, else the venue: the same fallback the court listing uses.
     // Null when none of them has one.
-    string? CoverPhotoUrl);
+    string? CoverPhotoUrl,
+    // Players can join a session already under way, up to its end.
+    bool RegistrationOpenUntilEnd);
 
 public sealed record CatalogEarlyBird(string DiscountKind, decimal DiscountValue, int LeadMinutes);
 

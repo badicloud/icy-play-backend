@@ -486,6 +486,7 @@ public sealed class OpenPlayService(
             }
 
             openPlay.SetPlayersPerTeam(input.PlayersPerTeam, now);
+            openPlay.SetRegistrationOpenUntilEnd(input.RegistrationOpenUntilEnd, now);
         }
         catch (ArgumentException problem)
         {
@@ -588,6 +589,7 @@ public sealed class OpenPlayService(
             }
 
             openPlay.SetPlayersPerTeam(input.PlayersPerTeam, now);
+            openPlay.SetRegistrationOpenUntilEnd(input.RegistrationOpenUntilEnd, now);
         }
         catch (ArgumentException problem)
         {
@@ -1301,7 +1303,8 @@ public sealed class OpenPlayService(
                         openPlay.FreeSpots,
                         openPlay.PlayersPerTeam,
                         openPlay.TeamSizeFor(row.SportKey),
-                        openPlay.BackgroundPhotoUrl);
+                        openPlay.BackgroundPhotoUrl,
+                        openPlay.RegistrationOpenUntilEnd);
                 })
         ];
     }
@@ -1334,6 +1337,7 @@ public sealed class OpenPlayService(
         ["days"] = openPlay.Days.ToString(),
         ["dates"] = $"{openPlay.StartDate:yyyy-MM-dd} to {(openPlay.EndDate is { } end ? end.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "open")}",
         ["cutoffMinutes"] = openPlay.RegistrationCutoffMinutes.ToString(CultureInfo.InvariantCulture),
+        ["openUntilEnd"] = openPlay.RegistrationOpenUntilEnd ? "yes" : "no",
         ["earlyBird"] = openPlay.EarlyBird is { } earlyBird
             ? $"{earlyBird.DiscountKind} {earlyBird.DiscountValue.ToString("0.##", CultureInfo.InvariantCulture)}, {earlyBird.LeadMinutes} min"
             : null,

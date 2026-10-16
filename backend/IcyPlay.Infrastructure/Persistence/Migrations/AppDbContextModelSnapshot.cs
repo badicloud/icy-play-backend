@@ -2423,6 +2423,9 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<decimal>("RegistrationFee")
                         .HasColumnType("decimal(10,2)");
 
+                    b.Property<bool>("RegistrationOpenUntilEnd")
+                        .HasColumnType("bit");
+
                     b.Property<DateTimeOffset?>("SeededAt")
                         .HasColumnType("datetimeoffset");
 
