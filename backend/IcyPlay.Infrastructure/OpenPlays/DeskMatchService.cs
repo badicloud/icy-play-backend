@@ -92,6 +92,12 @@ public sealed class DeskMatchService(
             return Fail(OpenPlayRegistrationFailure.NotFound);
         }
 
+        // Over on the venue's clock: what was played stands as it was.
+        if (door.IsOver)
+        {
+            return Fail(OpenPlayRegistrationFailure.SessionOver);
+        }
+
         var refusal = await SessionLineups.ApplyAsync(
             db,
             sessionId,
@@ -131,6 +137,12 @@ public sealed class DeskMatchService(
         if (door is null)
         {
             return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        // Over on the venue's clock: what was played stands as it was.
+        if (door.IsOver)
+        {
+            return Fail(OpenPlayRegistrationFailure.SessionOver);
         }
 
         var refusal = await SessionLineups.ApplyAsync(
@@ -260,6 +272,12 @@ public sealed class DeskMatchService(
         if (door is null)
         {
             return Fail(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        // Over on the venue's clock: what was played stands as it was.
+        if (door.IsOver)
+        {
+            return Fail(OpenPlayRegistrationFailure.SessionOver);
         }
 
         var name = await NameOfAsync(participantId, ct);

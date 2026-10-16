@@ -188,6 +188,12 @@ public sealed class DeskCheckInService(
             return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
         }
 
+        // Over on the venue's clock: who came stays on record.
+        if (door.IsOver)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.SessionOver);
+        }
+
         if (await CodeRefusalAsync(actor, door, request.Code, ct) is OpenPlayRegistrationFailure refused)
         {
             return Fail<CheckInRoster>(refused);
@@ -360,6 +366,12 @@ public sealed class DeskCheckInService(
         if (player is null || door is null)
         {
             return Fail<CheckInRoster>(OpenPlayRegistrationFailure.NotFound);
+        }
+
+        // Over on the venue's clock: who came stays on record.
+        if (undo && door.IsOver)
+        {
+            return Fail<CheckInRoster>(OpenPlayRegistrationFailure.SessionOver);
         }
 
         if (await CodeRefusalAsync(actor, door, request.Code, ct) is OpenPlayRegistrationFailure refused)

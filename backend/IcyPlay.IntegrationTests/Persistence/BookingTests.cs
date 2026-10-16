@@ -5208,6 +5208,47 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task Matches_AfterTheSessionHasEnded_ShouldStayAsTheyWere()
+    {
+        // Arrange: a match played and finished, then the evening is over.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Match Ended Courts");
+        await CheckInCodeAsync(context, floor, VenueCode);
+        var desk = await OwnerActorAsync(context, floor);
+        var players = await ScannedInAsync(context, floor, openPlayId, desk, 6);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+        var tomorrow = new FixedTimeProvider(Now.AddDays(1));
+        var later = new DeskMatchService(context, new AuditLogger(context, tomorrow), tomorrow);
+        var laterDoor = new DeskCheckInService(context, new AuditLogger(context, tomorrow), tomorrow);
+        var firstPlayerId = players[0].Id;
+        var firstRegistration = await context.OpenPlayRegistrations
+            .Where(registration => registration.CustomerUserId == firstPlayerId)
+            .Select(registration => registration.Id)
+            .SingleAsync();
+
+        // Act
+        var corrected = await later.CorrectResultAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamB, null, null), CancellationToken.None);
+        var done = await later.DoneAsync(desk, match.TeamA[0]!.ParticipantId, CancellationToken.None);
+        var undone = await laterDoor.UndoAsync(desk, firstRegistration, new CheckInCodeRequest(VenueCode), CancellationToken.None);
+        var board = await later.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            corrected.Failure.Should().Be(OpenPlayRegistrationFailure.SessionOver);
+            done.Failure.Should().Be(OpenPlayRegistrationFailure.SessionOver);
+            undone.Failure.Should().Be(OpenPlayRegistrationFailure.SessionOver);
+            board.Value!.IsOver.Should().BeTrue();
+            board.Value.Matches[0].Result.Should().Be(OpenPlayMatchResult.TeamA);
+            (await context.OpenPlayRegistrations.SingleAsync(registration => registration.Id == firstRegistration))
+                .IsCheckedIn.Should().BeTrue();
+        }
+    }
+
+    [Fact]
     public async Task Matches_PlayerDoneMidGame_ShouldPutTheNextInLineOn_AndBeAbleToComeBack()
     {
         // Arrange: five in, the first four on court, the fifth waiting in Match 2.
