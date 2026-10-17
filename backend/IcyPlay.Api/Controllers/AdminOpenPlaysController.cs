@@ -227,6 +227,23 @@ public sealed class AdminOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
     }
 
+    [HttpPut("{openPlayId:guid}/reward")]
+    public async Task<IActionResult> Reward(
+        Guid facilityOwnerId,
+        Guid openPlayId,
+        OpenPlayRewardInput input,
+        CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetRewardForOwnerAsync(facilityOwnerId, actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : OpenPlayErrors.Failure(result);
+    }
+
     [HttpPut("{openPlayId:guid}/team-size")]
     public async Task<IActionResult> TeamSize(
         Guid facilityOwnerId,

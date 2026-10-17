@@ -144,6 +144,26 @@ public static class OpenPlayRegistrationErrors
                 StatusCodes.Status400BadRequest,
                 ErrorCodes.BadRequest,
                 "That photo could not be saved. Take it again."),
+            OpenPlayRegistrationFailure.VoucherNotUsable => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That voucher cannot be used here: it is for another venue, already used, or expired."),
+            OpenPlayRegistrationFailure.ClaimStubNotFound => (
+                StatusCodes.Status404NotFound,
+                ErrorCodes.NotFound,
+                "No claim stub with that code at this venue. Check the code and try again."),
+            OpenPlayRegistrationFailure.ClaimStubNotGiven => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That claim stub has not been given to a player yet."),
+            OpenPlayRegistrationFailure.ClaimStubAlreadyClaimed => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That prize has already been claimed."),
+            OpenPlayRegistrationFailure.ClaimStubExpired => (
+                StatusCodes.Status409Conflict,
+                ErrorCodes.Conflict,
+                "That claim stub has expired."),
             OpenPlayRegistrationFailure.TeamsUneven => (
                 StatusCodes.Status409Conflict,
                 ErrorCodes.Conflict,

@@ -87,7 +87,41 @@ public sealed class OpenPlayRegistration : Entity
         get; private set;
     }
 
-    public decimal Total => RegistrationFee - Discount + PlatformFee;
+    /// <summary>The best player voucher used on it, if any.</summary>
+    public Guid? VoucherId
+    {
+        get; private set;
+    }
+
+    /// <summary>What the voucher took off the venue's fee, after any early bird.</summary>
+    public decimal VoucherDiscount
+    {
+        get; private set;
+    }
+
+    /// <summary>What the venue is owed: its fee, less the early bird and any voucher.</summary>
+    public decimal VenueAmount => RegistrationFee - Discount - VoucherDiscount;
+
+    public decimal Total => VenueAmount + PlatformFee;
+
+    /// <summary>
+    /// Takes a best player voucher off the venue's fee, after the early bird.
+    /// Only while the registration is being paid for, and only one.
+    /// </summary>
+    public void ApplyVoucher(OpenPlayVoucher voucher, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(voucher);
+
+        if (Status != BookingStatus.PendingPayment || VoucherId is not null)
+        {
+            throw new InvalidOperationException("A voucher goes on a registration once, while it is being paid for.");
+        }
+
+        VoucherId = voucher.Id;
+        VoucherDiscount = voucher.DiscountOn(RegistrationFee - Discount);
+        voucher.Reserve(Id, now);
+        UpdatedAt = now;
+    }
 
     public DateTimeOffset HoldsUntil
     {

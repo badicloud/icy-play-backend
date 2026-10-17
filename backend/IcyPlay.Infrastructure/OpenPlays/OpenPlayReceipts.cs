@@ -69,6 +69,11 @@ internal static class OpenPlayReceipts
             charges.Add(new ReceiptLine("Early bird discount", -registration.Discount));
         }
 
+        if (registration.VoucherDiscount > 0m)
+        {
+            charges.Add(new ReceiptLine("Best player voucher", -registration.VoucherDiscount));
+        }
+
         charges.Add(new ReceiptLine("IcyPlay platform fee", registration.PlatformFee));
 
         var fees = payment?.ProcessingFee is decimal fee && fee > 0m
@@ -97,7 +102,7 @@ internal static class OpenPlayReceipts
                 new ReceiptLine(
                     $"{row.Date.ToString("ddd, d MMM yyyy", Culture)} · " +
                     $"{row.StartsAt.ToString("h:mm tt", Culture)} – {row.EndsAt.ToString("h:mm tt", Culture)}",
-                    registration.RegistrationFee - registration.Discount)
+                    registration.VenueAmount)
             ],
             charges,
             "Registration total",

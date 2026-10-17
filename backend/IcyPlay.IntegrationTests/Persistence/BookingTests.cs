@@ -5556,6 +5556,223 @@ public sealed class BookingTests(SqlServerDatabaseFixture database)
     }
 
     [Fact]
+    public async Task Reward_ClaimStubs_ShouldFollowTheNumberOfPrizes()
+    {
+        // Arrange
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Stub Count Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var sut = CreateOpenPlayService(context);
+
+        // Act
+        var three = await sut.SetRewardAsync(desk, openPlayId, new OpenPlayRewardInput("ClaimStub", Prize: "Free Gatorade", Quantity: 3, ValidDays: 7), CancellationToken.None);
+        var five = await sut.SetRewardAsync(desk, openPlayId, new OpenPlayRewardInput("ClaimStub", Prize: "Free jersey", Quantity: 5, ValidDays: 7), CancellationToken.None);
+        var two = await sut.SetRewardAsync(desk, openPlayId, new OpenPlayRewardInput("ClaimStub", Prize: "Free jersey", Quantity: 2, ValidDays: 7), CancellationToken.None);
+        var stubs = await context.OpenPlayClaimStubs.Where(stub => stub.OpenPlayId == openPlayId).ToListAsync();
+        var none = await sut.SetRewardAsync(desk, openPlayId, new OpenPlayRewardInput("None"), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            three.Value!.ClaimStubs.Should().Be(3);
+            five.Value!.ClaimStubs.Should().Be(5);
+            two.Value!.ClaimStubs.Should().Be(2);
+            two.Value.Reward!.Prize.Should().Be("Free jersey");
+            stubs.Should().OnlyContain(stub => stub.Prize == "Free jersey");
+            stubs.Select(stub => stub.Code).Should().OnlyHaveUniqueItems();
+            none.Value!.Reward.Should().BeNull();
+            none.Value.ClaimStubs.Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task EndSession_WithAVoucherReward_ShouldGiveEachBestPlayerOne_AndReopenShouldTakeThemBack()
+    {
+        // Arrange: four players, Team A wins: two best players.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Voucher Reward Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("Voucher", "Percentage", 20, 100, ValidDays: 30), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+
+        // Act
+        var ended = await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var vouchers = await context.OpenPlayVouchers.AsNoTracking().Where(voucher => voucher.OpenPlayId == openPlayId).ToListAsync();
+        var venue = await context.OpenPlays.Where(openPlay => openPlay.Id == openPlayId).Select(openPlay => openPlay.FacilityId).SingleAsync();
+        var reopened = await sut.ReopenSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            vouchers.Should().HaveCount(2);
+            vouchers.Should().OnlyContain(voucher => voucher.ExpiresAt == Now.AddDays(30) && voucher.FacilityId == venue);
+            ended.Value!.Rewards.Select(reward => reward.ParticipantId)
+                .Should().BeEquivalentTo(match.TeamA.Select(seat => seat!.ParticipantId));
+            ended.Value.Rewards.Should().OnlyContain(reward => reward.Label == "20% off an open play, up to ₱100");
+            reopened.Value!.Rewards.Should().BeEmpty();
+            (await context.OpenPlayVouchers.CountAsync(voucher => voucher.OpenPlayId == openPlayId && voucher.Status == OpenPlayVoucherStatus.Revoked))
+                .Should().Be(2);
+        }
+    }
+
+    [Fact]
+    public async Task EndSession_WithClaimStubs_ShouldGiveTheStubsLeft_AndTheDeskShouldMarkOneClaimed()
+    {
+        // Arrange: one prize left, two best players.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Claim Stub Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var openPlays = CreateOpenPlayService(context);
+        await openPlays.SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("ClaimStub", Prize: "Free Gatorade", Quantity: 1, ValidDays: 7), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamB, null, null), CancellationToken.None);
+        var stubs = new DeskClaimStubService(context, new AuditLogger(context, new FixedTimeProvider(Now)), new FixedTimeProvider(Now));
+
+        // Act
+        var ended = await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var code = ended.Value!.Rewards.Single().Code!;
+        var claimed = await stubs.ClaimAsync(desk, new ClaimStubRequest(code.Replace("-", "").ToLowerInvariant()), CancellationToken.None);
+        var again = await stubs.ClaimAsync(desk, new ClaimStubRequest(code), CancellationToken.None);
+        var unknown = await stubs.ClaimAsync(desk, new ClaimStubRequest("ZZZZ-ZZZZ"), CancellationToken.None);
+        var list = await stubs.ListAsync(desk.UserId!.Value, openPlayId, CancellationToken.None);
+        var fewer = await openPlays.SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("ClaimStub", Prize: "Free Gatorade", Quantity: 0, ValidDays: 7), CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            ended.Value.Rewards.Should().ContainSingle(reward => reward.Kind == "ClaimStub" && reward.Label == "Free Gatorade");
+            claimed.Value!.Status.Should().Be(OpenPlayClaimStubStatus.Claimed);
+            claimed.Value.PlayerName.Should().NotBeNullOrEmpty();
+            again.Failure.Should().Be(OpenPlayRegistrationFailure.ClaimStubAlreadyClaimed);
+            unknown.Failure.Should().Be(OpenPlayRegistrationFailure.ClaimStubNotFound);
+            list.Value!.Should().ContainSingle().Which.ClaimedAt.Should().Be(Now);
+            fewer.Failure.Should().Be(OpenPlayFailure.Invalid);
+            (await context.AuditLogs.AnyAsync(entry => entry.EntityId == openPlayId
+                && entry.Action == AuditAction.OpenPlayRewardsGiven
+                && entry.Reason!.Contains("1 best players went without"))).Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task MyRewards_ShouldListTheVouchersAndStubsAPlayerWasGiven_AndSayWhenTheyExpire()
+    {
+        // Arrange: a voucher reward, Team A wins, the session ends; then a prize for the next.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "My Rewards Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        var openPlays = CreateOpenPlayService(context);
+        await openPlays.SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("Voucher", "Fixed", 50, ValidDays: 30), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var sut = CreateMatchService(context);
+        var match = (await sut.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await sut.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await sut.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+        await sut.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var winner = (await context.OpenPlayVouchers.FirstAsync(voucher => voucher.OpenPlayId == openPlayId)).CustomerUserId;
+
+        // Act
+        var tonight = await new MyRewardService(context, new FixedTimeProvider(Now)).ListAsync(winner, CancellationToken.None);
+        var later = await new MyRewardService(context, new FixedTimeProvider(Now.AddDays(31))).ListAsync(winner, CancellationToken.None);
+        var somebodyElse = await new MyRewardService(context, new FixedTimeProvider(Now)).ListAsync(desk.UserId!.Value, CancellationToken.None);
+
+        // Assert
+        using (new AssertionScope())
+        {
+            tonight.Vouchers.Should().ContainSingle();
+            tonight.Vouchers[0].Label.Should().Be("₱50 off an open play");
+            tonight.Vouchers[0].Status.Should().Be(OpenPlayVoucherStatus.Available);
+            tonight.Vouchers[0].ExpiresAt.Should().Be(Now.AddDays(30));
+            tonight.Vouchers[0].WonOn.Should().Be(Today);
+            tonight.ClaimStubs.Should().BeEmpty();
+            later.Vouchers[0].Status.Should().Be("Expired");
+            somebodyElse.Vouchers.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_WithABestPlayerVoucher_ShouldTakeItOff_AndGiveItBackWhenTheHoldRunsOut()
+    {
+        // Arrange: a ₱50 voucher reward, Team A wins tonight: two best players.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Voucher Checkout Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("Voucher", "Fixed", 50, ValidDays: 30), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 4);
+        var matches = CreateMatchService(context);
+        var match = (await matches.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!.Matches[0];
+        await matches.StartAsync(desk, match.MatchId, new StartMatchRequest(false), CancellationToken.None);
+        await matches.FinishAsync(desk, match.MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+        await matches.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var winners = await context.OpenPlayVouchers
+            .Where(voucher => voucher.OpenPlayId == openPlayId)
+            .Select(voucher => voucher.CustomerUserId)
+            .ToListAsync();
+        var sut = CreateRegistrationService(context, new CapturingEmailSender());
+        var nextWeek = Today.AddDays(7);
+
+        // Act: one uses the voucher on next week's session; the other says no.
+        var withVoucher = await sut.RegisterAsync(winners[0], openPlayId, new RegisterForOpenPlayRequest(nextWeek, true), CancellationToken.None);
+        var without = await sut.RegisterAsync(winners[1], openPlayId, new RegisterForOpenPlayRequest(nextWeek, true, NoVoucher: true), CancellationToken.None);
+        var held = await context.OpenPlayVouchers.AsNoTracking().SingleAsync(voucher => voucher.CustomerUserId == winners[0]);
+        var dayLater = await new MyRewardService(context, new FixedTimeProvider(Now.AddDays(1))).ListAsync(winners[0], CancellationToken.None);
+
+        // Assert
+        var detail = withVoucher.Value!;
+
+        using (new AssertionScope())
+        {
+            detail.VoucherDiscount.Should().Be(50);
+            detail.VoucherLabel.Should().Be("₱50 off an open play");
+            detail.Total.Should().Be(detail.RegistrationFee - detail.Discount - 50 + detail.PlatformFee);
+            held.Status.Should().Be(OpenPlayVoucherStatus.Reserved);
+            held.RegistrationId.Should().Be(detail.RegistrationId);
+            without.Value!.VoucherDiscount.Should().Be(0);
+            (await context.OpenPlayVouchers.AsNoTracking().SingleAsync(voucher => voucher.CustomerUserId == winners[1]))
+                .Status.Should().Be(OpenPlayVoucherStatus.Available);
+            dayLater.Vouchers.Single().Status.Should().Be(OpenPlayVoucherStatus.Available);
+        }
+    }
+
+    [Fact]
+    public async Task OpenPlayRegistration_WithAVoucherFromAnotherVenue_ShouldBeRefused()
+    {
+        // Arrange: a voucher won here, then a pick of it at another venue's open play.
+        await using var context = database.CreateContext();
+        var (floor, openPlayId) = await TonightsOpenPlayAsync(context, "Voucher Home Courts");
+        var (_, elsewhereId) = await TonightsOpenPlayAsync(context, "Voucher Away Courts");
+        var desk = await OwnerActorAsync(context, floor);
+        await CreateOpenPlayService(context).SetRewardAsync(
+            desk, openPlayId, new OpenPlayRewardInput("Voucher", "Fixed", 50, ValidDays: 30), CancellationToken.None);
+        await ScannedInAsync(context, floor, openPlayId, desk, 2);
+        var matches = CreateMatchService(context);
+        var board = (await matches.BoardAsync(desk.UserId!.Value, openPlayId, Today, CancellationToken.None)).Value!;
+        await matches.MoveToTeamAsync(desk, board.Matches[0].TeamA[1]!.ParticipantId, new MoveToTeamRequest(OpenPlayTeam.B), CancellationToken.None);
+        await matches.StartAsync(desk, board.Matches[0].MatchId, new StartMatchRequest(true), CancellationToken.None);
+        await matches.FinishAsync(desk, board.Matches[0].MatchId, new MatchResultRequest(OpenPlayMatchResult.TeamA, null, null), CancellationToken.None);
+        await matches.EndSessionAsync(desk, openPlayId, Today, CancellationToken.None);
+        var voucher = await context.OpenPlayVouchers.AsNoTracking().SingleAsync(candidate => candidate.OpenPlayId == openPlayId);
+
+        // Act
+        var registered = await CreateRegistrationService(context, new CapturingEmailSender()).RegisterAsync(
+            voucher.CustomerUserId, elsewhereId, new RegisterForOpenPlayRequest(Today.AddDays(7), true, voucher.Id), CancellationToken.None);
+
+        // Assert
+        registered.Failure.Should().Be(OpenPlayRegistrationFailure.VoucherNotUsable);
+    }
+
+    [Fact]
     public async Task Matches_PlayerDoneMidGame_ShouldPutTheNextInLineOn_AndBeAbleToComeBack()
     {
         // Arrange: five in, the first four on court, the fifth waiting in Match 2.

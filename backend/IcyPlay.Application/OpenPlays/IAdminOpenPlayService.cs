@@ -68,6 +68,13 @@ public interface IAdminOpenPlayService
         Guid openPlayId,
         CancellationToken cancellationToken);
 
+    Task<OpenPlayResult<DeskOpenPlay>> SetRewardForOwnerAsync(
+        Guid facilityOwnerId,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayRewardInput input,
+        CancellationToken cancellationToken);
+
     Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeForOwnerAsync(
         Guid facilityOwnerId,
         AuditActor actor,

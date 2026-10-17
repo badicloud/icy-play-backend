@@ -58,10 +58,18 @@
                           <td style="color: #526585; font-size: 14px; line-height: 22px;">Registration fee</td>
                           <td align="right" style="color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:registration_fee}}</td>
                         </tr>
+                        {% if var:has_early_bird == 1 %}
                         <tr>
                           <td style="padding-top: 8px; color: #526585; font-size: 14px; line-height: 22px;">Early-bird discount</td>
-                          <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&minus;&#8369;{{var:discount}}</td>
+                          <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&minus;&#8369;{{var:early_bird_discount}}</td>
                         </tr>
+                        {% endif %}
+                        {% if var:has_voucher == 1 %}
+                        <tr>
+                          <td style="padding-top: 8px; color: #526585; font-size: 14px; line-height: 22px;">Best player voucher<br><span style="color: #8a9ab5; font-size: 12px;">{{var:voucher_label:""}}</span></td>
+                          <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&minus;&#8369;{{var:voucher_discount}}</td>
+                        </tr>
+                        {% endif %}
                         <tr>
                           <td style="padding-top: 8px; color: #526585; font-size: 14px; line-height: 22px;">Platform fee</td>
                           <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:platform_fee}}</td>

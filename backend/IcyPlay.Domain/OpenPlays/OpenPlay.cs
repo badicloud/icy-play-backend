@@ -192,6 +192,12 @@ public sealed class OpenPlay : Entity
         get; private set;
     }
 
+    /// <summary>What the best players earn when a session ends; null for nothing.</summary>
+    public OpenPlayReward? Reward
+    {
+        get; private set;
+    }
+
     public Guid CreatedByUserId
     {
         get; private set;
@@ -388,6 +394,22 @@ public sealed class OpenPlay : Entity
         }
 
         FreeSpots = freeSpots;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Sets what the best players earn, or null for nothing. Allowed after
+    /// publishing: it is the venue's gift, not something players paid for, and
+    /// it counts for the sessions that end after.
+    /// </summary>
+    public void SetReward(OpenPlayReward? reward, DateTimeOffset now)
+    {
+        if (HasEnded)
+        {
+            throw new InvalidOperationException("An open play that has ended cannot be changed.");
+        }
+
+        Reward = reward;
         UpdatedAt = now;
     }
 

@@ -183,6 +183,20 @@ public sealed class DeskOpenPlaysController(
         return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
     }
 
+    /// <summary>What the best players earn: nothing, a voucher, or a prize with claim stubs. Allowed after publishing.</summary>
+    [HttpPut("{openPlayId:guid}/reward")]
+    public async Task<IActionResult> Reward(Guid openPlayId, OpenPlayRewardInput input, CancellationToken ct)
+    {
+        if (CurrentActor() is not AuditActor actor)
+        {
+            return Unauthorized();
+        }
+
+        var result = await openPlays.SetRewardAsync(actor, openPlayId, input, ct);
+
+        return result.Succeeded ? Ok(new ApiEnvelope<DeskOpenPlay>(result.Value!)) : Failure(result);
+    }
+
     /// <summary>Players per team for matches, or null for the sport's. Allowed after publishing.</summary>
     [HttpPut("{openPlayId:guid}/team-size")]
     public async Task<IActionResult> TeamSize(Guid openPlayId, OpenPlayTeamSizeInput input, CancellationToken ct)

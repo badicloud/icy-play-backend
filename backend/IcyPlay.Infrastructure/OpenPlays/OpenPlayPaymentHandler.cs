@@ -66,13 +66,17 @@ public sealed class OpenPlayPaymentHandler(
             return PaymentResult<Payable>.Fail(PaymentFailure.HoldExpired);
         }
 
-        // What the venue is owed is the fee less any early-bird discount; the
-        // platform's fee sits beside it, the same split a booking has.
-        var venueAmount = registration.RegistrationFee - registration.Discount;
-        var lines = new List<CheckoutLineItem>
+        // What the venue is owed is the fee less any early bird and voucher;
+        // the platform's fee sits beside it, the same split a booking has. A
+        // voucher can cover the venue's whole fee, and a line of nothing is
+        // not one the gateway takes.
+        var venueAmount = registration.VenueAmount;
+        var lines = new List<CheckoutLineItem>();
+
+        if (venueAmount > 0m)
         {
-            new($"{row.Title}, {row.Date:d MMM yyyy}", venueAmount)
-        };
+            lines.Add(new($"{row.Title}, {row.Date:d MMM yyyy}", venueAmount));
+        }
 
         if (registration.PlatformFee > 0m)
         {
@@ -108,6 +112,7 @@ public sealed class OpenPlayPaymentHandler(
         if (registration.CanBeConfirmedOnlineBy(paidAt))
         {
             registration.ConfirmPaidOnline(paidAt, now);
+            await OpenPlayVoucherLedger.SettleAsync(db, registration, now, ct);
             Record(AuditAction.OpenPlayPaidOnline, registration, payment, "Paid online. Registered.");
 
             return Settlement.Done;

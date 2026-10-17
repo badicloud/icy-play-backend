@@ -87,6 +87,8 @@ public static class DependencyInjection
         services.AddScoped<IDeskCheckInService, DeskCheckInService>();
         services.AddScoped<IDeskMatchService, DeskMatchService>();
         services.AddScoped<IDeskResultPhotoService, DeskResultPhotoService>();
+        services.AddScoped<IDeskClaimStubService, DeskClaimStubService>();
+        services.AddScoped<IMyRewardService, MyRewardService>();
         services.AddScoped<OpenPlayResultPhotoCleanup>();
         services.AddScoped<IHolidayService, HolidayService>();
         services.AddMemoryCache();

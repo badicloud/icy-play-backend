@@ -47,6 +47,12 @@
                           <td style="padding-top: 8px; color: #33466b; font-size: 14px; line-height: 22px;">Time</td>
                           <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">{{var:session_hours}}</td>
                         </tr>
+                        {% if var:has_voucher == 1 %}
+                        <tr>
+                          <td style="padding-top: 8px; color: #33466b; font-size: 14px; line-height: 22px;">Best player voucher used<br><span style="color: #64748b; font-size: 12px;">{{var:voucher_label:""}}</span></td>
+                          <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&minus;&#8369;{{var:voucher_discount}}</td>
+                        </tr>
+                        {% endif %}
                         <tr>
                           <td style="padding-top: 8px; color: #33466b; font-size: 14px; line-height: 22px;">They should have sent</td>
                           <td align="right" style="padding-top: 8px; color: #071955; font-size: 14px; font-weight: 700; line-height: 22px;">&#8369;{{var:total_amount}}</td>

@@ -159,7 +159,14 @@ public sealed class OpenPlayNotifier(
         ["session_date"] = about.Date.ToString("dddd, d MMMM yyyy", CultureInfo.InvariantCulture),
         ["session_hours"] = $"{Clock(about.StartsAt)} – {Clock(about.EndsAt)}",
         ["registration_fee"] = Money(about.RegistrationFee),
+        // Both discounts together, for a template with one line; and each on
+        // its own, for one that shows the early bird and the voucher apart.
         ["discount"] = Money(about.Discount),
+        ["early_bird_discount"] = Money(about.EarlyBirdDiscount),
+        ["voucher_discount"] = Money(about.VoucherDiscount),
+        ["voucher_label"] = about.VoucherLabel ?? string.Empty,
+        ["has_early_bird"] = about.EarlyBirdDiscount > 0m ? 1 : 0,
+        ["has_voucher"] = about.VoucherDiscount > 0m ? 1 : 0,
         ["platform_fee"] = Money(about.PlatformFee),
         ["total_amount"] = Money(about.Total),
         ["venue_contact"] = about.VenueContact,
@@ -208,6 +215,13 @@ public sealed class OpenPlayNotifier(
             .Where(part => !string.IsNullOrWhiteSpace(part))
             .ToArray();
 
+        var voucher = row.Registration.VoucherId is Guid voucherId
+            ? await db.OpenPlayVouchers.AsNoTracking().SingleOrDefaultAsync(candidate => candidate.Id == voucherId, ct)
+            : null;
+        var voucherLabel = voucher is null
+            ? null
+            : DeskMatchService.VoucherLabel(voucher.DiscountKind, voucher.DiscountValue, voucher.MaxDiscount);
+
         return new About(
             row.Registration.Id,
             row.OpenPlay.Title,
@@ -218,7 +232,8 @@ public sealed class OpenPlayNotifier(
             row.OpenPlay.StartsAt,
             row.OpenPlay.EndsAt,
             row.Registration.RegistrationFee,
-            row.Registration.Discount,
+            // The letters have one discount line: the early bird and any voucher together.
+            row.Registration.Discount + row.Registration.VoucherDiscount,
             row.Registration.PlatformFee,
             row.Registration.Total,
             row.Registration.ReceiptUrl,
@@ -229,7 +244,10 @@ public sealed class OpenPlayNotifier(
             row.BusinessName,
             row.OwnerName,
             row.OwnerEmail,
-            row.Attendants);
+            row.Attendants,
+            row.Registration.Discount,
+            row.Registration.VoucherDiscount,
+            voucherLabel);
     }
 
     private string RegistrationUrl(Guid registrationId) =>
@@ -281,5 +299,8 @@ public sealed class OpenPlayNotifier(
         string BusinessName,
         string OwnerName,
         string OwnerEmail,
-        IReadOnlyList<Person> Attendants);
+        IReadOnlyList<Person> Attendants,
+        decimal EarlyBirdDiscount,
+        decimal VoucherDiscount,
+        string? VoucherLabel);
 }

@@ -77,7 +77,11 @@ public sealed record MatchBoard(
     // Everybody who checked in, for the group photo: in the order they arrived.
     IReadOnlyList<MatchBoardPlayer> Group,
     // The photos taken of the results, one of each kind at most.
-    IReadOnlyList<MatchResultPhoto> Photos);
+    IReadOnlyList<MatchResultPhoto> Photos,
+    // What the session gave its best players when it ended.
+    IReadOnlyList<MatchReward> Rewards,
+    // The open play's reward for best players, in words: "₱50 off an open play", the prize; null for none.
+    string? RewardOffered);
 
 /// <summary>A photo of a session's results.</summary>
 /// <param name="Kind">"BestPlayers", "WinningTeam" or "Group".</param>

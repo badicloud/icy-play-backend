@@ -38,6 +38,25 @@ public sealed record OpenPlayFreeSpotsInput(int FreeSpots);
 /// </summary>
 public sealed record OpenPlayTeamSizeInput(int? PlayersPerTeam);
 
+/// <summary>
+/// What the best players earn when a session ends. Allowed after publishing:
+/// it counts for the sessions that end after.
+/// </summary>
+/// <param name="Kind">"None", "Voucher" — off their next open play at the venue — or "ClaimStub", a prize at the venue.</param>
+/// <param name="DiscountKind">A voucher's: "Fixed" or "Percentage".</param>
+/// <param name="MaxDiscount">A percentage voucher's most it takes off, in pesos; null for no limit.</param>
+/// <param name="Prize">A claim stub's prize, e.g. "Free Gatorade".</param>
+/// <param name="Quantity">How many claim stubs to give, over all sessions.</param>
+/// <param name="ValidDays">Days from when it is given to when it expires.</param>
+public sealed record OpenPlayRewardInput(
+    string Kind,
+    string? DiscountKind = null,
+    decimal? DiscountValue = null,
+    decimal? MaxDiscount = null,
+    string? Prize = null,
+    int? Quantity = null,
+    int? ValidDays = null);
+
 /// <param name="DiscountKind">"Fixed" or "Percentage".</param>
 /// <param name="LeadMinutes">How long before the start a player must register to get it.</param>
 public sealed record OpenPlayEarlyBirdInput(string DiscountKind, decimal DiscountValue, int LeadMinutes);
@@ -98,7 +117,13 @@ public sealed record DeskOpenPlay(
     // Behind the winning team and the best players on the wide screen.
     string? BackgroundPhotoUrl,
     // Registration stays open until each session ends; the cut-off is then not used.
-    bool RegistrationOpenUntilEnd);
+    bool RegistrationOpenUntilEnd,
+    // What the best players earn; null for nothing.
+    OpenPlayRewardInput? Reward,
+    // Claim stubs: how many there are, how many have been given, and claimed.
+    int ClaimStubs,
+    int ClaimStubsGiven,
+    int ClaimStubsClaimed);
 
 /// <summary>
 /// What the open play form picks from on the admin console: the owner's venues,

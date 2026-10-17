@@ -434,6 +434,8 @@ public sealed class DeskMatchService(
             return Fail(OpenPlayRegistrationFailure.NotFound);
         }
 
+        var justEnded = false;
+
         var refusal = await SessionLineups.ApplyAsync(
             db,
             id,
@@ -441,8 +443,9 @@ public sealed class DeskMatchService(
             {
                 var wasEnded = session.IsEnded;
                 var refused = OpenPlayLineup.EndSession(session, actor.UserId!.Value, timeProvider.GetUtcNow());
+                justEnded = refused is null && !wasEnded;
 
-                if (refused is null && !wasEnded)
+                if (justEnded)
                 {
                     Record(actor, AuditAction.OpenPlaySessionEnded, door, null, null, "Session ended by the desk.");
                 }
@@ -454,6 +457,20 @@ public sealed class DeskMatchService(
         if (refusal is LineupRefusal.CourtBusy)
         {
             return Fail(OpenPlayRegistrationFailure.MatchStillPlaying);
+        }
+
+        // The results stand now: the best players get the open play's reward.
+        if (justEnded)
+        {
+            var (given, ranOut) = await OpenPlayRewards.GiveAsync(db, door.OpenPlay, id, timeProvider.GetUtcNow(), ct);
+
+            if (given > 0 || ranOut > 0)
+            {
+                Record(actor, AuditAction.OpenPlayRewardsGiven, door, null, null, ranOut > 0
+                    ? $"{given} rewards given; {ranOut} best players went without, the prizes having run out."
+                    : $"{given} rewards given.");
+                await db.SaveChangesAsync(ct);
+            }
         }
 
         return OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(await DoorAgainAsync(door, actor, ct), ct));
@@ -495,6 +512,15 @@ public sealed class DeskMatchService(
                 return true;
             },
             ct);
+
+        // The results no longer stand: what they gave goes back, unless used or claimed.
+        var takenBack = await OpenPlayRewards.TakeBackAsync(db, sessionId, timeProvider.GetUtcNow(), ct);
+
+        if (takenBack > 0)
+        {
+            Record(actor, AuditAction.OpenPlayRewardsTakenBack, door, null, null, $"{takenBack} rewards taken back.");
+            await db.SaveChangesAsync(ct);
+        }
 
         return OpenPlayRegistrationResult<MatchBoard>.Success(await BoardOfAsync(await DoorAgainAsync(door, actor, ct), ct));
     }
@@ -637,6 +663,10 @@ public sealed class DeskMatchService(
             ? await DeskResultPhotoService.PhotosAsync(db, photoSession, timeProvider.GetUtcNow(), ct)
             : [];
 
+        var rewards = sessionId is Guid rewardSession
+            ? await RewardsAsync(rewardSession, participants, players, ct)
+            : [];
+
         return new MatchBoard(
             door.OpenPlay.Id,
             door.OpenPlay.Title,
@@ -676,8 +706,65 @@ public sealed class DeskMatchService(
             door.IsEnded && !door.TimeIsUp,
             winningTeam,
             group,
-            photos);
+            photos,
+            rewards,
+            door.OpenPlay.Reward switch
+            {
+                null => null,
+                { Kind: OpenPlayRewardKind.Voucher } reward => VoucherLabel(reward.DiscountKind!, reward.DiscountValue!.Value, reward.MaxDiscount),
+                var reward => reward.Prize
+            });
     }
+
+    /// <summary>What the session gave its best players, by the player: vouchers not taken back, and stubs.</summary>
+    private async Task<IReadOnlyList<MatchReward>> RewardsAsync(
+        Guid sessionId,
+        IReadOnlyCollection<OpenPlayParticipant> participants,
+        Dictionary<Guid, MatchBoardPlayer> players,
+        CancellationToken ct)
+    {
+        var registrationIds = participants.Where(p => p.RegistrationId is not null).Select(p => p.RegistrationId!.Value).ToList();
+        var customers = await db.OpenPlayRegistrations
+            .AsNoTracking()
+            .Where(registration => registrationIds.Contains(registration.Id))
+            .Select(registration => new { registration.Id, registration.CustomerUserId })
+            .ToListAsync(ct);
+        var participantOf = customers
+            .Join(participants, row => row.Id, participant => participant.RegistrationId, (row, participant) => (row.CustomerUserId, participant.Id))
+            .GroupBy(pair => pair.CustomerUserId)
+            .ToDictionary(group => group.Key, group => group.First().Id);
+
+        var vouchers = await db.OpenPlayVouchers
+            .AsNoTracking()
+            .Where(voucher => voucher.SessionId == sessionId && voucher.Status != OpenPlayVoucherStatus.Revoked)
+            .ToListAsync(ct);
+        var stubs = await db.OpenPlayClaimStubs
+            .AsNoTracking()
+            .Where(stub => stub.SessionId == sessionId)
+            .ToListAsync(ct);
+        var now = timeProvider.GetUtcNow();
+
+        MatchBoardPlayer? Player(Guid customerUserId) =>
+            participantOf.TryGetValue(customerUserId, out var participantId) ? players.GetValueOrDefault(participantId) : null;
+
+        return
+        [
+            .. vouchers.Select(voucher => (Player: Player(voucher.CustomerUserId), Reward: new MatchReward(
+                    Guid.Empty, string.Empty, OpenPlayRewardKind.Voucher, VoucherLabel(voucher.DiscountKind, voucher.DiscountValue, voucher.MaxDiscount),
+                    null, voucher.ExpiresAt, now >= voucher.ExpiresAt && voucher.Status == OpenPlayVoucherStatus.Available ? "Expired" : voucher.Status)))
+                .Concat(stubs.Select(stub => (Player: Player(stub.CustomerUserId!.Value), Reward: new MatchReward(
+                    Guid.Empty, string.Empty, OpenPlayRewardKind.ClaimStub, stub.Prize, stub.Code, stub.ExpiresAt!.Value, stub.StatusAt(now)))))
+                .Where(pair => pair.Player is not null)
+                .Select(pair => pair.Reward with { ParticipantId = pair.Player!.ParticipantId, FullName = pair.Player.FullName })
+                .OrderBy(reward => reward.FullName)
+        ];
+    }
+
+    /// <summary>"₱50 off an open play", "20% off an open play, up to ₱100".</summary>
+    internal static string VoucherLabel(string discountKind, decimal value, decimal? maxDiscount) =>
+        discountKind == OpenPlayDiscountKind.Percentage
+            ? string.Create(CultureInfo.InvariantCulture, $"{value:0.##}% off an open play{(maxDiscount is decimal cap ? $", up to ₱{cap:#,0.##}" : "")}")
+            : string.Create(CultureInfo.InvariantCulture, $"₱{value:#,0.##} off an open play");
 
     /// <summary>Everyone in the line by name: registered players from their account, free ones as the desk typed them.</summary>
     private async Task<Dictionary<Guid, MatchBoardPlayer>> PlayersAsync(

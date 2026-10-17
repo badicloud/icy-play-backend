@@ -60,6 +60,16 @@ public interface IDeskOpenPlayService
         CancellationToken cancellationToken);
 
     /// <summary>Players per team for matches, or null for the sport's. Allowed after publishing.</summary>
+    /// <summary>
+    /// What the best players earn. Allowed after publishing. Claim stubs are
+    /// made or taken away to match the number of prizes.
+    /// </summary>
+    Task<OpenPlayResult<DeskOpenPlay>> SetRewardAsync(
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayRewardInput input,
+        CancellationToken cancellationToken);
+
     Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeAsync(
         AuditActor actor,
         Guid openPlayId,

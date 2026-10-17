@@ -205,6 +205,14 @@ public sealed class OpenPlayService(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
         RemoveCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, background: false, ct);
 
+    public Task<OpenPlayResult<DeskOpenPlay>> SetRewardAsync(
+        AuditActor actor, Guid openPlayId, OpenPlayRewardInput input, CancellationToken ct) =>
+        SetRewardCore(DeskVenuesOf(actor), actor, openPlayId, input, ct);
+
+    public Task<OpenPlayResult<DeskOpenPlay>> SetRewardForOwnerAsync(
+        Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayRewardInput input, CancellationToken ct) =>
+        SetRewardCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
+
     public Task<OpenPlayResult<DeskOpenPlay>> SetTeamSizeForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, OpenPlayTeamSizeInput input, CancellationToken ct) =>
         SetTeamSizeCore(OwnerVenues(facilityOwnerId), actor, openPlayId, input, ct);
@@ -216,6 +224,137 @@ public sealed class OpenPlayService(
     public Task<OpenPlayResult<DeskOpenPlay>> RemoveBackgroundPhotoForOwnerAsync(
         Guid facilityOwnerId, AuditActor actor, Guid openPlayId, CancellationToken ct) =>
         RemoveCoverPhotoCore(OwnerVenues(facilityOwnerId), actor, openPlayId, background: true, ct);
+
+    /// <summary>
+    /// What the best players earn. Allowed on a published open play. Claim
+    /// stubs follow the number of prizes: new ones made, ones never given taken
+    /// away — never fewer than have been given already.
+    /// </summary>
+    private async Task<OpenPlayResult<DeskOpenPlay>> SetRewardCore(
+        IQueryable<Guid> venues,
+        AuditActor actor,
+        Guid openPlayId,
+        OpenPlayRewardInput input,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentNullException.ThrowIfNull(input);
+
+        var openPlay = await ForScopeAsync(venues, openPlayId, ct);
+
+        if (openPlay is null)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.NotFound);
+        }
+
+        if (openPlay.HasEnded)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Ended);
+        }
+
+        OpenPlayReward? reward;
+
+        try
+        {
+            reward = input.Kind switch
+            {
+                OpenPlayRewardKind.Voucher => OpenPlayReward.Voucher(
+                    input.DiscountKind ?? string.Empty,
+                    input.DiscountValue ?? 0,
+                    input.MaxDiscount,
+                    input.ValidDays ?? 0),
+                OpenPlayRewardKind.ClaimStub => OpenPlayReward.ClaimStub(
+                    input.Prize ?? string.Empty,
+                    input.Quantity ?? 0,
+                    input.ValidDays ?? 0),
+                "None" or "" => null,
+                _ => throw new ArgumentException("Pick no reward, a voucher, or a prize with claim stubs.")
+            };
+        }
+        catch (ArgumentException problem)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(OpenPlayFailure.Invalid, Plain(problem));
+        }
+
+        var now = timeProvider.GetUtcNow();
+        var stubs = await db.OpenPlayClaimStubs.Where(stub => stub.OpenPlayId == openPlay.Id).ToListAsync(ct);
+        var given = stubs.Count(stub => stub.IsAssigned);
+        var wanted = reward?.Kind == OpenPlayRewardKind.ClaimStub ? reward.Quantity!.Value : 0;
+
+        if (reward?.Kind == OpenPlayRewardKind.ClaimStub && wanted < given)
+        {
+            return OpenPlayResult<DeskOpenPlay>.Fail(
+                OpenPlayFailure.Invalid,
+                $"{given} prizes have been given already, so there cannot be fewer than {given}.");
+        }
+
+        // Never given: the newest go first when there are to be fewer.
+        var spare = stubs.Where(stub => !stub.IsAssigned).OrderByDescending(stub => stub.CreatedAt).ToList();
+        var surplus = Math.Max(0, given + spare.Count - wanted);
+        db.OpenPlayClaimStubs.RemoveRange(spare.Take(surplus));
+
+        if (reward?.Kind == OpenPlayRewardKind.ClaimStub)
+        {
+            foreach (var stub in spare.Skip(surplus))
+            {
+                stub.Reword(reward.Prize!, now);
+            }
+
+            var codes = new HashSet<string>(StringComparer.Ordinal);
+
+            while (codes.Count < wanted - given - (spare.Count - surplus))
+            {
+                codes.Add(OpenPlayClaimStub.NewCode());
+            }
+
+            // A code is unique across the platform; a clash is all but
+            // impossible, and a fresh one is drawn if it ever happens.
+            var taken = await db.OpenPlayClaimStubs.Where(stub => codes.Contains(stub.Code)).Select(stub => stub.Code).ToListAsync(ct);
+
+            foreach (var clash in taken)
+            {
+                codes.Remove(clash);
+                string fresh;
+
+                do
+                {
+                    fresh = OpenPlayClaimStub.NewCode();
+                }
+                while (codes.Contains(fresh) || await db.OpenPlayClaimStubs.AnyAsync(stub => stub.Code == fresh, ct));
+
+                codes.Add(fresh);
+            }
+
+            foreach (var code in codes)
+            {
+                db.OpenPlayClaimStubs.Add(new OpenPlayClaimStub(openPlay.Id, openPlay.FacilityId, code, reward.Prize!, now));
+            }
+        }
+
+        var before = Describe(openPlay.Reward);
+        openPlay.SetReward(reward, now);
+
+        audit.RecordChange(
+            actor,
+            AuditAction.OpenPlayRewardChanged,
+            AuditEntityType.OpenPlay,
+            openPlay.Id,
+            new Dictionary<string, string?> { ["reward"] = before },
+            new Dictionary<string, string?> { ["reward"] = Describe(reward) });
+
+        await db.SaveChangesAsync(ct);
+
+        return OpenPlayResult<DeskOpenPlay>.Success(await ProjectOneAsync(openPlay.Id, ct));
+
+        static string? Describe(OpenPlayReward? reward) => reward switch
+        {
+            null => null,
+            { Kind: OpenPlayRewardKind.Voucher } => string.Create(
+                CultureInfo.InvariantCulture,
+                $"Voucher {reward.DiscountKind} {reward.DiscountValue:0.##}{(reward.MaxDiscount is decimal cap ? $" up to {cap:0.##}" : "")}, {reward.ValidDays} days"),
+            _ => string.Create(CultureInfo.InvariantCulture, $"{reward.Quantity} x {reward.Prize}, {reward.ValidDays} days")
+        };
+    }
 
     /// <summary>
     /// Players per team for the matches. Allowed on a published open play, like
@@ -1233,6 +1372,19 @@ public sealed class OpenPlayService(
             .Select(session => session.OpenPlayId)
             .ToHashSet();
 
+        var stubCounts = await db.OpenPlayClaimStubs
+            .AsNoTracking()
+            .Where(stub => ids.Contains(stub.OpenPlayId))
+            .GroupBy(stub => stub.OpenPlayId)
+            .Select(group => new
+            {
+                group.Key,
+                Total = group.Count(),
+                Given = group.Count(stub => stub.CustomerUserId != null),
+                Claimed = group.Count(stub => stub.ClaimedAt != null)
+            })
+            .ToDictionaryAsync(group => group.Key, ct);
+
         return
         [
             .. rows
@@ -1304,7 +1456,20 @@ public sealed class OpenPlayService(
                         openPlay.PlayersPerTeam,
                         openPlay.TeamSizeFor(row.SportKey),
                         openPlay.BackgroundPhotoUrl,
-                        openPlay.RegistrationOpenUntilEnd);
+                        openPlay.RegistrationOpenUntilEnd,
+                        openPlay.Reward is { } reward
+                            ? new OpenPlayRewardInput(
+                                reward.Kind,
+                                reward.DiscountKind,
+                                reward.DiscountValue,
+                                reward.MaxDiscount,
+                                reward.Prize,
+                                reward.Quantity,
+                                reward.ValidDays)
+                            : null,
+                        stubCounts.GetValueOrDefault(openPlay.Id)?.Total ?? 0,
+                        stubCounts.GetValueOrDefault(openPlay.Id)?.Given ?? 0,
+                        stubCounts.GetValueOrDefault(openPlay.Id)?.Claimed ?? 0);
                 })
         ];
     }

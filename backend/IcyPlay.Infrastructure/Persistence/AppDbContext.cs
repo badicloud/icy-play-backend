@@ -58,6 +58,8 @@ public sealed class AppDbContext : DbContext
     public DbSet<OpenPlayMatch> OpenPlayMatches => Set<OpenPlayMatch>();
     public DbSet<OpenPlayMatchSlot> OpenPlayMatchSlots => Set<OpenPlayMatchSlot>();
     public DbSet<OpenPlaySessionPhoto> OpenPlaySessionPhotos => Set<OpenPlaySessionPhoto>();
+    public DbSet<OpenPlayVoucher> OpenPlayVouchers => Set<OpenPlayVoucher>();
+    public DbSet<OpenPlayClaimStub> OpenPlayClaimStubs => Set<OpenPlayClaimStub>();
     public DbSet<OnlinePayment> OnlinePayments => Set<OnlinePayment>();
     public DbSet<PaymentWebhookEvent> PaymentWebhookEvents => Set<PaymentWebhookEvent>();
     public DbSet<DeskReadMarker> DeskReadMarkers => Set<DeskReadMarker>();
@@ -1132,6 +1134,16 @@ public sealed class AppDbContext : DbContext
                     .HasColumnType("decimal(10,2)");
                 earlyBird.Property(x => x.LeadMinutes).HasColumnName("EarlyBirdLeadMinutes");
             });
+            entity.OwnsOne(x => x.Reward, reward =>
+            {
+                reward.Property(x => x.Kind).HasColumnName("RewardKind").HasMaxLength(20).IsRequired();
+                reward.Property(x => x.DiscountKind).HasColumnName("RewardDiscountKind").HasMaxLength(20);
+                reward.Property(x => x.DiscountValue).HasColumnName("RewardDiscountValue").HasColumnType("decimal(10,2)");
+                reward.Property(x => x.MaxDiscount).HasColumnName("RewardMaxDiscount").HasColumnType("decimal(10,2)");
+                reward.Property(x => x.Prize).HasColumnName("RewardPrize").HasMaxLength(OpenPlayReward.PrizeLimit);
+                reward.Property(x => x.Quantity).HasColumnName("RewardQuantity");
+                reward.Property(x => x.ValidDays).HasColumnName("RewardValidDays");
+            });
             // The question availability asks of this table: what open plays
             // run on this floor.
             entity.HasIndex(x => new { x.CourtId, x.StartDate, x.EndDate });
@@ -1226,6 +1238,41 @@ public sealed class AppDbContext : DbContext
             entity.HasIndex(x => new { x.SessionId, x.Number }).IsUnique();
         });
 
+        modelBuilder.Entity<OpenPlayVoucher>(entity =>
+        {
+            entity.ToTable("OpenPlayVouchers");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.DiscountKind).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.DiscountValue).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.MaxDiscount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
+            entity.HasOne<OpenPlaySession>()
+                .WithMany()
+                .HasForeignKey(x => x.SessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // A player's vouchers at a venue: what checkout looks for.
+            entity.HasIndex(x => new { x.CustomerUserId, x.FacilityId, x.Status });
+            entity.HasIndex(x => new { x.SessionId, x.CustomerUserId });
+        });
+
+        modelBuilder.Entity<OpenPlayClaimStub>(entity =>
+        {
+            entity.ToTable("OpenPlayClaimStubs");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Code).HasMaxLength(9).IsRequired();
+            entity.Property(x => x.Prize).HasMaxLength(OpenPlayReward.PrizeLimit).IsRequired();
+            entity.Ignore(x => x.IsAssigned);
+            entity.Ignore(x => x.IsClaimed);
+            entity.HasOne<OpenPlay>()
+                .WithMany()
+                .HasForeignKey(x => x.OpenPlayId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // What the desk types or scans: one stub per code, anywhere.
+            entity.HasIndex(x => x.Code).IsUnique();
+            entity.HasIndex(x => new { x.OpenPlayId, x.CustomerUserId });
+            entity.HasIndex(x => x.SessionId);
+        });
+
         modelBuilder.Entity<OpenPlaySessionPhoto>(entity =>
         {
             entity.ToTable("OpenPlaySessionPhotos");
@@ -1272,6 +1319,8 @@ public sealed class AppDbContext : DbContext
             entity.HasIndex(x => new { x.SessionId, x.Status });
             entity.Property(x => x.RegistrationFee).HasColumnType("decimal(10,2)");
             entity.Property(x => x.Discount).HasColumnType("decimal(10,2)");
+            entity.Property(x => x.VoucherDiscount).HasColumnType("decimal(10,2)");
+            entity.Ignore(x => x.VenueAmount);
             entity.Property(x => x.PlatformFee).HasColumnType("decimal(10,2)");
             entity.Property(x => x.ReceiptUrl).HasMaxLength(1000);
             entity.Property(x => x.CancellationReason).HasMaxLength(500);

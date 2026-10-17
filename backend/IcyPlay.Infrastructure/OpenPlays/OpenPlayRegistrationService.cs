@@ -158,6 +158,31 @@ public sealed class OpenPlayRegistrationService(
             now,
             contract.PaymentMode);
 
+        // A best player voucher at this venue comes off the fee, after the
+        // early bird: the one that takes the most, unless the player picked
+        // another or said none. Vouchers held for registrations that never
+        // went through are the player's again first.
+        if (!request.NoVoucher)
+        {
+            await OpenPlayVoucherLedger.SettleAsync(db, customerUserId, now, ct);
+
+            var usable = await OpenPlayVoucherLedger.UsableAsync(
+                db, customerUserId, openPlay.FacilityId, registration.RegistrationFee - registration.Discount, now, ct);
+            var voucher = request.VoucherId is Guid picked
+                ? usable.FirstOrDefault(candidate => candidate.Id == picked)
+                : usable.FirstOrDefault();
+
+            if (request.VoucherId is not null && voucher is null)
+            {
+                return Fail<OpenPlayRegistrationDetail>(OpenPlayRegistrationFailure.VoucherNotUsable);
+            }
+
+            if (voucher is not null)
+            {
+                registration.ApplyVoucher(voucher, now);
+            }
+        }
+
         db.OpenPlayRegistrations.Add(registration);
         await db.SaveChangesAsync(ct);
         await transaction.CommitAsync(ct);
@@ -350,6 +375,7 @@ public sealed class OpenPlayRegistrationService(
         }
 
         registration.Confirm(actor.UserId!.Value, timeProvider.GetUtcNow());
+        await OpenPlayVoucherLedger.SettleAsync(db, registration, timeProvider.GetUtcNow(), ct);
 
         audit.RecordEvent(
             actor,
@@ -401,6 +427,7 @@ public sealed class OpenPlayRegistrationService(
             : request.Note;
 
         registration.Reject(request.Reason, note, actor.UserId!.Value, timeProvider.GetUtcNow());
+        await OpenPlayVoucherLedger.SettleAsync(db, registration, timeProvider.GetUtcNow(), ct);
 
         audit.RecordEvent(
             actor,
@@ -517,6 +544,15 @@ public sealed class OpenPlayRegistrationService(
             })
             .ToListAsync(ct);
 
+        var voucherIds = rows.Select(row => row.Registration.VoucherId).OfType<Guid>().ToList();
+        var voucherLabels = (await db.OpenPlayVouchers
+                .AsNoTracking()
+                .Where(voucher => voucherIds.Contains(voucher.Id))
+                .ToListAsync(ct))
+            .ToDictionary(
+                voucher => voucher.Id,
+                voucher => DeskMatchService.VoucherLabel(voucher.DiscountKind, voucher.DiscountValue, voucher.MaxDiscount));
+
         return
         [
             .. rows.Select(row =>
@@ -573,7 +609,9 @@ public sealed class OpenPlayRegistrationService(
                     // spent or expired one is not handed out to be saved or shared.
                     passState == CheckInPassState.Active ? CheckInPass.QrContent(registration.CheckInToken!) : null,
                     registration.CheckedInAt,
-                    registration.PaymentChannel);
+                    registration.PaymentChannel,
+                    registration.VoucherDiscount,
+                    registration.VoucherId is Guid voucherId ? voucherLabels.GetValueOrDefault(voucherId) : null);
             })
         ];
     }
@@ -633,7 +671,8 @@ public sealed class OpenPlayRegistrationService(
                 row.Registration.SubmittedForVerificationAt,
                 row.Registration.ConfirmedAt,
                 row.Registered,
-                row.OpenPlay.MaxPlayers))
+                row.OpenPlay.MaxPlayers,
+                row.Registration.VoucherDiscount))
         ];
     }
 }

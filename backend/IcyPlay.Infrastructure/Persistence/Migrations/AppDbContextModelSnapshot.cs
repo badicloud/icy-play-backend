@@ -2454,6 +2454,64 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.ToTable("OpenPlays", "dbo");
                 });
 
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayClaimStub", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("AssignedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("ClaimedByUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(9)
+                        .HasColumnType("nvarchar(9)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid?>("CustomerUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("FacilityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("OpenPlayId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Prize")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<Guid?>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("SessionId");
+
+                    b.HasIndex("OpenPlayId", "CustomerUserId");
+
+                    b.ToTable("OpenPlayClaimStubs", "dbo");
+                });
+
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayFreePlayer", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2718,6 +2776,12 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<decimal>("VoucherDiscount")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<Guid?>("VoucherId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CheckInToken")
@@ -2819,6 +2883,67 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                     b.HasIndex("SessionId", "Kind");
 
                     b.ToTable("OpenPlaySessionPhotos", "dbo");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayVoucher", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("CustomerUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("DiscountKind")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<decimal>("DiscountValue")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("FacilityId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("MaxDiscount")
+                        .HasColumnType("decimal(10,2)");
+
+                    b.Property<Guid>("OpenPlayId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("RegistrationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTimeOffset?>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SessionId", "CustomerUserId");
+
+                    b.HasIndex("CustomerUserId", "FacilityId", "Status");
+
+                    b.ToTable("OpenPlayVouchers", "dbo");
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.Payments.DeskReadMarker", b =>
@@ -3402,11 +3527,67 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                                 .HasForeignKey("OpenPlayId");
                         });
 
+                    b.OwnsOne("IcyPlay.Domain.OpenPlays.OpenPlayReward", "Reward", b1 =>
+                        {
+                            b1.Property<Guid>("OpenPlayId")
+                                .HasColumnType("uniqueidentifier");
+
+                            b1.Property<string>("DiscountKind")
+                                .HasMaxLength(20)
+                                .HasColumnType("nvarchar(20)")
+                                .HasColumnName("RewardDiscountKind");
+
+                            b1.Property<decimal?>("DiscountValue")
+                                .HasColumnType("decimal(10,2)")
+                                .HasColumnName("RewardDiscountValue");
+
+                            b1.Property<string>("Kind")
+                                .IsRequired()
+                                .HasMaxLength(20)
+                                .HasColumnType("nvarchar(20)")
+                                .HasColumnName("RewardKind");
+
+                            b1.Property<decimal?>("MaxDiscount")
+                                .HasColumnType("decimal(10,2)")
+                                .HasColumnName("RewardMaxDiscount");
+
+                            b1.Property<string>("Prize")
+                                .HasMaxLength(120)
+                                .HasColumnType("nvarchar(120)")
+                                .HasColumnName("RewardPrize");
+
+                            b1.Property<int?>("Quantity")
+                                .HasColumnType("int")
+                                .HasColumnName("RewardQuantity");
+
+                            b1.Property<int>("ValidDays")
+                                .HasColumnType("int")
+                                .HasColumnName("RewardValidDays");
+
+                            b1.HasKey("OpenPlayId");
+
+                            b1.ToTable("OpenPlays", "dbo");
+
+                            b1.WithOwner()
+                                .HasForeignKey("OpenPlayId");
+                        });
+
                     b.Navigation("BookableCourt");
 
                     b.Navigation("EarlyBird");
 
                     b.Navigation("Facility");
+
+                    b.Navigation("Reward");
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayClaimStub", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlay", null)
+                        .WithMany()
+                        .HasForeignKey("OpenPlayId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayFreePlayer", b =>
@@ -3478,6 +3659,15 @@ namespace IcyPlay.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlaySessionPhoto", b =>
+                {
+                    b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", null)
+                        .WithMany()
+                        .HasForeignKey("SessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("IcyPlay.Domain.OpenPlays.OpenPlayVoucher", b =>
                 {
                     b.HasOne("IcyPlay.Domain.OpenPlays.OpenPlaySession", null)
                         .WithMany()

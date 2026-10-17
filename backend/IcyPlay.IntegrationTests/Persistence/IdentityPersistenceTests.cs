@@ -54,6 +54,8 @@ public sealed class IdentityPersistenceTests(SqlServerDatabaseFixture database)
             "OpenPlayMatches",
             "OpenPlayMatchSlots",
             "OpenPlaySessionPhotos",
+            "OpenPlayVouchers",
+            "OpenPlayClaimStubs",
             "OnlinePayments",
             "PaymentWebhookEvents",
             "DeskReadMarkers",

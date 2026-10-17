@@ -5,7 +5,9 @@ namespace IcyPlay.Application.OpenPlays;
 /// The player ticked the open play policy: no refund through IcyPlay, because
 /// the money goes straight to the venue. Refused without it.
 /// </param>
-public sealed record RegisterForOpenPlayRequest(DateOnly Date, bool AgreedToPolicy);
+/// <param name="VoucherId">A best player voucher to use; left out, the one that takes the most off is used.</param>
+/// <param name="NoVoucher">Use no voucher, even if the player has one here.</param>
+public sealed record RegisterForOpenPlayRequest(DateOnly Date, bool AgreedToPolicy, Guid? VoucherId = null, bool NoVoucher = false);
 
 /// <summary>The link the browser has just put in Cloudinary. Checked, never trusted.</summary>
 public sealed record OpenPlayReceiptRequest(string ReceiptUrl);
@@ -69,7 +71,11 @@ public sealed record OpenPlayRegistrationDetail(
     DateTimeOffset? CheckedInAt,
     // "Manual", a receipt the venue checks, or "Direct", through the payment
     // gateway, which registers the player by itself once paid in time.
-    string PaymentChannel);
+    string PaymentChannel,
+    // What a best player voucher took off the venue's fee, after the early bird.
+    decimal VoucherDiscount = 0,
+    // "₱50 off an open play": the voucher used, in words; null for none.
+    string? VoucherLabel = null);
 
 public enum OpenPlayRegistrationFailure
 {
@@ -138,8 +144,16 @@ public enum OpenPlayRegistrationFailure
     CannotReopenSession,
     // Result photos are taken once the session is over.
     SessionNotOver,
+    // The voucher picked is not the player's to use here, or has run out.
+    VoucherNotUsable,
     // A result photo: a known kind, and a link in the platform's own results folder.
-    InvalidResultPhoto
+    InvalidResultPhoto,
+    // Claim stubs: no stub with that code at a venue this person works.
+    ClaimStubNotFound,
+    // Not given to anybody yet: nothing to claim.
+    ClaimStubNotGiven,
+    ClaimStubAlreadyClaimed,
+    ClaimStubExpired
 }
 
 public sealed record OpenPlayRegistrationResult<T>(T? Value, OpenPlayRegistrationFailure Failure)
@@ -179,7 +193,9 @@ public sealed record DeskOpenPlayRequest(
     DateTimeOffset? ConfirmedAt,
     // Registered players on that session now, against its most.
     int Registered,
-    int MaxPlayers);
+    int MaxPlayers,
+    // What a best player voucher took off the venue's fee.
+    decimal VoucherDiscount = 0);
 
 /// <summary>The desk's two queues, as the booking queue has them.</summary>
 public static class OpenPlayRequestTab
