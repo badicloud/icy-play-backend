@@ -202,6 +202,11 @@ Cloudinary stores uploaded media such as:
 * Court images
 * Payment QR codes
 * Customer payment receipts
+* Open play cover and background photos (`icyplay/open-plays`)
+* Open play result photos — best players, winning team, the group — in
+  `icyplay/open-play-results`, kept two days and then deleted by the cleanup
+  job above. The API key needs permission to delete (the destroy API), not
+  only to upload.
 
 The API should store only Cloudinary metadata in SQL Server.
 
@@ -227,6 +232,13 @@ Mailjet sends transactional emails such as:
 * Account-related emails
 
 Email sending should be queued through Hangfire so API requests are not delayed by external email service calls.
+
+The open play letters (`open-play-payment-received`, `open-play-payment-submitted`
+and `open-play-confirmed`) show a best player voucher on its own line, using the
+variables `has_voucher`, `voucher_discount`, `voucher_label`, `has_early_bird` and
+`early_bird_discount`. Deploy the API that sends them **before** pasting those
+templates into Mailjet: a template asking for a variable the running API does
+not send fails to render, and the letter is not sent (it is logged, not thrown).
 
 ### PayMongo (online payments)
 
@@ -478,6 +490,7 @@ Production rules:
 
 Hangfire should run background work such as:
 
+* Deleting open play result photos two days after they are taken (see below)
 * Sending Mailjet emails
 * Generating scheduled billing records
 * Sending billing reminders
@@ -486,6 +499,23 @@ Hangfire should run background work such as:
 * Preparing reports
 
 For MVP, Hangfire may run inside the ASP.NET Core API process.
+
+#### The Hangfire server has to be switched on
+
+`Hangfire:ServerEnabled` is **false** in both `appsettings.json` and
+`appsettings.Development.json`, so out of the box nothing runs the jobs. In
+production set `Hangfire__ServerEnabled=true` on the API.
+
+On start the API registers one recurring job whatever that setting says:
+
+| Job id | When | What |
+| --- | --- | --- |
+| `open-play-result-photo-cleanup` | Every hour | Deletes the open play result photos past their two days — and any the desk replaced or removed — from Cloudinary (the destroy API) and from `OpenPlaySessionPhotos`. A photo Cloudinary will not delete is kept and tried again next hour. |
+
+With the server off the job is registered but never runs, and photos stay past
+their two days — which the Open Play Policy says they will not. The dashboard
+(`/hangfire`, Development only unless `Hangfire:DashboardEnabled`) shows the
+job and its last run.
 
 As the system grows, Hangfire workers can be separated into a dedicated worker service.
 
@@ -648,6 +678,8 @@ Before releasing to production:
 * Facility Owner verification works.
 * Billing generation works.
 * Email sending works.
+* `Hangfire__ServerEnabled` is true, and the `open-play-result-photo-cleanup` recurring job shows on the Hangfire dashboard.
+* The open play Mailjet templates are the ones in `docs/email-templates` (voucher lines), pasted after the API was deployed.
 * PayMongo live keys are set (`sk_live_…`), and the webhook secret belongs to the live webhook.
 * The live PayMongo webhook points at the production API and subscribes to the four events in the PayMongo section.
 * `PayMongo__CheckoutExperience` is the one intended (`Hosted` or `Integrated`).
